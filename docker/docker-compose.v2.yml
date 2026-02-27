@@ -1,46 +1,92 @@
 version: '3.8'
 
 # USM v2 — Storage Intelligence Platform
-# Run: docker compose -f docker/docker-compose.v2.yml up -d
+#
+# Uses network_mode: host so containers share the host network stack.
+# Required to reach internal DNS (*.ctl.intranet, *.corp.intranet).
+#
+# Run:   docker compose -f docker/docker-compose.v2.yml up -d --build
+# Logs:  docker compose -f docker/docker-compose.v2.yml logs -f
+# Stop:  docker compose -f docker/docker-compose.v2.yml down
+#
+# Ports (on host):
+#   8000 — FastAPI backend  (API + auto-docs at http://host:8000/docs)
+#   8080 — React frontend   (dashboard at http://host:8080)
+#
+# v1 (5050/5051) and v2 (8000/8080) can run side-by-side during migration.
 
 services:
 
-  backend:
+  # ============================================================
+  # BACKEND — FastAPI + APScheduler (collectors run inside here)
+  # ============================================================
+  usm-backend:
     build:
       context: ../backend
       dockerfile: Dockerfile
     container_name: usm-backend
-    env_file: ../.env
+    hostname: usm-backend
+    network_mode: host
     environment:
+      - TZ=America/Denver
+      # SQL Server
+      - SQL_SERVER=usidcvsql0252.ctl.intranet
+      - SQL_DATABASE=StorMart
+      - DB_SCHEMA=USM
+      - SQL_DRIVER=ODBC Driver 17 for SQL Server
+      # KeePass
+      - KEEPASS_URL=http://usodclpsandadm1.corp.intranet:2000/keepass
+      - SQL_CRED_KEY=SQLServerDB
+      - PURE_CRED_KEY=PureStorage
+      # JWT auth (not enforced yet — set a real value before Phase 3)
+      - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_BEFORE_PRODUCTION}
+      # Notifications (set TEAMS_WEBHOOK_URL in .env to enable)
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - SNOW_ENABLED=false
+      - SNOW_SEVERITIES=critical
+      - SNOW_CATEGORY=Alert > Infrastructure
+      - SNOW_CI=Pure Storage CBS
+      - SNOW_LOCATION=Denver
+      - SNOW_GROUP=${SNOW_GROUP:-}
+      # CORS — frontend on port 8080
+      - CORS_ORIGINS=["http://localhost:8080","http://usodclpsandadm1.corp.intranet:8080"]
+      # Collector intervals (seconds)
+      - METRICS_INTERVAL=60
+      - VOLUMES_INTERVAL=900
+      - ALERTS_INTERVAL=300
+      # Paths
       - LOG_DIR=/app/logs
       - ARRAYS_CONFIG_FILE=/app/config/arrays.txt
     volumes:
       - ../logs:/app/logs
       - ../config:/app/config:ro
-    expose:
-      - "8000"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    networks:
-      - usm
+      start_period: 15s
 
-  frontend:
+  # ============================================================
+  # FRONTEND — React SPA via Nginx on port 8080
+  # ============================================================
+  usm-frontend:
     build:
       context: ../frontend
       dockerfile: Dockerfile
     container_name: usm-frontend
-    ports:
-      - "80:80"
-    depends_on:
-      - backend
+    hostname: usm-frontend
+    network_mode: host
+    environment:
+      - TZ=America/Denver
     restart: unless-stopped
-    networks:
-      - usm
-
-networks:
-  usm:
-    driver: bridge
+    depends_on:
+      usm-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
