@@ -78,11 +78,19 @@ app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
 
 
 # ------------------------------------------------------------------ health
+@app.get("/ping", tags=["health"])
+async def ping():
+    """Lightweight liveness probe — used by Docker healthcheck."""
+    return {"ok": True}
+
+
 @app.get("/health", tags=["health"])
 async def health():
+    """Deep health check — includes DB and collector status (may be slow if KeePass is unavailable)."""
     from app.collectors.registry import CollectorRegistry
+    from fastapi.concurrency import run_in_threadpool
 
-    db_ok = test_connection()
+    db_ok = await run_in_threadpool(test_connection)
     return {
         "status": "healthy" if db_ok else "degraded",
         "version": settings.app_version,
