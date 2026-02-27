@@ -1,181 +1,172 @@
-# Unified Storage Monitoring
+# Unified Storage Monitoring (USM) v2
 
-A modular, multi-vendor storage monitoring solution.
+A vendor-agnostic Storage Intelligence Platform built on FastAPI + React.
+Monitors Pure Storage today; NetApp, Commvault, and others are next phases.
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌──────────────┐
-│  pure-web   │◄───►│pure-scheduler│────►│pure-collector│
-│             │     │              │     │              │
-│ • Dashboard │     │ • Job Queue  │     │ • Pure       │
-│ • REST API  │     │ • Intervals  │     │ • NetApp*    │
-│ • Docker    │     │ • Run Now    │     │ • Dell EMC*  │
-└─────────────┘     └──────────────┘     └──────────────┘
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │  SQL Server  │
-                    │  (StorMart)  │
-                    └──────────────┘
-                    
-* Future support
+┌──────────────────────────────────────┐
+│           Docker (host network)       │
+│                                      │
+│  ┌─────────────┐   ┌──────────────┐  │
+│  │  usm-backend│   │ usm-frontend │  │
+│  │  FastAPI    │   │ nginx + React│  │
+│  │  :8000      │◄──│  :8080       │  │
+│  │             │   └──────────────┘  │
+│  │ APScheduler │                     │
+│  │ CollectorRegistry                 │
+│  └──────┬──────┘                     │
+└─────────┼────────────────────────────┘
+          │
+     ┌────┴────────────────────┐
+     │                         │
+┌────▼──────┐        ┌─────────▼───────┐
+│ SQL Server │        │  Storage Arrays │
+│ StorMart   │        │  Pure / NetApp  │
+│ (ODBC)    │        │  (REST APIs)    │
+└────────────┘        └─────────────────┘
+         │
+    ┌────▼──────┐
+    │  KeePass  │
+    │  REST API │
+    └───────────┘
 ```
+
+## Quick Start
+
+### 1. Configure
+
+```bash
+cp .env.example .env
+# Edit .env — set SECRET_KEY, optionally TEAMS_WEBHOOK_URL
+```
+
+Add arrays to `backend/config/arrays.txt`:
+```
+# format: array_fqdn [vendor]
+purearray01.ctl.intranet pure
+purearray02.ctl.intranet pure
+```
+
+### 2. Start
+
+```bash
+make up          # build + start
+make logs        # follow all logs
+make status      # container health
+```
+
+Frontend: http://localhost:8080
+API docs: http://localhost:8000/docs
+
+### 3. Stop
+
+```bash
+make down
+```
+
+## Makefile Commands
+
+| Command | Description |
+|---------|-------------|
+| `make up` | Build and start all services |
+| `make start` | Start without rebuilding |
+| `make down` | Stop and remove containers |
+| `make build` | Rebuild images (no cache) |
+| `make logs` | Tail all logs |
+| `make logs-backend` | Tail backend only |
+| `make logs-frontend` | Tail frontend only |
+| `make status` | Show container status |
+| `make restart` | Restart all services |
+| `make shell-backend` | Shell into backend container |
+| `make tail-log` | Tail backend log file |
+
+## Adding a New Vendor
+
+1. Create `backend/app/collectors/<vendor>/` with `__init__.py`, `metrics.py`, etc.
+2. Decorate each collector class:
+
+```python
+from app.collectors.registry import CollectorRegistry
+from app.collectors.base import BaseCollector
+
+@CollectorRegistry.register("netapp", "metrics")
+class NetAppMetricsCollector(BaseCollector):
+    def authenticate(self) -> bool: ...
+    def collect(self): ...
+    def save(self, result) -> bool: ...
+```
+
+3. Import in `backend/app/collectors/<vendor>/__init__.py`:
+```python
+from app.collectors.netapp import metrics  # noqa: F401
+```
+
+4. Add arrays to `arrays.txt` with the new vendor tag:
+```
+netappfiler01.ctl.intranet netapp
+```
+
+No other code changes needed — the scheduler auto-discovers all registered collectors.
 
 ## Directory Structure
 
 ```
 unified_storage_monitoring/
-├── docker/                      # Docker configuration
-│   ├── docker-compose.yml       # Multi-service orchestration
-│   ├── web.Dockerfile           # Web UI container
-│   ├── scheduler.Dockerfile     # Scheduler container
-│   ├── collector.Dockerfile     # Collector container
-│   └── requirements/            # Python dependencies
-│       ├── web.txt
-│       ├── scheduler.txt
-│       └── collector.txt
-│
-├── web/                         # Web UI application
-│   └── app.py                   # Flask application
-│
-├── scheduler/                   # Scheduler service
-│   └── service.py               # Job scheduler with API
-│
-├── collectors/                  # Data collectors
-│   ├── common/                  # Shared utilities
-│   │   ├── db.py                # Database helpers
-│   │   └── base.py              # Base collector class
-│   │
-│   ├── pure/                    # Pure Storage collectors
-│   │   ├── metrics.py           # Performance metrics
-│   │   ├── volumes.py           # Volume/Host inventory
-│   │   └── alerts.py            # Alerts and messages
-│   │
-│   ├── netapp/                  # NetApp collectors (future)
-│   └── dell_emc/                # Dell EMC collectors (future)
-│
-├── config/                      # Configuration files
-│   ├── arrays.txt               # Array list
-│   └── jobs.json                # Scheduler job definitions
-│
-└── logs/                        # Log files (Docker volumes)
+├── backend/
+│   ├── app/
+│   │   ├── api/v1/          # FastAPI route handlers
+│   │   ├── collectors/      # Vendor collector plugins
+│   │   │   ├── registry.py  # CollectorRegistry
+│   │   │   ├── scheduler.py # APScheduler jobs
+│   │   │   └── pure/        # Pure Storage collectors
+│   │   ├── core/config.py   # Settings (Pydantic)
+│   │   ├── db/session.py    # SQL Server + init_database()
+│   │   ├── schemas/         # Vendor-agnostic Pydantic models
+│   │   └── services/        # keepass, notification, stats
+│   ├── config/arrays.txt    # Array list
+│   └── Dockerfile
+├── frontend/
+│   ├── src/                 # React + TypeScript + Tailwind
+│   ├── nginx.conf           # SPA + /api proxy
+│   └── Dockerfile
+├── docker/
+│   └── docker-compose.v2.yml
+├── .env.example             # Copy to .env before first run
+├── Makefile
+└── README.md
 ```
 
-## Quick Start
+## Configuration Reference
 
-### 1. Configure Arrays
+All non-secret config is inlined in `docker/docker-compose.v2.yml`.
+Secrets go in `.env`:
 
-Edit `config/arrays.txt`:
-```
-# One array FQDN per line
-purecbs-aws-array1.example.com
-purecbs-azure-array2.example.com
-on-prem-array3.example.com
-```
+| Variable | Description |
+|----------|-------------|
+| `SECRET_KEY` | JWT signing secret (generate with `python -c "import secrets; print(secrets.token_hex(32))"`) |
+| `TEAMS_WEBHOOK_URL` | Teams incoming webhook (optional — leave blank to disable) |
+| `SNOW_GROUP` | ServiceNow assignment group (optional) |
 
-### 2. Start Services
-
-```bash
-cd docker
-docker compose up -d
-```
-
-### 3. Access Dashboard
-
-Open http://localhost:5000
-
-## Services
-
-### Web UI (port 5000)
-- Dashboard with array overview
-- Volume and host inventory
-- Alerts management
-- Settings for scheduler control
-- Container stats monitoring
-
-### Scheduler (port 5001)
-- Background job management
-- Configurable intervals
-- REST API for control:
-  - `GET /api/jobs` - List all jobs
-  - `POST /api/jobs/{id}/run` - Run job now
-  - `POST /api/jobs/{id}/enable` - Enable job
-  - `POST /api/jobs/{id}/disable` - Disable job
-  - `POST /api/jobs/{id}/interval` - Set interval
-
-### Collector (on-demand)
-```bash
-# Run manually
-docker compose --profile manual run pure-collector python /app/collectors/pure/metrics.py --all
-```
-
-## Adding New Vendors
-
-1. Create collector directory: `collectors/newvendor/`
-2. Inherit from `BaseCollector`:
-
-```python
-from common.base import BaseCollector
-
-class NewVendorCollector(BaseCollector):
-    VENDOR_NAME = "NewVendor"
-    COLLECTOR_TYPE = "metrics"
-    
-    def authenticate(self) -> bool:
-        # Implement authentication
-        pass
-    
-    def collect(self) -> dict:
-        # Implement data collection
-        pass
-    
-    def save(self, data: dict) -> bool:
-        # Implement database save
-        pass
-```
-
-3. Add job to `config/jobs.json`
-
-## Environment Variables
+Key environment variables (set in docker-compose):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| SQL_SERVER | usidcvsql0252.ctl.intranet | SQL Server hostname |
-| SQL_DATABASE | StorMart | Database name |
-| SQL_CRED_KEY | SQLServerDB | KeePass credential key |
-| KEEPASS_URL | http://localhost:2000/keepass | KeePass API URL |
-| SCHEDULER_URL | http://pure-scheduler:5001 | Scheduler service URL |
+| `SQL_SERVER` | `usidcvsql0252.ctl.intranet` | SQL Server hostname |
+| `SQL_DATABASE` | `StorMart` | Database name |
+| `SQL_SCHEMA` | `dbo` | Schema for USM tables |
+| `KEEPASS_URL` | `http://usodclpsandadm1.corp.intranet:2000/keepass` | KeePass REST API |
+| `SQL_CRED_KEY` | `SQLServerDB` | KeePass key for SQL credentials |
+| `METRICS_INTERVAL` | `300` | Seconds between metrics polls |
+| `VOLUMES_INTERVAL` | `3600` | Seconds between volume inventory polls |
+| `ALERTS_INTERVAL` | `120` | Seconds between alert polls |
 
-## Development
+## Ports
 
-### Run collectors locally:
-```bash
-export PYTHONPATH=/path/to/unified_storage_monitoring
-python collectors/pure/metrics.py --all
-```
+| Service | Port | Notes |
+|---------|------|-------|
+| FastAPI backend | 8000 | REST API + OpenAPI docs |
+| React frontend | 8080 | SPA dashboard |
 
-### Test database connection:
-```bash
-python collectors/common/db.py
-```
-
-## Troubleshooting
-
-### Check container logs:
-```bash
-docker logs pure-web
-docker logs pure-scheduler
-```
-
-### Restart services:
-```bash
-docker compose restart
-```
-
-### Rebuild after code changes:
-```bash
-docker compose build --no-cache
-docker compose up -d
-```
-# app-usm
+v1 (Flask) runs on 5050/5051 — both versions can coexist.

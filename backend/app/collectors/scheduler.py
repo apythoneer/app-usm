@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.collectors.registry import CollectorRegistry, load_all_collectors
@@ -140,4 +141,42 @@ def build_scheduler() -> AsyncIOScheduler:
         )
         logger.info(f"Scheduled {job_id} every {interval}s")
 
+    # Daily aggregation — runs at 00:05 UTC to capture full previous day
+    scheduler.add_job(
+        _run_daily_stats,
+        trigger=CronTrigger(hour=0, minute=5, timezone="UTC"),
+        id="daily_stats",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("Scheduled daily_stats at 00:05 UTC")
+
+    # History cleanup — runs at 01:00 UTC, keeps 7 days by default
+    scheduler.add_job(
+        _run_history_cleanup,
+        trigger=CronTrigger(hour=1, minute=0, timezone="UTC"),
+        id="history_cleanup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("Scheduled history_cleanup at 01:00 UTC")
+
     return scheduler
+
+
+async def _run_daily_stats():
+    """Async wrapper for daily stats aggregation."""
+    from app.services.stats import calculate_daily_stats
+    loop = asyncio.get_event_loop()
+    ok = await loop.run_in_executor(_executor, calculate_daily_stats)
+    logger.info(f"Daily stats aggregation: {'OK' if ok else 'FAILED'}")
+
+
+async def _run_history_cleanup():
+    """Async wrapper for metrics history cleanup."""
+    from app.services.stats import cleanup_old_history
+    loop = asyncio.get_event_loop()
+    deleted = await loop.run_in_executor(_executor, cleanup_old_history)
+    logger.info(f"History cleanup: removed {deleted} rows")

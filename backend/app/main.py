@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.api.v1.router import router as api_v1_router
 from app.collectors.scheduler import build_scheduler
-from app.db.session import test_connection
+from app.db.session import test_connection, init_database
 
 settings = get_settings()
 
@@ -37,12 +37,15 @@ async def lifespan(app: FastAPI):
     """Start scheduler on startup, shut it down on exit."""
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
 
+    db_ok = test_connection()
+    logger.info(f"Database connection: {'OK' if db_ok else 'FAILED'}")
+
+    if db_ok:
+        init_database()
+
     scheduler = build_scheduler()
     scheduler.start()
     app.state.scheduler = scheduler
-
-    db_ok = test_connection()
-    logger.info(f"Database connection: {'OK' if db_ok else 'FAILED'}")
 
     yield
 
