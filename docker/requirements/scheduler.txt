@@ -1,0 +1,5 @@
+# Scheduler service dependencies
+flask==3.0.0
+pyodbc==5.0.1
+requests==2.31.0
+urllib3==2.1.0

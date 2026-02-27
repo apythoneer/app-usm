@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # ============================================
+  # WEB UI SERVICE
+  # ============================================
+  pure-web:
+    build:
+      context: ..
+      dockerfile: docker/web.Dockerfile
+    container_name: pure-web
+    hostname: pure-web
+    network_mode: host
+    environment:
+      - TZ=America/Denver
+      - SQL_SERVER=usidcvsql0252.ctl.intranet
+      - SQL_DATABASE=StorMart
+      - SQL_CRED_KEY=SQLServerDB
+      - KEEPASS_URL=http://usodclpsandadm1.corp.intranet:2000/keepass
+      - SCHEDULER_URL=http://localhost:5051
+      - LOG_DIRECTORY=/app/logs
+      - COLLECTORS_DIR=/app/collectors
+      - DOCKER_API_VERSION=1.43
+      - WEB_PORT=5050
+    volumes:
+      - ../web/app.py:/app/app.py:ro
+      - ../config:/app/config:ro
+      - ../logs_new/scheduler:/app/logs:rw
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5050/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # SCHEDULER SERVICE
+  # ============================================
+  pure-scheduler:
+    build:
+      context: ..
+      dockerfile: docker/scheduler.Dockerfile
+    container_name: pure-scheduler
+    hostname: pure-scheduler
+    network_mode: host
+    environment:
+      - TZ=America/Denver
+      - SQL_SERVER=usidcvsql0252.ctl.intranet
+      - SQL_DATABASE=StorMart
+      - SQL_CRED_KEY=SQLServerDB
+      - KEEPASS_URL=http://usodclpsandadm1.corp.intranet:2000/keepass
+      - JOBS_FILE=/app/config/jobs.json
+      - COLLECTORS_DIR=/app/collectors
+      - LOG_DIR=/app/logs
+      - SCHEDULER_PORT=5051
+    volumes:
+      - ../scheduler:/app/scheduler:ro
+      - ../collectors:/app/collectors:ro
+      - ../config:/app/config:rw
+      - ../logs_new/scheduler:/app/logs:rw
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5051/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

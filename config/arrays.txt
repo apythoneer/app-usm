@@ -1,0 +1,16 @@
+# Pure Storage Arrays to Monitor
+# Azure CBS Arrays
+purecbs-gp-prod-eus2-07
+purecbs-gp-prod-eus2-06
+purecbs-gp-prod-eus2-05
+purecbs-gp-prod-eus2-04
+purecbs-gp-prod-eus2-03
+purecbs-gp-prod-eus2-02
+purecbs-gp-prod-cus-01
+# AWS CBS Arrays
+purecbs-aws-prod-gp-eus2c-03
+purecbs-aws-prod-gp-eus2c-01
+purecbs-aws-prod-gp-eus2b-01
+purecbs-aws-prod-gp-eus2a-02
+purecbs-aws-prod-gp-eus2a-01
+purecbs-aws-dr-gp-eus1b-02
