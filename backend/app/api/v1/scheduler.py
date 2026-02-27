@@ -4,9 +4,14 @@ Scheduler API — inspect and trigger collector jobs.
 
 from typing import Any, Dict
 from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from app.collectors.registry import CollectorRegistry
 from app.collectors.scheduler import get_job_status
+
+
+class IntervalUpdate(BaseModel):
+    seconds: int
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
@@ -65,3 +70,17 @@ async def resume_job(job_id: str, request: Request):
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     scheduler.resume_job(job_id)
     return {"message": f"Job '{job_id}' resumed"}
+
+
+@router.put("/jobs/{job_id}/interval")
+async def update_job_interval(job_id: str, body: IntervalUpdate, request: Request):
+    """Update a job's polling interval (seconds) — takes effect immediately."""
+    from apscheduler.triggers.interval import IntervalTrigger
+    scheduler = request.app.state.scheduler
+    job = scheduler.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    if body.seconds < 10:
+        raise HTTPException(status_code=400, detail="Minimum interval is 10 seconds")
+    scheduler.reschedule_job(job_id, trigger=IntervalTrigger(seconds=body.seconds))
+    return {"message": f"Job '{job_id}' rescheduled every {body.seconds}s"}

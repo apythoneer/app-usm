@@ -6,6 +6,7 @@ import Hosts from '@/pages/Hosts'
 import Alerts from '@/pages/Alerts'
 import Analytics from '@/pages/Analytics'
 import Settings from '@/pages/Settings'
+import Logs from '@/pages/Logs'
 import NotFound from '@/pages/NotFound'
 
 export default function App() {
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="alerts" element={<Alerts />} />
         <Route path="analytics" element={<Analytics />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="logs"     element={<Logs />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

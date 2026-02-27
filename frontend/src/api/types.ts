@@ -7,7 +7,10 @@ export interface ArraySummary {
   array_name: string
   vendor: Vendor
   model?: string
+  group?: string               // cloud/site label from arrays.txt (aws | azure | gcp | on-prem | etc.)
+  capacity_total_bytes?: number
   capacity_used_pct?: number
+  data_reduction?: number
   total_iops?: number
   read_latency_us?: number
   write_latency_us?: number
@@ -19,14 +22,9 @@ export interface ArrayMetrics extends ArraySummary {
   firmware_version?: string
   read_iops?: number
   write_iops?: number
-  read_latency_us?: number
-  write_latency_us?: number
   read_bandwidth_bytes?: number
   write_bandwidth_bytes?: number
-  capacity_total_bytes?: number
   capacity_used_bytes?: number
-  capacity_used_pct?: number
-  data_reduction?: number
   total_reduction?: number
   shared_space_bytes?: number
   snapshot_space_bytes?: number
@@ -37,6 +35,20 @@ export interface ArrayMetrics extends ArraySummary {
   metadata?: Record<string, unknown>
 }
 
+export interface FleetStats {
+  total_arrays: number
+  total_capacity_tb?: number
+  total_used_tb?: number
+  avg_utilization_pct?: number
+  total_iops?: number
+  avg_read_latency_us?: number
+  avg_write_latency_us?: number
+  avg_data_reduction?: number
+  active_alerts: number
+  total_volumes: number
+  total_hosts: number
+}
+
 export interface Volume {
   array_name: string
   vendor: Vendor
@@ -45,12 +57,14 @@ export interface Volume {
   used_bytes?: number
   data_reduction?: number
   total_reduction?: number
+  thin_provisioning?: number
   snapshots?: number
   created?: string
   serial?: string
   hosts?: string[]
   host_groups?: string[]
   protection_groups?: string[]
+  notes?: string
   last_updated?: string
 }
 
@@ -92,4 +106,18 @@ export interface MetricsHistoryPoint {
   read_latency_us?: number
   write_latency_us?: number
   capacity_used_pct?: number
+}
+
+export interface FleetHistoryResponse {
+  hours: number
+  arrays: string[]
+  data_points: number
+  data: MetricsHistoryPoint[]
+}
+
+export interface DBTableInfo {
+  table_name: string
+  row_count: number | null
+  last_updated: string | null
+  error?: string
 }

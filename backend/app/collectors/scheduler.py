@@ -45,7 +45,8 @@ def load_arrays() -> List[ArrayConfig]:
             parts = line.split()
             name = parts[0]
             vendor = parts[1] if len(parts) > 1 else "pure"
-            arrays.append(ArrayConfig(name=name, vendor=vendor))  # type: ignore[arg-type]
+            group = parts[2] if len(parts) > 2 else None
+            arrays.append(ArrayConfig(name=name, vendor=vendor, group=group))  # type: ignore[arg-type]
 
     logger.info(f"Loaded {len(arrays)} arrays from {path}")
     return arrays

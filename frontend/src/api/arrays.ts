@@ -1,5 +1,5 @@
 import { apiClient } from './client'
-import type { ArraySummary, ArrayMetrics } from './types'
+import type { ArraySummary, ArrayMetrics, FleetStats, FleetHistoryResponse } from './types'
 
 export const arraysApi = {
   list: (vendor?: string) =>
@@ -8,8 +8,16 @@ export const arraysApi = {
   get: (arrayName: string) =>
     apiClient.get<ArrayMetrics>(`/arrays/${encodeURIComponent(arrayName)}`).then((r) => r.data),
 
+  fleetStats: () =>
+    apiClient.get<FleetStats>('/arrays/fleet-stats').then((r) => r.data),
+
   history: (arrayName: string, hours = 24) =>
     apiClient
       .get(`/analytics/history/${encodeURIComponent(arrayName)}`, { params: { hours } })
+      .then((r) => r.data),
+
+  fleetHistory: (hours = 24) =>
+    apiClient
+      .get<FleetHistoryResponse>('/analytics/fleet-history', { params: { hours } })
       .then((r) => r.data),
 }

@@ -56,7 +56,10 @@ class ArraySummary(BaseModel):
     array_name: str
     vendor: VendorType = "unknown"
     model: Optional[str] = None
+    group: Optional[str] = None          # cloud/site group from arrays.txt column 3
+    capacity_total_bytes: Optional[int] = None
     capacity_used_pct: Optional[float] = None
+    data_reduction: Optional[float] = None
     total_iops: Optional[float] = None
     read_latency_us: Optional[float] = None
     write_latency_us: Optional[float] = None
@@ -68,6 +71,7 @@ class ArrayConfig(BaseModel):
     """Array connection configuration (from arrays.txt or DB)."""
     name: str
     vendor: VendorType = "pure"
-    host: Optional[str] = None   # hostname/IP if different from name
+    group: Optional[str] = None          # cloud/site label (3rd column of arrays.txt)
+    host: Optional[str] = None           # hostname/IP if different from name
     enabled: bool = True
     tags: dict[str, str] = Field(default_factory=dict)

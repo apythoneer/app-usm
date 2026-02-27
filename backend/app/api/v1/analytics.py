@@ -57,3 +57,30 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=365)):
     """Daily aggregated stats across all arrays."""
     rows = await run_in_threadpool(_fetch_daily_stats, days)
     return {"days": days, "data": rows}
+
+
+@router.get("/fleet-history")
+async def get_fleet_history(
+    hours: int = Query(default=24, ge=1, le=720),
+    limit: int = Query(default=5000, le=20000),
+):
+    """Time-series metrics for ALL arrays in a single query."""
+    rows = await run_in_threadpool(_fetch_fleet_history, hours, limit)
+    arrays = list({r["array_name"] for r in rows})
+    return {"hours": hours, "arrays": arrays, "data_points": len(rows), "data": rows}
+
+
+def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            f"""SELECT TOP {limit}
+                array_name, collected_at,
+                read_iops, write_iops,
+                read_latency_us, write_latency_us,
+                capacity_used_pct
+            FROM {SCHEMA}.metrics_history
+            WHERE collected_at >= DATEADD(HOUR, -?, GETDATE())
+            ORDER BY collected_at ASC""",
+            (hours,),
+        )
+        return rows_to_dicts(cursor, cursor.fetchall())
