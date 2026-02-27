@@ -1,0 +1,46 @@
+version: '3.8'
+
+# USM v2 — Storage Intelligence Platform
+# Run: docker compose -f docker/docker-compose.v2.yml up -d
+
+services:
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: usm-backend
+    env_file: ../.env
+    environment:
+      - LOG_DIR=/app/logs
+      - ARRAYS_CONFIG_FILE=/app/config/arrays.txt
+    volumes:
+      - ../logs:/app/logs
+      - ../config:/app/config:ro
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - usm
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: usm-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - usm
+
+networks:
+  usm:
+    driver: bridge
