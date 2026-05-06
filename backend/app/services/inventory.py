@@ -34,7 +34,7 @@ _VENDOR_MAP: Dict[str, str] = {
 }
 
 # Vendors that have working collectors in USM
-_SUPPORTED_VENDORS = {"pure", "netapp", "hpe", "oracle"}
+_SUPPORTED_VENDORS = {"pure", "netapp", "hpe", "oracle", "hitachi"}
 
 
 def resolve_cred_key(vendor: str, array_name: str, model: str, site: str) -> Optional[str]:
@@ -57,7 +57,12 @@ def resolve_cred_key(vendor: str, array_name: str, model: str, site: str) -> Opt
     elif vendor == "oracle":
         return f"Oracle_ZFS_{site}" if site else None
     elif vendor == "hitachi":
-        return f"Hitachi_VSP_{site}" if site else None
+        # F900 cred works for all VSP F900 arrays (user: maintenance)
+        if model and "F900" in model.upper():
+            return "F900"
+        elif model and "VSP" in model.upper():
+            return "VSP"
+        return "F900"  # default to F900 for Hitachi
     elif vendor == "commvault":
         return f"CommVault_{site}" if site else None
     elif vendor == "dell":
