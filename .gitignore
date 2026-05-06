@@ -56,6 +56,21 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
+# AI/Agent config
+.claude/
+.roo/
+.cursor/
+.aider*
+.continue/
+
+# Debug/test scripts
+debug_*.py
+explore_*.py
+test_*.py
+fix_*.py
+reset_*.py
+*_sync.tar
+
 # Build artifacts
 *.pyc
 *.pyo
