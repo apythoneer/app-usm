@@ -1,6 +1,6 @@
 // Vendor-agnostic API types — mirror backend Pydantic schemas
 
-export type Vendor = 'pure' | 'netapp' | 'commvault' | 'dell' | 'hpe' | 'unknown'
+export type Vendor = 'pure' | 'netapp' | 'hpe' | 'oracle' | 'hitachi' | 'commvault' | 'dell' | 'veeam' | 'nimble' | 'unknown'
 export type Severity = 'critical' | 'warning' | 'info' | 'unknown'
 
 export interface ArraySummary {
@@ -120,4 +120,54 @@ export interface DBTableInfo {
   row_count: number | null
   last_updated: string | null
   error?: string
+}
+
+export interface ManagedArray {
+  id?: number
+  array_name: string
+  vendor: Vendor
+  group_label?: string
+  cred_key?: string
+  enabled: boolean
+  // DimStorageFinance fields
+  array_fqdn?: string
+  array_serial?: string
+  model?: string
+  site?: string
+  technology?: string
+  category?: string
+  usage_label?: string
+  disposition?: string
+  oem?: string
+  support_provider?: string
+  install_date?: string
+  eosl_date?: string
+  maint_end_date?: string
+  mgmt_ip?: string
+  monitoring_status?: string
+  dim_sync_at?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface ManagedArrayCreate {
+  array_name: string
+  vendor: Vendor
+  group_label?: string
+  cred_key?: string
+}
+
+export interface ArrayVerifyResult {
+  array_name: string
+  keepass_ok: boolean
+  connectivity_ok: boolean
+  version?: string
+  error?: string
+}
+
+export interface PaginatedResponse<T> {
+  total: number
+  limit: number
+  offset: number
+  data: T[]
 }

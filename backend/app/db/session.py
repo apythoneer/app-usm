@@ -200,6 +200,61 @@ def init_database() -> None:
             )
         """)
 
+        # Migration: widen purity_version to hold ONTAP version strings
+        cursor.execute(f"""
+            ALTER TABLE {SCHEMA}.metrics_current ALTER COLUMN purity_version NVARCHAR(100)
+        """)
+
+        # Migration: add vendor column to metrics_current if missing
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.metrics_current')
+                AND name = 'vendor'
+            )
+            ALTER TABLE {SCHEMA}.metrics_current ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
+        """)
+
+        # Migration: add vendor column to metrics_history if missing
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.metrics_history')
+                AND name = 'vendor'
+            )
+            ALTER TABLE {SCHEMA}.metrics_history ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
+        """)
+
+        # Migration: add vendor column to messages if missing
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.messages')
+                AND name = 'vendor'
+            )
+            ALTER TABLE {SCHEMA}.messages ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
+        """)
+
+        # Migration: add vendor column to volumes_cache if missing
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.volumes_cache')
+                AND name = 'vendor'
+            )
+            ALTER TABLE {SCHEMA}.volumes_cache ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
+        """)
+
+        # Migration: add vendor column to hosts_cache if missing
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.hosts_cache')
+                AND name = 'vendor'
+            )
+            ALTER TABLE {SCHEMA}.hosts_cache ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
+        """)
+
         # ------------------------------------------------------------------
         # daily_stats — aggregated daily summary across all arrays
         # ------------------------------------------------------------------
@@ -326,6 +381,79 @@ def init_database() -> None:
         """)
 
         # ------------------------------------------------------------------
+        # managed_arrays — array inventory managed via Settings UI
+        # ------------------------------------------------------------------
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.tables
+                WHERE name='managed_arrays' AND schema_id = SCHEMA_ID('{SCHEMA}')
+            )
+            CREATE TABLE {SCHEMA}.managed_arrays (
+                id             INT IDENTITY(1,1) PRIMARY KEY,
+                array_name     NVARCHAR(255) NOT NULL UNIQUE,
+                vendor         NVARCHAR(50)  NOT NULL DEFAULT 'pure',
+                group_label    NVARCHAR(100),
+                enabled        BIT DEFAULT 1,
+                created_at     DATETIME2 DEFAULT GETDATE(),
+                updated_at     DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+
+        # Migration: add cred_key column if missing (added for NetApp support)
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.managed_arrays')
+                AND name = 'cred_key'
+            )
+            ALTER TABLE {SCHEMA}.managed_arrays ADD cred_key NVARCHAR(255) NULL
+        """)
+
+        # Migration: add DimStorageFinance inventory columns to managed_arrays
+        _dim_columns = [
+            ("array_fqdn",       "NVARCHAR(255)"),
+            ("array_serial",     "NVARCHAR(150)"),
+            ("model",            "NVARCHAR(150)"),
+            ("site",             "NVARCHAR(50)"),
+            ("technology",       "NVARCHAR(50)"),
+            ("category",         "NVARCHAR(50)"),
+            ("usage_label",      "NVARCHAR(100)"),
+            ("disposition",      "NVARCHAR(50)"),
+            ("oem",              "NVARCHAR(100)"),
+            ("support_provider", "NVARCHAR(100)"),
+            ("install_date",     "DATE"),
+            ("eosl_date",        "DATE"),
+            ("maint_end_date",   "DATE"),
+            ("mgmt_ip",          "NVARCHAR(50)"),
+            ("dim_sync_at",      "DATETIME2"),
+            ("monitoring_status","NVARCHAR(50) DEFAULT 'unknown'"),
+        ]
+        for col_name, col_type in _dim_columns:
+            cursor.execute(f"""
+                IF NOT EXISTS (
+                    SELECT * FROM sys.columns
+                    WHERE object_id = OBJECT_ID('{SCHEMA}.managed_arrays')
+                    AND name = '{col_name}'
+                )
+                ALTER TABLE {SCHEMA}.managed_arrays ADD {col_name} {col_type} NULL
+            """)
+
+        # ------------------------------------------------------------------
+        # app_settings — key/value store for runtime config (webhook URLs, etc.)
+        # ------------------------------------------------------------------
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.tables
+                WHERE name='app_settings' AND schema_id = SCHEMA_ID('{SCHEMA}')
+            )
+            CREATE TABLE {SCHEMA}.app_settings (
+                setting_key    NVARCHAR(255) NOT NULL PRIMARY KEY,
+                setting_value  NVARCHAR(MAX),
+                updated_at     DATETIME2 DEFAULT GETDATE()
+            )
+        """)
+
+        # ------------------------------------------------------------------
         # Indexes — only created if missing
         # ------------------------------------------------------------------
         indexes = [
@@ -346,6 +474,9 @@ def init_database() -> None:
 
             f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_hosts_array') "
             f"  CREATE INDEX IX_hosts_array ON {SCHEMA}.hosts_cache(array_name)",
+
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_managed_arrays_vendor') "
+            f"  CREATE INDEX IX_managed_arrays_vendor ON {SCHEMA}.managed_arrays(vendor, enabled)",
         ]
         for idx_sql in indexes:
             try:
@@ -354,3 +485,39 @@ def init_database() -> None:
                 logger.warning(f"Index creation skipped: {e}")
 
     logger.info("Database schema initialization complete.")
+
+    # Seed managed_arrays from arrays.txt if table is empty (uses its own connection)
+    _migrate_arrays_txt_to_db()
+
+
+def _migrate_arrays_txt_to_db() -> None:
+    """One-time import: if managed_arrays is empty AND arrays.txt exists, seed from file."""
+    import os
+    path = settings.arrays_config_file
+    if not os.path.exists(path):
+        return
+
+    with get_db_cursor() as cur:
+        cur.execute(f"SELECT COUNT(*) FROM {SCHEMA}.managed_arrays")
+        count = cur.fetchone()[0]
+        if count > 0:
+            return  # already populated
+
+        inserted = 0
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                name = parts[0]
+                vendor = parts[1] if len(parts) > 1 else "pure"
+                group = parts[2] if len(parts) > 2 else None
+                cur.execute(
+                    f"INSERT INTO {SCHEMA}.managed_arrays (array_name, vendor, group_label) VALUES (?, ?, ?)",
+                    (name, vendor, group),
+                )
+                inserted += 1
+
+        if inserted:
+            logger.info(f"Migrated {inserted} arrays from arrays.txt into managed_arrays table")

@@ -4,7 +4,7 @@ Main API v1 router — assembles all sub-routers.
 
 from fastapi import APIRouter
 
-from app.api.v1 import arrays, volumes, hosts, alerts, analytics, scheduler, settings
+from app.api.v1 import arrays, volumes, hosts, alerts, analytics, scheduler, settings, chat
 
 router = APIRouter()
 
@@ -15,3 +15,4 @@ router.include_router(alerts.router)
 router.include_router(analytics.router)
 router.include_router(scheduler.router)
 router.include_router(settings.router)
+router.include_router(chat.router)

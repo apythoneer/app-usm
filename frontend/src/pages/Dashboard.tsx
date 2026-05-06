@@ -6,6 +6,8 @@ import {
 } from 'lucide-react'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
+import { volumesApi } from '@/api/volumes'
+import { hostsApi } from '@/api/hosts'
 import type { ArraySummary, ArrayMetrics, Alert, FleetStats } from '@/api/types'
 import {
   formatBytes, formatIOPS, formatLatency, formatPct,
@@ -31,11 +33,36 @@ function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400' }: {
 
 // ── Array drilldown modal ─────────────────────────────────────────────────────
 
+type DrilldownTab = 'overview' | 'volumes' | 'hosts'
+
 function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => void }) {
+  const [tab, setTab] = useState<DrilldownTab>('overview')
+
   const { data, isLoading } = useQuery<ArrayMetrics>({
     queryKey: ['array', arrayName],
     queryFn: () => arraysApi.get(arrayName),
   })
+
+  const { data: volResult } = useQuery({
+    queryKey: ['volumes', 'drilldown', arrayName],
+    queryFn: () => volumesApi.list({ array_name: arrayName, limit: 200 }),
+    enabled: tab === 'volumes',
+  })
+
+  const { data: hostResult } = useQuery({
+    queryKey: ['hosts', 'drilldown', arrayName],
+    queryFn: () => hostsApi.list({ array_name: arrayName, limit: 200 }),
+    enabled: tab === 'hosts',
+  })
+
+  const volumes = volResult?.data ?? []
+  const hosts = hostResult?.data ?? []
+
+  const tabs: { key: DrilldownTab; label: string; count?: number }[] = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'volumes', label: 'Volumes', count: volResult?.total },
+    { key: 'hosts', label: 'Hosts', count: hostResult?.total },
+  ]
 
   return (
     <div
@@ -43,7 +70,7 @@ function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => 
       onClick={onClose}
     >
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto shadow-2xl"
+        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
@@ -54,11 +81,29 @@ function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => 
           <button onClick={onClose} className="text-gray-400 hover:text-white ml-4"><X size={20} /></button>
         </div>
 
+        {/* Tab bar */}
+        <div className="flex border-b border-gray-700 px-4">
+          {tabs.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key)}
+              className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                tab === t.key
+                  ? 'border-brand-500 text-white'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {t.label}
+              {t.count != null && <span className="ml-1.5 text-gray-600">({t.count})</span>}
+            </button>
+          ))}
+        </div>
+
         {isLoading ? (
           <div className="p-8 text-center text-gray-400">Loading…</div>
         ) : !data ? (
           <div className="p-8 text-center text-gray-500">No data available</div>
-        ) : (
+        ) : tab === 'overview' ? (
           <div className="p-4 grid grid-cols-2 gap-4">
             {/* Identity */}
             <div className="col-span-2 bg-gray-800 rounded-lg p-3">
@@ -69,11 +114,11 @@ function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => 
                 <dt className="text-gray-500">Model</dt><dd className="text-white">{data.model || '—'}</dd>
                 <dt className="text-gray-500">Uptime</dt><dd className="text-white">{data.uptime_str || '—'}</dd>
                 <dt className="text-gray-500">Array status</dt>
-                <dd className={`font-medium ${data.array_status === 'ok' ? 'text-green-400' : 'text-red-400'}`}>
+                <dd className={`font-medium ${data.array_status === 'ok' || data.array_status === 'healthy' ? 'text-green-400' : 'text-red-400'}`}>
                   {data.array_status || '—'}
                 </dd>
                 <dt className="text-gray-500">Controller</dt>
-                <dd className={`font-medium ${data.controller_status === 'ready' ? 'text-green-400' : 'text-yellow-400'}`}>
+                <dd className={`font-medium ${data.controller_status === 'ready' || data.controller_status === 'healthy' ? 'text-green-400' : 'text-yellow-400'}`}>
                   {data.controller_status || '—'}
                 </dd>
               </dl>
@@ -112,6 +157,77 @@ function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => 
                 </div>
               )}
             </div>
+          </div>
+        ) : tab === 'volumes' ? (
+          <div className="p-4">
+            {volumes.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center py-4">No volumes found</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Volume</th>
+                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Size</th>
+                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Used</th>
+                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Reduction</th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Hosts</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800/50">
+                    {volumes.map((v) => (
+                      <tr key={v.volume_name} className="hover:bg-gray-800/30">
+                        <td className="px-3 py-1.5 font-mono text-xs text-gray-200 truncate max-w-[200px]">{v.volume_name}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-300 text-xs">{formatBytes(v.size_bytes)}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-300 text-xs">{formatBytes(v.used_bytes)}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-300 text-xs">{formatReduction(v.data_reduction)}</td>
+                        <td className="px-3 py-1.5 text-xs text-gray-500 truncate max-w-[150px]">
+                          {(v.hosts ?? []).slice(0, 2).join(', ') || '—'}
+                          {(v.hosts ?? []).length > 2 && ` +${(v.hosts ?? []).length - 2}`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(volResult?.total ?? 0) > 200 && (
+                  <p className="text-xs text-gray-600 text-center mt-2">Showing first 200 of {volResult?.total} — view all on Volumes page</p>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="p-4">
+            {hosts.length === 0 ? (
+              <p className="text-gray-500 text-sm text-center py-4">No hosts found</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Host</th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Host Group</th>
+                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">IQN / WWN</th>
+                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Volumes</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-800/50">
+                    {hosts.map((h) => (
+                      <tr key={h.host_name} className="hover:bg-gray-800/30">
+                        <td className="px-3 py-1.5 font-mono text-xs text-gray-200 truncate max-w-[200px]">{h.host_name}</td>
+                        <td className="px-3 py-1.5 text-xs text-gray-400">{h.host_group || '—'}</td>
+                        <td className="px-3 py-1.5 text-xs text-gray-500 font-mono truncate max-w-[180px]">
+                          {h.iqn || h.wwn || '—'}
+                        </td>
+                        <td className="px-3 py-1.5 text-right text-gray-400 text-xs">{(h.volumes ?? []).length}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {(hostResult?.total ?? 0) > 200 && (
+                  <p className="text-xs text-gray-600 text-center mt-2">Showing first 200 of {hostResult?.total} — view all on Hosts page</p>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -201,7 +317,7 @@ function GroupSection({ groupName, arrays, onDblClick }: {
             <thead>
               <tr className="border-b border-gray-700/50 bg-gray-800/40">
                 <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Array</th>
-                <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Model</th>
+                <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Version</th>
                 <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Status</th>
                 <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">IOPS</th>
                 <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Latency R/W</th>
@@ -295,7 +411,7 @@ export default function Dashboard() {
           <p className="text-gray-500 text-sm">Loading arrays…</p>
         ) : arrays.length === 0 ? (
           <p className="text-gray-500 text-sm">
-            No arrays found — check collectors are running and arrays.txt is populated.
+            No arrays found — check collectors are running and USM-Managed-Arrays is active.
           </p>
         ) : (
           Object.entries(groups)
@@ -318,26 +434,26 @@ export default function Dashboard() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-gray-500 text-xs border-b border-gray-800">
-                  <th className="text-left pb-2 pr-4">Severity</th>
-                  <th className="text-left pb-2 pr-4">Array</th>
-                  <th className="text-left pb-2 pr-4">Event</th>
-                  <th className="text-left pb-2 pr-4">Component</th>
-                  <th className="text-left pb-2">Opened</th>
+                <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Severity</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Array</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Event</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Component</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Opened</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
                 {alerts.slice(0, 20).map((alert, i) => (
                   <tr key={alert.id ?? i} className="hover:bg-gray-800/30">
-                    <td className="py-2 pr-4">
+                    <td className="px-4 py-2">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded border ${severityBg(alert.severity)}`}>
                         {alert.severity.toUpperCase()}
                       </span>
                     </td>
-                    <td className="py-2 pr-4 text-gray-200 font-mono text-xs">{alert.array_name}</td>
-                    <td className="py-2 pr-4 text-gray-400 max-w-xs truncate">{alert.event || '—'}</td>
-                    <td className="py-2 pr-4 text-gray-500">{alert.component_name || alert.component_type || '—'}</td>
-                    <td className="py-2 text-gray-500">{alert.opened || '—'}</td>
+                    <td className="px-4 py-2 text-gray-200 font-mono text-xs">{alert.array_name}</td>
+                    <td className="px-4 py-2 text-gray-400 max-w-xs truncate">{alert.event || '—'}</td>
+                    <td className="px-4 py-2 text-gray-500">{alert.component_name || alert.component_type || '—'}</td>
+                    <td className="px-4 py-2 text-gray-500">{alert.opened || '—'}</td>
                   </tr>
                 ))}
               </tbody>

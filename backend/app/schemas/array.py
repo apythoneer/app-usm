@@ -7,7 +7,11 @@ from typing import Optional, Literal, Any
 from pydantic import BaseModel, Field
 
 
-VendorType = Literal["pure", "netapp", "commvault", "dell", "hpe", "unknown"]
+VendorType = Literal[
+    "pure", "netapp", "hpe", "oracle", "hitachi",
+    "commvault", "dell", "veeam", "nimble",
+    "ibm", "veritas", "unknown",
+]
 
 
 class ArrayMetrics(BaseModel):
@@ -68,10 +72,74 @@ class ArraySummary(BaseModel):
 
 
 class ArrayConfig(BaseModel):
-    """Array connection configuration (from arrays.txt or DB)."""
+    """Array connection configuration (from managed_arrays DB or arrays.txt fallback)."""
     name: str
     vendor: VendorType = "pure"
-    group: Optional[str] = None          # cloud/site label (3rd column of arrays.txt)
+    group: Optional[str] = None          # cloud/site label
     host: Optional[str] = None           # hostname/IP if different from name
     enabled: bool = True
+    cred_key: Optional[str] = None       # KeePass entry name (auto-derived if None)
+    model: Optional[str] = None          # hardware model from DimStorageFinance
+    site: Optional[str] = None           # physical/cloud site
+    array_fqdn: Optional[str] = None     # FQDN for API connections
+    mgmt_ip: Optional[str] = None        # management IP
     tags: dict[str, str] = Field(default_factory=dict)
+
+
+# ── Managed arrays (Settings UI) ─────────────────────────────────────────────
+
+class ManagedArray(BaseModel):
+    """Array record from the managed_arrays DB table."""
+    id: Optional[int] = None
+    array_name: str
+    vendor: VendorType = "pure"
+    group_label: Optional[str] = None
+    cred_key: Optional[str] = None
+    enabled: bool = True
+    # DimStorageFinance inventory fields
+    array_fqdn: Optional[str] = None
+    array_serial: Optional[str] = None
+    model: Optional[str] = None
+    site: Optional[str] = None
+    technology: Optional[str] = None
+    category: Optional[str] = None
+    usage_label: Optional[str] = None
+    disposition: Optional[str] = None
+    oem: Optional[str] = None
+    support_provider: Optional[str] = None
+    install_date: Optional[str] = None
+    eosl_date: Optional[str] = None
+    maint_end_date: Optional[str] = None
+    mgmt_ip: Optional[str] = None
+    monitoring_status: Optional[str] = None
+    dim_sync_at: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class ManagedArrayCreate(BaseModel):
+    """Payload for adding a new array."""
+    array_name: str
+    vendor: VendorType = "pure"
+    group_label: Optional[str] = None
+    cred_key: Optional[str] = None
+
+
+class ManagedArrayUpdate(BaseModel):
+    """Payload for updating an existing array."""
+    vendor: Optional[str] = None
+    group_label: Optional[str] = None
+    cred_key: Optional[str] = None
+    enabled: Optional[bool] = None
+    array_fqdn: Optional[str] = None
+    mgmt_ip: Optional[str] = None
+    monitoring_status: Optional[str] = None
+
+
+class ArrayVerifyResult(BaseModel):
+    """Result of verifying array connectivity."""
+    array_name: str
+    keepass_ok: bool = False
+    connectivity_ok: bool = False
+    version: Optional[str] = None
+    error: Optional[str] = None

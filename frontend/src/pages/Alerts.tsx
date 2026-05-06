@@ -47,28 +47,38 @@ export default function Alerts() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-gray-500 text-xs border-b border-gray-800">
-                  <th className="text-left pb-2 pr-3">Severity</th>
-                  <th className="text-left pb-2 pr-3">Array</th>
-                  <th className="text-left pb-2 pr-3">Vendor</th>
-                  <th className="text-left pb-2 pr-3">Event</th>
-                  <th className="text-left pb-2 pr-3">Component</th>
-                  <th className="text-left pb-2">Opened</th>
+                <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Severity</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Array</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Vendor</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Event</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Component</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Opened</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Teams</th>
+                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">SNOW</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800/50">
                 {alerts.map((alert) => (
                   <tr key={alert.id} className="hover:bg-gray-800/30">
-                    <td className="py-2 pr-3">
+                    <td className="px-4 py-2">
                       <span className={`text-xs font-medium px-2 py-0.5 rounded border ${severityBg(alert.severity)}`}>
                         {alert.severity}
                       </span>
                     </td>
-                    <td className="py-2 pr-3 font-mono text-xs text-gray-200">{alert.array_name}</td>
-                    <td className="py-2 pr-3 text-xs text-gray-400">{alert.vendor}</td>
-                    <td className="py-2 pr-3 text-xs text-gray-300 max-w-xs truncate">{alert.event || '—'}</td>
-                    <td className="py-2 pr-3 text-xs text-gray-400">{alert.component_name || '—'}</td>
-                    <td className="py-2 text-xs text-gray-500">{alert.opened || '—'}</td>
+                    <td className="px-4 py-2 font-mono text-xs text-gray-200">{alert.array_name}</td>
+                    <td className="px-4 py-2 text-xs text-gray-400">{alert.vendor}</td>
+                    <td className="px-4 py-2 text-xs text-gray-300 max-w-xs truncate">{alert.event || '—'}</td>
+                    <td className="px-4 py-2 text-xs text-gray-400">{alert.component_name || '—'}</td>
+                    <td className="px-4 py-2 text-xs text-gray-500">{alert.opened || '—'}</td>
+                    <td className="px-4 py-2 text-xs">
+                      {alert.teams_notified
+                        ? <span className="text-green-400" title={alert.teams_notified}>&#10003;</span>
+                        : <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="px-4 py-2 text-xs font-mono text-gray-400">
+                      {alert.snow_ticket || <span className="text-gray-600">—</span>}
+                    </td>
                   </tr>
                 ))}
               </tbody>

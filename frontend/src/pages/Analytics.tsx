@@ -93,6 +93,19 @@ export default function Analytics() {
     )
   }, [rawData, visibleArrays])
 
+  const writeLatData = useMemo(() => {
+    const byTime: Record<string, Record<string, number>> = {}
+    rawData.forEach((pt) => {
+      if (!visibleArrays.includes(pt.array_name)) return
+      const t = pt.collected_at
+      if (!byTime[t]) byTime[t] = { collected_at: t as unknown as number }
+      if (pt.write_latency_us != null) byTime[t][pt.array_name] = pt.write_latency_us
+    })
+    return Object.values(byTime).sort((a, b) =>
+      String(a.collected_at).localeCompare(String(b.collected_at))
+    )
+  }, [rawData, visibleArrays])
+
   function toggleArray(name: string) {
     setArrayFilter((prev) =>
       prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]
@@ -198,11 +211,11 @@ export default function Analytics() {
       )}
 
       {iopsData.length > 0 && (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-          {/* IOPS */}
+        <div className="space-y-6">
+          {/* IOPS — full width */}
           <div className="card">
-            <h3 className="text-sm font-semibold text-gray-300 mb-4">Total IOPS</h3>
-            <ResponsiveContainer width="100%" height={240}>
+            <h3 className="text-sm font-semibold text-gray-300 mb-4">Total IOPS (Read + Write)</h3>
+            <ResponsiveContainer width="100%" height={220}>
               <LineChart data={iopsData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                 <XAxis
@@ -213,7 +226,7 @@ export default function Analytics() {
                 <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatIOPS} width={55} />
                 <Tooltip {...tooltipStyle} formatter={(v: number) => [formatIOPS(v), '']} />
                 <Legend wrapperStyle={{ fontSize: 10 }} />
-                {visibleArrays.map((name, i) => (
+                {visibleArrays.map((name) => (
                   <Line
                     key={name}
                     type="monotone"
@@ -229,34 +242,65 @@ export default function Analytics() {
             </ResponsiveContainer>
           </div>
 
-          {/* Latency */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-gray-300 mb-4">Read Latency</h3>
-            <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={latData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis
-                  dataKey="collected_at"
-                  tick={{ fill: '#6b7280', fontSize: 10 }}
-                  tickFormatter={(v) => timeLabel(v, hours)}
-                />
-                <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatLatency} width={60} />
-                <Tooltip {...tooltipStyle} formatter={(v: number) => [formatLatency(v), '']} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                {visibleArrays.map((name, i) => (
-                  <Line
-                    key={name}
-                    type="monotone"
-                    dataKey={name}
-                    stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
-                    dot={false}
-                    name={name}
-                    strokeWidth={1.5}
-                    connectNulls
+          {/* Latency — Read & Write side by side */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+            <div className="card">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4">Read Latency</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={latData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis
+                    dataKey="collected_at"
+                    tick={{ fill: '#6b7280', fontSize: 10 }}
+                    tickFormatter={(v) => timeLabel(v, hours)}
                   />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatLatency} width={60} />
+                  <Tooltip {...tooltipStyle} formatter={(v: number) => [formatLatency(v), '']} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  {visibleArrays.map((name) => (
+                    <Line
+                      key={name}
+                      type="monotone"
+                      dataKey={name}
+                      stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
+                      dot={false}
+                      name={name}
+                      strokeWidth={1.5}
+                      connectNulls
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="card">
+              <h3 className="text-sm font-semibold text-gray-300 mb-4">Write Latency</h3>
+              <ResponsiveContainer width="100%" height={200}>
+                <LineChart data={writeLatData}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                  <XAxis
+                    dataKey="collected_at"
+                    tick={{ fill: '#6b7280', fontSize: 10 }}
+                    tickFormatter={(v) => timeLabel(v, hours)}
+                  />
+                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatLatency} width={60} />
+                  <Tooltip {...tooltipStyle} formatter={(v: number) => [formatLatency(v), '']} />
+                  <Legend wrapperStyle={{ fontSize: 10 }} />
+                  {visibleArrays.map((name) => (
+                    <Line
+                      key={name}
+                      type="monotone"
+                      dataKey={name}
+                      stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
+                      dot={false}
+                      name={name}
+                      strokeWidth={1.5}
+                      connectNulls
+                    />
+                  ))}
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         </div>
       )}

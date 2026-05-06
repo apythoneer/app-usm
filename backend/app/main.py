@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI):
 
     if db_ok:
         init_database()
+        from app.api.v1.settings import load_persisted_settings
+        load_persisted_settings()
 
     scheduler = build_scheduler()
     scheduler.start()
@@ -90,10 +92,13 @@ async def health():
     from app.collectors.registry import CollectorRegistry
     from fastapi.concurrency import run_in_threadpool
 
+    from app.services.keepass import cache_summary
+
     db_ok = await run_in_threadpool(test_connection)
     return {
         "status": "healthy" if db_ok else "degraded",
         "version": settings.app_version,
         "database": db_ok,
         "collectors": CollectorRegistry.summary(),
+        "credential_cache": cache_summary(),
     }

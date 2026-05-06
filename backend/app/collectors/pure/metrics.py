@@ -79,6 +79,48 @@ class PureMetricsCollector(BaseCollector):
                 "healthy" if all(s == "ready" for s in statuses) else "degraded"
             )
 
+        # Uptime — Pure v1 API doesn't expose started/uptime on controllers.
+        # Calculate from the last reboot alert in the messages table instead.
+        try:
+            from app.db.session import get_db_cursor as _get_cursor
+            with _get_cursor() as cursor:
+                cursor.execute(
+                    f"""SELECT TOP 1 opened FROM {SCHEMA}.messages
+                        WHERE array_name = ? AND vendor = 'pure'
+                          AND (event LIKE '%reboot%' OR event LIKE '%restart%'
+                               OR event LIKE '%power%cycle%')
+                        ORDER BY opened DESC""",
+                    (self.array_name,),
+                )
+                row = cursor.fetchone()
+                if row and row[0]:
+                    metrics["last_reboot"] = str(row[0])
+                    try:
+                        reboot_str = str(row[0]).split("+")[0].split(".")[0].replace("T", " ")
+                        reboot_dt = datetime.strptime(reboot_str[:19], "%Y-%m-%d %H:%M:%S")
+                        uptime_secs = int((datetime.now() - reboot_dt).total_seconds())
+                        if uptime_secs > 0:
+                            metrics["uptime_seconds"] = uptime_secs
+                            days = uptime_secs // 86400
+                            hours = (uptime_secs % 86400) // 3600
+                            metrics["uptime_str"] = f"{days}d {hours}h"
+                    except Exception:
+                        pass
+
+                # Reboot count
+                cursor.execute(
+                    f"""SELECT COUNT(*) FROM {SCHEMA}.messages
+                        WHERE array_name = ? AND vendor = 'pure'
+                          AND (event LIKE '%reboot%' OR event LIKE '%restart%'
+                               OR event LIKE '%power%cycle%')""",
+                    (self.array_name,),
+                )
+                count_row = cursor.fetchone()
+                if count_row:
+                    metrics["reboot_count"] = count_row[0]
+        except Exception as e:
+            self.logger.debug(f"Uptime lookup error: {e}")
+
         return metrics
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
@@ -101,7 +143,9 @@ class PureMetricsCollector(BaseCollector):
                             capacity_total=?, capacity_used=?, capacity_used_pct=?,
                             data_reduction=?, total_reduction=?,
                             shared_space=?, snapshot_space=?, volume_space=?,
-                            controller_status=?, collected_at=?
+                            controller_status=?,
+                            uptime_seconds=?, uptime_str=?, last_reboot=?, reboot_count=?,
+                            collected_at=?
                         WHERE array_name=?""",
                         (
                             data.get("purity_version", ""),
@@ -114,6 +158,8 @@ class PureMetricsCollector(BaseCollector):
                             data.get("shared_space", 0), data.get("snapshot_space", 0),
                             data.get("volume_space", 0),
                             data.get("controller_status", "unknown"),
+                            data.get("uptime_seconds"), data.get("uptime_str"),
+                            data.get("last_reboot"), data.get("reboot_count", 0),
                             data["collected_at"], array_name,
                         ),
                     )
@@ -124,8 +170,10 @@ class PureMetricsCollector(BaseCollector):
                             read_latency_us, write_latency_us, read_bandwidth, write_bandwidth,
                             capacity_total, capacity_used, capacity_used_pct,
                             data_reduction, total_reduction, shared_space, snapshot_space,
-                            volume_space, controller_status, collected_at
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                            volume_space, controller_status,
+                            uptime_seconds, uptime_str, last_reboot, reboot_count,
+                            collected_at
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             array_name, data.get("purity_version", ""),
                             data.get("read_iops", 0), data.get("write_iops", 0),
@@ -137,6 +185,8 @@ class PureMetricsCollector(BaseCollector):
                             data.get("shared_space", 0), data.get("snapshot_space", 0),
                             data.get("volume_space", 0),
                             data.get("controller_status", "unknown"),
+                            data.get("uptime_seconds"), data.get("uptime_str"),
+                            data.get("last_reboot"), data.get("reboot_count", 0),
                             data["collected_at"],
                         ),
                     )

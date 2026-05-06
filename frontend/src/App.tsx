@@ -8,6 +8,7 @@ import Analytics from '@/pages/Analytics'
 import Settings from '@/pages/Settings'
 import Logs from '@/pages/Logs'
 import NotFound from '@/pages/NotFound'
+import ChatPanel from '@/components/chat/ChatPanel'
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="hosts" element={<Hosts />} />
         <Route path="alerts" element={<Alerts />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="chat" element={<ChatPanel />} />
         <Route path="settings" element={<Settings />} />
         <Route path="logs"     element={<Logs />} />
         <Route path="*" element={<NotFound />} />

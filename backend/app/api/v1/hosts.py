@@ -16,21 +16,36 @@ settings = get_settings()
 SCHEMA = settings.db_schema
 
 
-def _fetch_hosts(array_name: Optional[str], search: Optional[str]) -> List[dict]:
+def _fetch_hosts(
+    array_name: Optional[str],
+    search: Optional[str],
+    vendor: Optional[str],
+    limit: int,
+    offset: int,
+) -> dict:
     where, params = [], []
     if array_name:
         where.append("array_name = ?")
         params.append(array_name)
     if search:
-        where.append("host_name LIKE ?")
-        params.append(f"%{search}%")
-    sql = f"SELECT * FROM {SCHEMA}.hosts_cache"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY array_name, host_name"
+        where.append("(host_name LIKE ? OR array_name LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if vendor:
+        where.append("vendor = ?")
+        params.append(vendor)
+
+    where_clause = (" WHERE " + " AND ".join(where)) if where else ""
+
     with get_db_cursor() as cursor:
-        cursor.execute(sql, params)
-        return rows_to_dicts(cursor, cursor.fetchall())
+        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.hosts_cache{where_clause}", params)
+        total = cursor.fetchone()[0]
+
+    sql = f"SELECT * FROM {SCHEMA}.hosts_cache{where_clause} ORDER BY array_name, host_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    with get_db_cursor() as cursor:
+        cursor.execute(sql, params + [offset, limit])
+        rows = rows_to_dicts(cursor, cursor.fetchall())
+
+    return {"total": total, "rows": rows}
 
 
 def _fetch_hgroups(array_name: Optional[str]) -> List[dict]:
@@ -45,13 +60,21 @@ def _fetch_hgroups(array_name: Optional[str]) -> List[dict]:
         return rows_to_dicts(cursor, cursor.fetchall())
 
 
-@router.get("", response_model=List[HostSchema])
+@router.get("")
 async def list_hosts(
     array_name: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
+    vendor: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, le=5000),
+    offset: int = Query(default=0, ge=0),
 ):
-    rows = await run_in_threadpool(_fetch_hosts, array_name, search)
-    return [_row_to_host(r) for r in rows]
+    result = await run_in_threadpool(_fetch_hosts, array_name, search, vendor, limit, offset)
+    return {
+        "total": result["total"],
+        "limit": limit,
+        "offset": offset,
+        "data": [_row_to_host(r) for r in result["rows"]],
+    }
 
 
 @router.get("/groups", response_model=List[HostGroupSchema])
@@ -69,7 +92,7 @@ def _safe_json(val) -> list:
         return []
 
 
-def _row_to_host(row: dict) -> HostSchema:
+def _row_to_host(row: dict) -> dict:
     return HostSchema(
         array_name=row.get("array_name", ""),
         vendor=row.get("vendor", "pure"),
@@ -80,7 +103,7 @@ def _row_to_host(row: dict) -> HostSchema:
         host_group=row.get("host_group"),
         volumes=_safe_json(row.get("volumes")),
         last_updated=str(row["last_updated"]) if row.get("last_updated") else None,
-    )
+    ).model_dump()
 
 
 def _row_to_hgroup(row: dict) -> HostGroupSchema:

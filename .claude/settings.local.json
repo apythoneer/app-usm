@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m 'feat: v1 baseline - Flask + Pure Storage monitoring stack. Collectors \\(metrics/volumes/alerts\\), scheduler service, Flask web API, SQL Server/KeePass/Teams/ServiceNow integrations, Docker Compose. Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>')",
+      "Bash(git commit -m 'feat: v2 scaffold - FastAPI backend + React frontend + plugin collector architecture:*)",
+      "Bash(git add .gitattributes .env.example Makefile backend/Dockerfile docker/docker-compose.v2.yml frontend/nginx.conf)",
+      "Bash(git commit -m 'fix: Docker setup for host-network corporate environment:*)",
+      "Bash(git add README.md backend/app/collectors/pure/__init__.py backend/app/collectors/scheduler.py backend/app/db/session.py backend/app/main.py migrate.sh backend/app/services/stats.py)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

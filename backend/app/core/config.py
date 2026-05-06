@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     volumes_interval: int = Field(default=900, alias="VOLUMES_INTERVAL")
     alerts_interval: int = Field(default=300, alias="ALERTS_INTERVAL")
 
+    # Alert lifecycle
+    alert_resolve_days: int = Field(default=7, alias="ALERT_RESOLVE_DAYS")
+    alert_purge_days: int = Field(default=30, alias="ALERT_PURGE_DAYS")
+
+    # Chat / Ollama (local LLM)
+    ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
+    ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
+    chat_enabled: bool = Field(default=True, alias="CHAT_ENABLED")
+    chat_query_timeout: int = Field(default=10, alias="CHAT_QUERY_TIMEOUT")
+
     # Arrays config file
     arrays_config_file: str = Field(default="/app/config/arrays.txt", alias="ARRAYS_CONFIG_FILE")
 

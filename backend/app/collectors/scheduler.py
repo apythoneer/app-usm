@@ -7,6 +7,7 @@ Adding a new vendor = register its collectors + ensure arrays are in config.
 import asyncio
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Dict, Any, List
@@ -28,11 +29,63 @@ _executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="collector")
 # In-memory job status store
 _job_status: Dict[str, Dict[str, Any]] = {}
 
+# In-memory arrays cache (avoids querying DB on every job run)
+_arrays_cache: List[ArrayConfig] = []
+_arrays_cache_ts: float = 0
+_ARRAYS_CACHE_TTL: int = 60  # seconds
+
+
+def invalidate_arrays_cache():
+    """Force reload on next call to load_arrays()."""
+    global _arrays_cache_ts
+    _arrays_cache_ts = 0
+
 
 def load_arrays() -> List[ArrayConfig]:
-    """Load array configs from arrays.txt. Format: `array_name [vendor]`"""
+    """Load array configs. Primary: managed_arrays DB table. Fallback: arrays.txt."""
+    global _arrays_cache, _arrays_cache_ts
+
+    if _arrays_cache and (time.monotonic() - _arrays_cache_ts) < _ARRAYS_CACHE_TTL:
+        return _arrays_cache
+
+    # Try DB first
+    try:
+        from app.db.session import get_db_cursor, rows_to_dicts
+        with get_db_cursor() as cursor:
+            cursor.execute(
+                f"SELECT array_name, vendor, group_label, enabled, cred_key, "
+                f"model, site, array_fqdn, mgmt_ip "
+                f"FROM {settings.db_schema}.managed_arrays"
+            )
+            rows = rows_to_dicts(cursor, cursor.fetchall())
+        if rows:
+            arrays = []
+            for r in rows:
+                try:
+                    vendor = r.get("vendor", "unknown")
+                    arrays.append(ArrayConfig(
+                        name=r["array_name"],
+                        vendor=vendor,
+                        group=r.get("group_label"),
+                        enabled=bool(r.get("enabled", 1)),
+                        cred_key=r.get("cred_key"),
+                        model=r.get("model"),
+                        site=r.get("site"),
+                        array_fqdn=r.get("array_fqdn"),
+                        mgmt_ip=r.get("mgmt_ip"),
+                    ))
+                except Exception as e:
+                    logger.debug(f"Skipping array '{r.get('array_name', '?')}': {e}")
+            _arrays_cache = arrays
+            _arrays_cache_ts = time.monotonic()
+            logger.info(f"Loaded {len(arrays)} arrays from managed_arrays table")
+            return arrays
+    except Exception as e:
+        logger.warning(f"Could not load from managed_arrays: {e}")
+
+    # Fallback to arrays.txt
     path = settings.arrays_config_file
-    arrays = []
+    arrays: List[ArrayConfig] = []
     if not os.path.exists(path):
         logger.warning(f"Arrays config not found: {path}")
         return arrays
@@ -48,6 +101,8 @@ def load_arrays() -> List[ArrayConfig]:
             group = parts[2] if len(parts) > 2 else None
             arrays.append(ArrayConfig(name=name, vendor=vendor, group=group))  # type: ignore[arg-type]
 
+    _arrays_cache = arrays
+    _arrays_cache_ts = time.monotonic()
     logger.info(f"Loaded {len(arrays)} arrays from {path}")
     return arrays
 
@@ -117,6 +172,26 @@ def build_scheduler() -> AsyncIOScheduler:
     Registers one job per (vendor, collector_type) combination found in the registry.
     """
     load_all_collectors()
+    arrays = load_arrays()
+
+    # Pre-warm the KeePass credential cache sequentially at startup.
+    # Only prefetch for enabled arrays whose vendor has a registered collector.
+    from app.services.keepass import prefetch_credentials
+    registered_vendors = {v for v, _, _ in CollectorRegistry.all_registered()}
+    seen_keys = set()
+    keys = [settings.sql_cred_key]
+    for arr in arrays:
+        if not arr.enabled:
+            continue
+        if arr.vendor not in registered_vendors:
+            continue
+        cred = arr.cred_key
+        if not cred and arr.vendor == "pure":
+            cred = f"PureStorage_API_{arr.name}"
+        if cred and cred not in seen_keys:
+            seen_keys.add(cred)
+            keys.append(cred)
+    prefetch_credentials(keys)
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     registered = CollectorRegistry.all_registered()
@@ -164,6 +239,39 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     logger.info("Scheduled history_cleanup at 01:00 UTC")
 
+    # Alert cleanup — purge resolved alerts older than alert_purge_days (default 30)
+    scheduler.add_job(
+        _run_alert_cleanup,
+        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),
+        id="alert_cleanup",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("Scheduled alert_cleanup at 02:00 UTC")
+
+    # Credential refresh — midnight UTC, re-fetch all cached KeePass credentials
+    scheduler.add_job(
+        _run_credential_refresh,
+        trigger=CronTrigger(hour=0, minute=0, timezone="UTC"),
+        id="credential_refresh",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("Scheduled credential_refresh at 00:00 UTC")
+
+    # Inventory sync — 03:00 UTC, sync arrays from DimStorageFinance
+    scheduler.add_job(
+        _run_inventory_sync,
+        trigger=CronTrigger(hour=3, minute=0, timezone="UTC"),
+        id="inventory_sync",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+    logger.info("Scheduled inventory_sync at 03:00 UTC")
+
     return scheduler
 
 
@@ -181,3 +289,58 @@ async def _run_history_cleanup():
     loop = asyncio.get_event_loop()
     deleted = await loop.run_in_executor(_executor, cleanup_old_history)
     logger.info(f"History cleanup: removed {deleted} rows")
+
+
+def _alert_cleanup_sync() -> int:
+    """Delete resolved alerts older than alert_purge_days (default 30)."""
+    from app.db.session import get_db_cursor
+    purge_days = settings.alert_purge_days
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            f"DELETE FROM {settings.db_schema}.messages "
+            f"WHERE resolved = 1 AND TRY_CAST(opened AS DATETIME2) < DATEADD(day, ?, GETDATE())",
+            (-purge_days,),
+        )
+        return cursor.rowcount
+
+
+async def _run_alert_cleanup():
+    """Async wrapper for resolved alert purge."""
+    loop = asyncio.get_event_loop()
+    deleted = await loop.run_in_executor(_executor, _alert_cleanup_sync)
+    _job_status["alert_cleanup"] = {
+        "last_run": datetime.now().isoformat(),
+        "deleted": deleted,
+    }
+    logger.info(f"Alert cleanup: purged {deleted} resolved alerts older than {settings.alert_purge_days} days")
+
+
+def _credential_refresh_sync() -> int:
+    """Re-fetch all cached KeePass credentials proactively."""
+    from app.services.keepass import refresh_all_cached
+    return refresh_all_cached()
+
+
+async def _run_credential_refresh():
+    """Midnight credential refresh — re-fetches all cached keys from KeePass."""
+    loop = asyncio.get_event_loop()
+    refreshed = await loop.run_in_executor(_executor, _credential_refresh_sync)
+    _job_status["credential_refresh"] = {
+        "last_run": datetime.now().isoformat(),
+        "keys_refreshed": refreshed,
+    }
+    logger.info(f"Credential refresh: {refreshed} keys refreshed from KeePass")
+
+
+async def _run_inventory_sync():
+    """Daily inventory sync — pulls array inventory from DimStorageFinance."""
+    from app.services.inventory import sync_from_dim_storage_finance
+    loop = asyncio.get_event_loop()
+    stats = await loop.run_in_executor(_executor, sync_from_dim_storage_finance)
+    _job_status["inventory_sync"] = {
+        "last_run": datetime.now().isoformat(),
+        **stats,
+    }
+    # Invalidate arrays cache so collectors pick up new arrays
+    invalidate_arrays_cache()
+    logger.info(f"Inventory sync: {stats}")

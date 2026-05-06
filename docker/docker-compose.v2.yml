@@ -54,6 +54,10 @@ services:
       - METRICS_INTERVAL=60
       - VOLUMES_INTERVAL=900
       - ALERTS_INTERVAL=300
+      # Chat / Ollama (local LLM — no data leaves)
+      - OLLAMA_BASE_URL=http://127.0.0.1:11434
+      - OLLAMA_MODEL=qwen2.5:3b
+      - CHAT_ENABLED=true
       # Paths
       - LOG_DIR=/app/logs
       - ARRAYS_CONFIG_FILE=/app/config/arrays.txt
@@ -89,3 +93,56 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # ============================================================
+  # KEEPASS — Credential REST API (gunicorn, 4 workers, cached)
+  # ============================================================
+  usm-keepass:
+    build:
+      context: keepass
+      dockerfile: Dockerfile
+    container_name: usm-keepass
+    hostname: usm-keepass
+    network_mode: host
+    environment:
+      - KEEPASS_DB=/data/keepass/StorageOps-Database.kdbx
+      - KEEPASS_PASSWORD=${KEEPASS_PASSWORD:-n1md@n@s}
+      - CACHE_TTL=60
+    volumes:
+      - /opt/sanadmin/data/nasshare:/data:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:2000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # OLLAMA — Local LLM for chat/Text-to-SQL (no data leaves)
+  # ============================================================
+  usm-ollama:
+    image: ollama/ollama:latest
+    container_name: usm-ollama
+    hostname: usm-ollama
+    network_mode: host
+    environment:
+      - OLLAMA_HOST=127.0.0.1:11434
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=1
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ollama-data:

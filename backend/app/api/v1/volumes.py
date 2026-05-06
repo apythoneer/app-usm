@@ -21,51 +21,78 @@ settings = get_settings()
 SCHEMA = settings.db_schema
 
 
-def _fetch_volumes(array_name: Optional[str], search: Optional[str], limit: int) -> List[dict]:
+def _fetch_volumes(
+    array_name: Optional[str],
+    search: Optional[str],
+    vendor: Optional[str],
+    limit: int,
+    offset: int,
+) -> dict:
     where = []
     params = []
     if array_name:
         where.append("array_name = ?")
         params.append(array_name)
     if search:
-        where.append("volume_name LIKE ?")
-        params.append(f"%{search}%")
+        where.append("(volume_name LIKE ? OR array_name LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if vendor:
+        where.append("vendor = ?")
+        params.append(vendor)
 
-    sql = f"SELECT TOP {limit} * FROM {SCHEMA}.volumes_cache"
-    if where:
-        sql += " WHERE " + " AND ".join(where)
-    sql += " ORDER BY array_name, volume_name"
+    where_clause = (" WHERE " + " AND ".join(where)) if where else ""
 
+    # Total count for pagination
     with get_db_cursor() as cursor:
-        cursor.execute(sql, params)
-        return rows_to_dicts(cursor, cursor.fetchall())
+        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.volumes_cache{where_clause}", params)
+        total = cursor.fetchone()[0]
+
+    # Paginated data
+    sql = f"SELECT * FROM {SCHEMA}.volumes_cache{where_clause} ORDER BY array_name, volume_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    with get_db_cursor() as cursor:
+        cursor.execute(sql, params + [offset, limit])
+        rows = rows_to_dicts(cursor, cursor.fetchall())
+
+    return {"total": total, "rows": rows}
 
 
-@router.get("", response_model=List[VolumeSchema])
+@router.get("")
 async def list_volumes(
     array_name: Optional[str] = Query(default=None),
     search: Optional[str] = Query(default=None),
-    limit: int = Query(default=500, le=5000),
+    vendor: Optional[str] = Query(default=None),
+    limit: int = Query(default=50, le=5000),
+    offset: int = Query(default=0, ge=0),
 ):
-    rows = await run_in_threadpool(_fetch_volumes, array_name, search, limit)
-    return [_row_to_volume(r) for r in rows]
+    result = await run_in_threadpool(_fetch_volumes, array_name, search, vendor, limit, offset)
+    return {
+        "total": result["total"],
+        "limit": limit,
+        "offset": offset,
+        "data": [_row_to_volume(r) for r in result["rows"]],
+    }
 
 
-@router.patch("/{array_name}/{volume_name}/notes")
-async def update_volume_notes(array_name: str, volume_name: str, body: NoteUpdate):
+@router.patch("/notes")
+async def update_volume_notes(
+    array_name: str = Query(...),
+    volume_name: str = Query(...),
+    body: NoteUpdate = None,
+):
     """Update the notes field for a specific volume."""
-    def _update(an: str, vn: str, notes: Optional[str]):
+    notes = body.notes if body else None
+
+    def _update(an: str, vn: str, n: Optional[str]):
         with get_db_cursor() as cursor:
             cursor.execute(
                 f"UPDATE {SCHEMA}.volumes_cache SET notes=? WHERE array_name=? AND volume_name=?",
-                (notes, an, vn),
+                (n, an, vn),
             )
             if cursor.rowcount == 0:
                 return False
-            cursor.connection.commit()
             return True
 
-    ok = await run_in_threadpool(_update, array_name, volume_name, body.notes)
+    ok = await run_in_threadpool(_update, array_name, volume_name, notes)
     if not ok:
         raise HTTPException(status_code=404, detail="Volume not found")
     return {"success": True}
@@ -80,7 +107,7 @@ def _safe_json(val) -> list:
         return []
 
 
-def _row_to_volume(row: dict) -> VolumeSchema:
+def _row_to_volume(row: dict) -> dict:
     return VolumeSchema(
         array_name=row.get("array_name", ""),
         vendor=row.get("vendor", "pure"),
@@ -98,4 +125,4 @@ def _row_to_volume(row: dict) -> VolumeSchema:
         protection_groups=_safe_json(row.get("protection_groups")),
         notes=row.get("notes"),
         last_updated=str(row["last_updated"]) if row.get("last_updated") else None,
-    )
+    ).model_dump()
