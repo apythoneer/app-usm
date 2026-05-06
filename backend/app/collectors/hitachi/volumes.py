@@ -43,19 +43,21 @@ class HitachiVolumesCollector(BaseCollector):
     def collect(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"volumes": {}, "hosts": {}}
 
-        # Get all LDEVs (volumes)
-        # Use ldevOption=defined to get only provisioned/mapped LDEVs
+        # Get all LDEVs (volumes) — use ldevOption=defined for mapped LDEVs only
+        # Large arrays (600-800TB) can have 3000+ LDEVs; need 300s timeout
         ldevs_resp = self.client.get("ldevs", params={"count": 16384, "ldevOption": "defined"},
-                                     timeout=60)
+                                     timeout=300)
         if not ldevs_resp:
-            # Fallback: get all LDEVs without filter
-            ldevs_resp = self.client.get("ldevs", params={"count": 16384}, timeout=60)
+            # Fallback: get all LDEVs without filter (even more, needs longer)
+            ldevs_resp = self.client.get("ldevs", params={"count": 16384}, timeout=300)
 
         if ldevs_resp and ldevs_resp.get("data"):
             for ldev in ldevs_resp["data"]:
                 ldev_id = ldev.get("ldevId", 0)
                 label = ldev.get("label", "")
-                vol_name = label if label else f"LDEV:{ldev_id:05d}"
+                # Use LDEV ID as prefix to guarantee uniqueness
+                # Labels can duplicate across host groups
+                vol_name = f"LDEV:{ldev_id:05d}" + (f" ({label})" if label else "")
 
                 # Size: blockCapacity is in blocks of 512 bytes
                 size_bytes = ldev.get("blockCapacity", 0) * LDEV_BLOCK_SIZE
