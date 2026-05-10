@@ -64,6 +64,11 @@ def load_arrays() -> List[ArrayConfig]:
             for r in rows:
                 try:
                     vendor = r.get("vendor", "unknown")
+                    model = r.get("model", "")
+                    # Remap NetApp StorageGrid to separate 'storagegrid' vendor
+                    # so it uses the StorageGrid collector, not ONTAP
+                    if vendor == "netapp" and model and "StorageGrid" in model:
+                        vendor = "storagegrid"
                     arrays.append(ArrayConfig(
                         name=r["array_name"],
                         vendor=vendor,

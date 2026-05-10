@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 VendorType = Literal[
     "pure", "netapp", "hpe", "oracle", "hitachi",
     "commvault", "dell", "veeam", "nimble",
-    "ibm", "veritas", "unknown",
+    "ibm", "veritas", "storagegrid", "unknown",
 ]
 
 

@@ -3,3 +3,5 @@
 from app.collectors.netapp import metrics  # noqa: F401
 from app.collectors.netapp import volumes  # noqa: F401
 from app.collectors.netapp import alerts   # noqa: F401
+# StorageGrid uses same netapp package but registers as 'storagegrid' vendor
+from app.collectors.netapp import storagegrid_metrics  # noqa: F401
