@@ -125,17 +125,16 @@ async def host_storage_report(body: HostStorageRequest):
         with get_db_cursor() as cursor:
             # Step 1: Bulk-fetch all matching hosts in one query using OR conditions
             # Build batches of 100 to avoid SQL param limits
-            all_host_data = {}  # server_name -> {arrays, vol_names_by_array}
+            all_host_data = {}  # server_name -> {arrays, vol_keys, array_vendors}
             batch_size = 50
 
             for i in range(0, len(servers), batch_size):
                 batch = servers[i:i + batch_size]
                 # Use LIKE prefix match (case-insensitive) to find hosts
                 # HPE stores "aa16-04_ossarcp1", Pure uses "azeus2sqlbnrn45", etc.
-                # We match on the server name being a prefix of the host_name
                 for srv in batch:
                     cursor.execute(
-                        f"SELECT host_name, array_name, volumes FROM {SCHEMA}.hosts_cache "
+                        f"SELECT host_name, array_name, volumes, vendor FROM {SCHEMA}.hosts_cache "
                         f"WHERE UPPER(host_name) LIKE UPPER(?) + '%'",
                         (srv,),
                     )
@@ -144,9 +143,11 @@ async def host_storage_report(body: HostStorageRequest):
                         host_name = row[0]
                         array_name = row[1]
                         volumes_json = row[2]
+                        vendor = row[3] if len(row) > 3 else ""
                         if srv not in all_host_data:
-                            all_host_data[srv] = {"arrays": set(), "vol_keys": []}
+                            all_host_data[srv] = {"arrays": set(), "vol_keys": [], "array_vendors": {}}
                         all_host_data[srv]["arrays"].add(array_name)
+                        all_host_data[srv]["array_vendors"][array_name] = vendor
                         vol_names = _safe_json(volumes_json)
                         for vn in vol_names:
                             all_host_data[srv]["vol_keys"].append((array_name, vn))
@@ -179,13 +180,14 @@ async def host_storage_report(body: HostStorageRequest):
                     for row in cursor.fetchall():
                         vol_sizes[(row[0], row[1])] = (row[2] or 0, row[3] or 0)
 
-            # Step 4: Aggregate per server
+            # Step 4: Aggregate per server with per-array breakdown
             for server in servers:
                 if server not in all_host_data:
                     results.append({
                         "server_name": server,
                         "found": False,
                         "arrays": [],
+                        "array_breakdown": [],
                         "volume_count": 0,
                         "total_provisioned_bytes": 0,
                         "total_used_bytes": 0,
@@ -199,17 +201,41 @@ async def host_storage_report(body: HostStorageRequest):
                 total_used = 0
                 vol_count = 0
 
+                # Per-array aggregation
+                array_stats: Dict[str, Dict] = {}
                 for key in sd["vol_keys"]:
+                    arr_name = key[0]
+                    if arr_name not in array_stats:
+                        array_stats[arr_name] = {"volumes": 0, "provisioned": 0, "used": 0}
                     if key in vol_sizes:
                         size, used = vol_sizes[key]
                         total_prov += size
                         total_used += used
                         vol_count += 1
+                        array_stats[arr_name]["volumes"] += 1
+                        array_stats[arr_name]["provisioned"] += size
+                        array_stats[arr_name]["used"] += used
+
+                # Build per-array breakdown with vendor info
+                array_breakdown = []
+                for arr_name in sorted(array_stats.keys()):
+                    st = array_stats[arr_name]
+                    vendor = sd.get("array_vendors", {}).get(arr_name, "")
+                    array_breakdown.append({
+                        "array_name": arr_name,
+                        "vendor": vendor,
+                        "volume_count": st["volumes"],
+                        "provisioned_bytes": st["provisioned"],
+                        "used_bytes": st["used"],
+                        "provisioned_tb": round(st["provisioned"] / (1024**4), 2),
+                        "used_tb": round(st["used"] / (1024**4), 2),
+                    })
 
                 results.append({
                     "server_name": server,
                     "found": True,
                     "arrays": sorted(sd["arrays"]),
+                    "array_breakdown": array_breakdown,
                     "volume_count": vol_count,
                     "total_provisioned_bytes": total_prov,
                     "total_used_bytes": total_used,
