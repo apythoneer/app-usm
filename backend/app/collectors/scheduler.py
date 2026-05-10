@@ -9,7 +9,7 @@ import logging
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, List
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -23,8 +23,9 @@ from app.core.config import get_settings
 logger = logging.getLogger("usm.scheduler")
 settings = get_settings()
 
-# Thread pool for blocking collector I/O
-_executor = ThreadPoolExecutor(max_workers=20, thread_name_prefix="collector")
+# Thread pool for blocking collector I/O — limit to 10 concurrent to avoid
+# saturating SQL Server connections (each collector uses 1-2 DB connections).
+_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="collector")
 
 # In-memory job status store
 _job_status: Dict[str, Dict[str, Any]] = {}
@@ -202,20 +203,30 @@ def build_scheduler() -> AsyncIOScheduler:
         "alerts": settings.alerts_interval,
     }
 
+    # Stagger vendor schedules to avoid all collectors firing simultaneously.
+    # Each vendor gets an offset so they don't all compete for DB connections at once.
+    vendor_offset = {}
+    vendor_idx = 0
+    for vendor, ctype, _ in registered:
+        if vendor not in vendor_offset:
+            vendor_offset[vendor] = vendor_idx * 10  # 10 second stagger per vendor
+            vendor_idx += 1
+
     for vendor, ctype, _ in registered:
         interval = intervals.get(ctype, 300)
         job_id = f"{vendor}_{ctype}"
+        offset = vendor_offset.get(vendor, 0)
 
         scheduler.add_job(
             run_collector_job,
-            trigger=IntervalTrigger(seconds=interval),
+            trigger=IntervalTrigger(seconds=interval, start_date=datetime.now() + timedelta(seconds=offset)),
             id=job_id,
             args=[vendor, ctype],
             replace_existing=True,
             max_instances=1,
             coalesce=True,
         )
-        logger.info(f"Scheduled {job_id} every {interval}s")
+        logger.info(f"Scheduled {job_id} every {interval}s (offset +{offset}s)")
 
     # Daily aggregation — runs at 00:05 UTC to capture full previous day
     scheduler.add_job(

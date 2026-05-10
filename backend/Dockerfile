@@ -31,4 +31,6 @@ ENV PYTHONPATH=/app
 ENV LOG_DIR=/app/logs
 ENV ARRAYS_CONFIG_FILE=/app/config/arrays.txt
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Single uvicorn worker (APScheduler needs single process) but with increased
+# connection backlog and timeout for handling concurrent API requests + collectors
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "30", "--backlog", "100"]

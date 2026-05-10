@@ -116,22 +116,73 @@ class HostStorageRequest(BaseModel):
 async def host_storage_report(body: HostStorageRequest):
     """
     For a list of server names, return volume count + aggregate provisioned/used capacity.
-    Joins hosts_cache (host→volume mapping) with volumes_cache (volume size/used).
-    Handles case-insensitive, partial matching on host_name.
+    Uses an optimized SQL approach: bulk-fetch hosts, then single JOIN to volumes.
     """
     def _report():
         results = []
-        with get_db_cursor() as cursor:
-            for server in body.servers:
-                # Find all hosts matching this server name (case-insensitive, partial match)
-                cursor.execute(
-                    f"SELECT array_name, host_name, volumes FROM {SCHEMA}.hosts_cache "
-                    f"WHERE UPPER(host_name) LIKE UPPER(?)",
-                    (f"%{server}%",),
-                )
-                host_rows = rows_to_dicts(cursor, cursor.fetchall())
+        servers = body.servers
 
-                if not host_rows:
+        with get_db_cursor() as cursor:
+            # Step 1: Bulk-fetch all matching hosts in one query using OR conditions
+            # Build batches of 100 to avoid SQL param limits
+            all_host_data = {}  # server_name -> {arrays, vol_names_by_array}
+            batch_size = 50
+
+            for i in range(0, len(servers), batch_size):
+                batch = servers[i:i + batch_size]
+                # Use exact match first (faster), fallback to LIKE for partial
+                placeholders = ",".join(["?"] * len(batch))
+                cursor.execute(
+                    f"SELECT host_name, array_name, volumes FROM {SCHEMA}.hosts_cache "
+                    f"WHERE host_name IN ({placeholders})",
+                    batch,
+                )
+                for row in cursor.fetchall():
+                    host_name = row[0]
+                    array_name = row[1]
+                    volumes_json = row[2]
+                    # Map back to the original server name
+                    for srv in batch:
+                        if srv.upper() == host_name.upper():
+                            if srv not in all_host_data:
+                                all_host_data[srv] = {"arrays": set(), "vol_keys": []}
+                            all_host_data[srv]["arrays"].add(array_name)
+                            vol_names = _safe_json(volumes_json)
+                            for vn in vol_names:
+                                all_host_data[srv]["vol_keys"].append((array_name, vn))
+                            break
+
+            # Step 2: Collect all unique (array_name, volume_name) pairs
+            all_vol_keys = set()
+            for sd in all_host_data.values():
+                all_vol_keys.update(sd["vol_keys"])
+
+            # Step 3: Bulk-fetch volume sizes in batches
+            vol_sizes = {}  # (array_name, volume_name) -> (size, used)
+            vol_key_list = list(all_vol_keys)
+
+            for i in range(0, len(vol_key_list), batch_size):
+                batch = vol_key_list[i:i + batch_size]
+                # Build query with OR conditions for each (array, volume) pair
+                conditions = " OR ".join(
+                    ["(array_name = ? AND volume_name = ?)"] * len(batch)
+                )
+                params = []
+                for a, v in batch:
+                    params.extend([a, v])
+
+                if conditions:
+                    cursor.execute(
+                        f"SELECT array_name, volume_name, size, used "
+                        f"FROM {SCHEMA}.volumes_cache WHERE {conditions}",
+                        params,
+                    )
+                    for row in cursor.fetchall():
+                        vol_sizes[(row[0], row[1])] = (row[2] or 0, row[3] or 0)
+
+            # Step 4: Aggregate per server
+            for server in servers:
+                if server not in all_host_data:
                     results.append({
                         "server_name": server,
                         "found": False,
@@ -144,35 +195,22 @@ async def host_storage_report(body: HostStorageRequest):
                     })
                     continue
 
+                sd = all_host_data[server]
                 total_prov = 0
                 total_used = 0
                 vol_count = 0
-                arrays_seen = set()
 
-                for hr in host_rows:
-                    array_name = hr.get("array_name", "")
-                    arrays_seen.add(array_name)
-                    vol_names = _safe_json(hr.get("volumes"))
-
-                    for vol_name in vol_names:
-                        # Look up volume in volumes_cache
-                        cursor.execute(
-                            f"SELECT size, used FROM {SCHEMA}.volumes_cache "
-                            f"WHERE array_name = ? AND volume_name = ?",
-                            (array_name, vol_name),
-                        )
-                        vol_row = cursor.fetchone()
-                        if vol_row:
-                            size = vol_row[0] or 0
-                            used = vol_row[1] or 0
-                            total_prov += size
-                            total_used += used
-                            vol_count += 1
+                for key in sd["vol_keys"]:
+                    if key in vol_sizes:
+                        size, used = vol_sizes[key]
+                        total_prov += size
+                        total_used += used
+                        vol_count += 1
 
                 results.append({
                     "server_name": server,
                     "found": True,
-                    "arrays": sorted(arrays_seen),
+                    "arrays": sorted(sd["arrays"]),
                     "volume_count": vol_count,
                     "total_provisioned_bytes": total_prov,
                     "total_used_bytes": total_used,

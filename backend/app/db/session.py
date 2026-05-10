@@ -1,9 +1,12 @@
 """
 Database session management — pyodbc connection pool for SQL Server.
 FastAPI uses run_in_threadpool to keep async handlers non-blocking.
+
+Uses pyodbc's built-in connection pooling for efficient connection reuse.
 """
 
 import logging
+import threading
 import pyodbc
 from contextlib import contextmanager
 from typing import Generator, Optional
@@ -14,6 +17,13 @@ from app.services.keepass import get_sql_credentials
 logger = logging.getLogger("usm.db")
 settings = get_settings()
 SCHEMA = settings.db_schema
+
+# Enable pyodbc's built-in connection pooling
+pyodbc.pooling = True
+
+# Cache the connection string (thread-safe, credentials rarely change)
+_conn_str_cache: Optional[str] = None
+_conn_str_lock = threading.Lock()
 
 
 def _build_conn_str(username: str, password: str) -> str:
@@ -29,12 +39,30 @@ def _build_conn_str(username: str, password: str) -> str:
     )
 
 
+def _get_conn_str() -> str:
+    """Get cached connection string, building it once from KeePass."""
+    global _conn_str_cache
+    if _conn_str_cache:
+        return _conn_str_cache
+    with _conn_str_lock:
+        if not _conn_str_cache:
+            creds = get_sql_credentials()
+            _conn_str_cache = _build_conn_str(creds["username"], creds["password"])
+    return _conn_str_cache
+
+
+def invalidate_conn_str_cache():
+    """Call after credential refresh to rebuild connection string."""
+    global _conn_str_cache
+    with _conn_str_lock:
+        _conn_str_cache = None
+
+
 def get_connection() -> pyodbc.Connection:
-    """Get a new pyodbc connection (credentials from KeePass)."""
-    creds = get_sql_credentials()
-    conn_str = _build_conn_str(creds["username"], creds["password"])
+    """Get a pooled pyodbc connection (credentials cached from KeePass)."""
+    conn_str = _get_conn_str()
     conn = pyodbc.connect(conn_str, autocommit=False)
-    conn.timeout = 30
+    conn.timeout = 60  # increased from 30 for heavy queries
     return conn
 
 
@@ -42,6 +70,7 @@ def get_connection() -> pyodbc.Connection:
 def get_db_cursor() -> Generator:
     """
     Context manager yielding a cursor with auto commit/rollback.
+    Uses connection pooling for efficient reuse.
     Use inside sync functions called via run_in_threadpool.
     """
     conn: Optional[pyodbc.Connection] = None
@@ -52,11 +81,17 @@ def get_db_cursor() -> Generator:
         conn.commit()
     except Exception:
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass  # connection may already be dead
         raise
     finally:
         if conn:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass  # pooling handles cleanup
 
 
 def row_to_dict(cursor: pyodbc.Cursor, row) -> Optional[dict]:
@@ -477,6 +512,25 @@ def init_database() -> None:
 
             f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_managed_arrays_vendor') "
             f"  CREATE INDEX IX_managed_arrays_vendor ON {SCHEMA}.managed_arrays(vendor, enabled)",
+
+            # Performance indexes for large tables
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_volumes_vendor') "
+            f"  CREATE INDEX IX_volumes_vendor ON {SCHEMA}.volumes_cache(vendor)",
+
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_volumes_array_name') "
+            f"  CREATE INDEX IX_volumes_array_name ON {SCHEMA}.volumes_cache(array_name, volume_name)",
+
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_hosts_vendor') "
+            f"  CREATE INDEX IX_hosts_vendor ON {SCHEMA}.hosts_cache(vendor)",
+
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_hosts_name') "
+            f"  CREATE INDEX IX_hosts_name ON {SCHEMA}.hosts_cache(host_name)",
+
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_metrics_current_array') "
+            f"  CREATE INDEX IX_metrics_current_array ON {SCHEMA}.metrics_current(array_name)",
+
+            f"IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='IX_messages_resolved') "
+            f"  CREATE INDEX IX_messages_resolved ON {SCHEMA}.messages(resolved, array_name)",
         ]
         for idx_sql in indexes:
             try:
