@@ -34,7 +34,7 @@ _VENDOR_MAP: Dict[str, str] = {
 }
 
 # Vendors that have working collectors in USM
-_SUPPORTED_VENDORS = {"pure", "netapp", "hpe", "oracle", "hitachi"}
+_SUPPORTED_VENDORS = {"pure", "netapp", "hpe", "oracle", "hitachi", "dell"}
 
 
 def resolve_cred_key(vendor: str, array_name: str, model: str, site: str) -> Optional[str]:
@@ -66,6 +66,12 @@ def resolve_cred_key(vendor: str, array_name: str, model: str, site: str) -> Opt
     elif vendor == "commvault":
         return f"CommVault_{site}" if site else None
     elif vendor == "dell":
+        if model and "UNITY" in model.upper():
+            return "Unity_admin"
+        elif model and "DD" in model.upper():
+            return "VNX_sysadmin"  # DataDomain may use same admin creds
+        elif model and "Networker" in model.upper():
+            return "ESRS_sanadmin"  # Networker backup
         return f"DellEMC_{(model or '').replace(' ', '_')}_{site}" if site else None
     return None
 
