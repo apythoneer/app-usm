@@ -76,34 +76,23 @@ def _fetch_array(array_name: str) -> Optional[dict]:
 
 def _fetch_fleet_stats() -> dict:
     with get_db_cursor() as cursor:
-        # Core metrics from current snapshot
+        # Combine all stats into a single query using NOLOCK to avoid blocking
+        # during concurrent collector writes. This prevents query timeouts.
         cursor.execute(f"""
             SELECT
-                COUNT(*) AS total_arrays,
-                SUM(CAST(capacity_total AS FLOAT)) / 1099511627776.0 AS total_capacity_tb,
-                SUM(CAST(capacity_used  AS FLOAT)) / 1099511627776.0 AS total_used_tb,
-                AVG(capacity_used_pct)  AS avg_utilization_pct,
-                SUM(read_iops + write_iops) AS total_iops,
-                AVG(read_latency_us)    AS avg_read_latency_us,
-                AVG(write_latency_us)   AS avg_write_latency_us,
-                AVG(data_reduction)     AS avg_data_reduction
-            FROM {SCHEMA}.metrics_current
+                (SELECT COUNT(*) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_arrays,
+                (SELECT ISNULL(SUM(CAST(capacity_total AS FLOAT)) / 1099511627776.0, 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_capacity_tb,
+                (SELECT ISNULL(SUM(CAST(capacity_used  AS FLOAT)) / 1099511627776.0, 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_used_tb,
+                (SELECT ISNULL(AVG(capacity_used_pct), 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_utilization_pct,
+                (SELECT ISNULL(SUM(read_iops + write_iops), 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_iops,
+                (SELECT AVG(read_latency_us) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_read_latency_us,
+                (SELECT AVG(write_latency_us) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_write_latency_us,
+                (SELECT ISNULL(AVG(data_reduction), 1) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_data_reduction,
+                (SELECT COUNT(*) FROM {SCHEMA}.messages WITH (NOLOCK) WHERE resolved=0 AND suppressed=0) AS active_alerts,
+                (SELECT COUNT(*) FROM {SCHEMA}.volumes_cache WITH (NOLOCK)) AS total_volumes,
+                (SELECT COUNT(*) FROM {SCHEMA}.hosts_cache WITH (NOLOCK)) AS total_hosts
         """)
         row = dict(zip([c[0] for c in cursor.description], cursor.fetchone() or []))
-
-        # Active alerts
-        cursor.execute(
-            f"SELECT COUNT(*) FROM {SCHEMA}.messages WHERE resolved=0 AND suppressed=0"
-        )
-        row["active_alerts"] = cursor.fetchone()[0]
-
-        # Total volumes
-        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.volumes_cache")
-        row["total_volumes"] = cursor.fetchone()[0]
-
-        # Total hosts
-        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.hosts_cache")
-        row["total_hosts"] = cursor.fetchone()[0]
 
     return row
 
