@@ -130,27 +130,26 @@ async def host_storage_report(body: HostStorageRequest):
 
             for i in range(0, len(servers), batch_size):
                 batch = servers[i:i + batch_size]
-                # Use exact match first (faster), fallback to LIKE for partial
-                placeholders = ",".join(["?"] * len(batch))
-                cursor.execute(
-                    f"SELECT host_name, array_name, volumes FROM {SCHEMA}.hosts_cache "
-                    f"WHERE host_name IN ({placeholders})",
-                    batch,
-                )
-                for row in cursor.fetchall():
-                    host_name = row[0]
-                    array_name = row[1]
-                    volumes_json = row[2]
-                    # Map back to the original server name
-                    for srv in batch:
-                        if srv.upper() == host_name.upper():
-                            if srv not in all_host_data:
-                                all_host_data[srv] = {"arrays": set(), "vol_keys": []}
-                            all_host_data[srv]["arrays"].add(array_name)
-                            vol_names = _safe_json(volumes_json)
-                            for vn in vol_names:
-                                all_host_data[srv]["vol_keys"].append((array_name, vn))
-                            break
+                # Use LIKE prefix match (case-insensitive) to find hosts
+                # HPE stores "aa16-04_ossarcp1", Pure uses "azeus2sqlbnrn45", etc.
+                # We match on the server name being a prefix of the host_name
+                for srv in batch:
+                    cursor.execute(
+                        f"SELECT host_name, array_name, volumes FROM {SCHEMA}.hosts_cache "
+                        f"WHERE UPPER(host_name) LIKE UPPER(?) + '%'",
+                        (srv,),
+                    )
+                    rows_found = cursor.fetchall()
+                    for row in rows_found:
+                        host_name = row[0]
+                        array_name = row[1]
+                        volumes_json = row[2]
+                        if srv not in all_host_data:
+                            all_host_data[srv] = {"arrays": set(), "vol_keys": []}
+                        all_host_data[srv]["arrays"].add(array_name)
+                        vol_names = _safe_json(volumes_json)
+                        for vn in vol_names:
+                            all_host_data[srv]["vol_keys"].append((array_name, vn))
 
             # Step 2: Collect all unique (array_name, volume_name) pairs
             all_vol_keys = set()
