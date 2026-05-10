@@ -6,6 +6,7 @@ import json
 from typing import List, Optional
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 
 from app.db.session import get_db_cursor, rows_to_dicts
 from app.schemas.host import HostSchema, HostGroupSchema
@@ -104,6 +105,84 @@ def _row_to_host(row: dict) -> dict:
         volumes=_safe_json(row.get("volumes")),
         last_updated=str(row["last_updated"]) if row.get("last_updated") else None,
     ).model_dump()
+
+
+class HostStorageRequest(BaseModel):
+    """Request body for host storage report."""
+    servers: List[str]
+
+
+@router.post("/storage-report")
+async def host_storage_report(body: HostStorageRequest):
+    """
+    For a list of server names, return volume count + aggregate provisioned/used capacity.
+    Joins hosts_cache (host→volume mapping) with volumes_cache (volume size/used).
+    Handles case-insensitive, partial matching on host_name.
+    """
+    def _report():
+        results = []
+        with get_db_cursor() as cursor:
+            for server in body.servers:
+                # Find all hosts matching this server name (case-insensitive, partial match)
+                cursor.execute(
+                    f"SELECT array_name, host_name, volumes FROM {SCHEMA}.hosts_cache "
+                    f"WHERE UPPER(host_name) LIKE UPPER(?)",
+                    (f"%{server}%",),
+                )
+                host_rows = rows_to_dicts(cursor, cursor.fetchall())
+
+                if not host_rows:
+                    results.append({
+                        "server_name": server,
+                        "found": False,
+                        "arrays": [],
+                        "volume_count": 0,
+                        "total_provisioned_bytes": 0,
+                        "total_used_bytes": 0,
+                        "total_provisioned_tb": 0,
+                        "total_used_tb": 0,
+                    })
+                    continue
+
+                total_prov = 0
+                total_used = 0
+                vol_count = 0
+                arrays_seen = set()
+
+                for hr in host_rows:
+                    array_name = hr.get("array_name", "")
+                    arrays_seen.add(array_name)
+                    vol_names = _safe_json(hr.get("volumes"))
+
+                    for vol_name in vol_names:
+                        # Look up volume in volumes_cache
+                        cursor.execute(
+                            f"SELECT size, used FROM {SCHEMA}.volumes_cache "
+                            f"WHERE array_name = ? AND volume_name = ?",
+                            (array_name, vol_name),
+                        )
+                        vol_row = cursor.fetchone()
+                        if vol_row:
+                            size = vol_row[0] or 0
+                            used = vol_row[1] or 0
+                            total_prov += size
+                            total_used += used
+                            vol_count += 1
+
+                results.append({
+                    "server_name": server,
+                    "found": True,
+                    "arrays": sorted(arrays_seen),
+                    "volume_count": vol_count,
+                    "total_provisioned_bytes": total_prov,
+                    "total_used_bytes": total_used,
+                    "total_provisioned_tb": round(total_prov / (1024**4), 2),
+                    "total_used_tb": round(total_used / (1024**4), 2),
+                })
+
+        return results
+
+    return await run_in_threadpool(_report)
 
 
 def _row_to_hgroup(row: dict) -> HostGroupSchema:
