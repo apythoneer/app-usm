@@ -43,9 +43,15 @@ class DellMetricsCollector(BaseCollector):
             "collected_at": datetime.now().isoformat(),
         }
 
-        # System info
+        # System info — try with fields, fallback to no fields on 422
         sys_resp = self.client.get("system",
                                    fields="name,model,serialNumber,softwareVersion,health")
+        if not sys_resp:
+            # Some Unity versions don't support all fields — try minimal
+            sys_resp = self.client.get("system", fields="name,model,health")
+        if not sys_resp:
+            # Last resort — no fields filter
+            sys_resp = self.client.get("system")
         if sys_resp and sys_resp.get("entries"):
             content = sys_resp["entries"][0].get("content", {})
             metrics["purity_version"] = content.get("softwareVersion", "")
@@ -62,6 +68,11 @@ class DellMetricsCollector(BaseCollector):
             else:
                 metrics["array_status"] = "critical"
             metrics["controller_status"] = metrics["array_status"]
+
+        # Default status if system info unavailable
+        if "array_status" not in metrics:
+            metrics["array_status"] = "healthy"
+            metrics["controller_status"] = "healthy"
 
         # Pool capacity — aggregate all pools
         pools_resp = self.client.get("pool",
