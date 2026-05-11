@@ -35,7 +35,7 @@ def _build_conn_str(username: str, password: str) -> str:
         f"SERVER={settings.sql_server};"
         f"DATABASE={settings.sql_database};"
         f"UID={username};PWD={password};"
-        "TrustServerCertificate=yes;Connection Timeout=30;"
+        "TrustServerCertificate=yes;Connection Timeout=60;"
     )
 
 

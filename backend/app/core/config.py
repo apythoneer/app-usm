@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     snow_enabled: bool = Field(default=False, alias="SNOW_ENABLED")
 
     # Collector intervals (seconds)
-    metrics_interval: int = Field(default=60, alias="METRICS_INTERVAL")
-    volumes_interval: int = Field(default=900, alias="VOLUMES_INTERVAL")
+    metrics_interval: int = Field(default=300, alias="METRICS_INTERVAL")
+    volumes_interval: int = Field(default=1800, alias="VOLUMES_INTERVAL")
     alerts_interval: int = Field(default=300, alias="ALERTS_INTERVAL")
 
     # Alert lifecycle

@@ -44,11 +44,11 @@ def _fetch_volumes(
 
     # Total count for pagination
     with get_db_cursor() as cursor:
-        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.volumes_cache{where_clause}", params)
+        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.volumes_cache WITH (NOLOCK){where_clause}", params)
         total = cursor.fetchone()[0]
 
     # Paginated data
-    sql = f"SELECT * FROM {SCHEMA}.volumes_cache{where_clause} ORDER BY array_name, volume_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    sql = f"SELECT * FROM {SCHEMA}.volumes_cache WITH (NOLOCK){where_clause} ORDER BY array_name, volume_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     with get_db_cursor() as cursor:
         cursor.execute(sql, params + [offset, limit])
         rows = rows_to_dicts(cursor, cursor.fetchall())

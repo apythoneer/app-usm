@@ -25,7 +25,7 @@ settings = get_settings()
 
 # Thread pool for blocking collector I/O — limit to 10 concurrent to avoid
 # saturating SQL Server connections (each collector uses 1-2 DB connections).
-_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="collector")
+_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="collector")
 
 # In-memory job status store
 _job_status: Dict[str, Dict[str, Any]] = {}

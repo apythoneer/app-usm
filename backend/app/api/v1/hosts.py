@@ -38,10 +38,10 @@ def _fetch_hosts(
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
 
     with get_db_cursor() as cursor:
-        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.hosts_cache{where_clause}", params)
+        cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.hosts_cache WITH (NOLOCK){where_clause}", params)
         total = cursor.fetchone()[0]
 
-    sql = f"SELECT * FROM {SCHEMA}.hosts_cache{where_clause} ORDER BY array_name, host_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    sql = f"SELECT * FROM {SCHEMA}.hosts_cache WITH (NOLOCK){where_clause} ORDER BY array_name, host_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     with get_db_cursor() as cursor:
         cursor.execute(sql, params + [offset, limit])
         rows = rows_to_dicts(cursor, cursor.fetchall())
@@ -53,11 +53,11 @@ def _fetch_hgroups(array_name: Optional[str]) -> List[dict]:
     with get_db_cursor() as cursor:
         if array_name:
             cursor.execute(
-                f"SELECT * FROM {SCHEMA}.host_groups_cache WHERE array_name=? ORDER BY hgroup_name",
+                f"SELECT * FROM {SCHEMA}.host_groups_cache WITH (NOLOCK) WHERE array_name=? ORDER BY hgroup_name",
                 (array_name,),
             )
         else:
-            cursor.execute(f"SELECT * FROM {SCHEMA}.host_groups_cache ORDER BY array_name, hgroup_name")
+            cursor.execute(f"SELECT * FROM {SCHEMA}.host_groups_cache WITH (NOLOCK) ORDER BY array_name, hgroup_name")
         return rows_to_dicts(cursor, cursor.fetchall())
 
 
@@ -134,7 +134,7 @@ async def host_storage_report(body: HostStorageRequest):
                 # HPE stores "aa16-04_ossarcp1", Pure uses "azeus2sqlbnrn45", etc.
                 for srv in batch:
                     cursor.execute(
-                        f"SELECT host_name, array_name, volumes, vendor FROM {SCHEMA}.hosts_cache "
+                        f"SELECT host_name, array_name, volumes, vendor FROM {SCHEMA}.hosts_cache WITH (NOLOCK) "
                         f"WHERE UPPER(host_name) LIKE UPPER(?) + '%'",
                         (srv,),
                     )
@@ -174,7 +174,7 @@ async def host_storage_report(body: HostStorageRequest):
                 if conditions:
                     cursor.execute(
                         f"SELECT array_name, volume_name, size, used "
-                        f"FROM {SCHEMA}.volumes_cache WHERE {conditions}",
+                        f"FROM {SCHEMA}.volumes_cache WITH (NOLOCK) WHERE {conditions}",
                         params,
                     )
                     for row in cursor.fetchall():

@@ -36,7 +36,7 @@ def _fetch_alerts(
         params.append(1 if resolved else 0)
 
     sql = (
-        f"SELECT TOP {limit} * FROM {SCHEMA}.messages "
+        f"SELECT TOP {limit} * FROM {SCHEMA}.messages WITH (NOLOCK) "
         f"WHERE {' AND '.join(where)} "
         f"ORDER BY id DESC"
     )
