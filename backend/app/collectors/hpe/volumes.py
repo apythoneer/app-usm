@@ -81,6 +81,9 @@ class HPEVolumesCollector(BaseCollector):
                     if host_name not in data["volumes"][vol_name]["hosts"]:
                         data["volumes"][vol_name]["hosts"].append(host_name)
 
+        # Host sets (fetch early so we can use in host-volume mapping)
+        hset_data = self.client.get("hostsets")
+
         # Hosts
         host_data = self.client.get("hosts")
         if host_data and host_data.get("members"):
@@ -101,10 +104,26 @@ class HPEVolumesCollector(BaseCollector):
                         iscsi_names.append(iqn)
 
                 # Find volumes for this host from VLUNs
+                # Check both direct host VLUNs and host-set VLUNs
                 host_vols = []
+                host_set_name = None
                 if vlun_data and vlun_data.get("members"):
                     for vlun in vlun_data["members"]:
-                        if vlun.get("hostname") == name:
+                        vlun_host = vlun.get("hostname", "")
+                        if vlun_host == name:
+                            vn = vlun.get("volumeName", "")
+                            if vn and vn not in host_vols:
+                                host_vols.append(vn)
+
+                # Also find VLUNs mapped via host sets
+                if hset_data and hset_data.get("members"):
+                    for hs in hset_data["members"]:
+                        if name in (hs.get("setmembers") or []):
+                            host_set_name = hs.get("name", "")
+                            break
+                if host_set_name and vlun_data and vlun_data.get("members"):
+                    for vlun in vlun_data["members"]:
+                        if vlun.get("hostname") == host_set_name:
                             vn = vlun.get("volumeName", "")
                             if vn and vn not in host_vols:
                                 host_vols.append(vn)
@@ -120,8 +139,7 @@ class HPEVolumesCollector(BaseCollector):
                     "last_updated": now,
                 }
 
-        # Host sets (host groups)
-        hset_data = self.client.get("hostsets")
+        # Apply host set memberships (host groups)
         if hset_data and hset_data.get("members"):
             for hs in hset_data["members"]:
                 hs_name = hs.get("name", "")
