@@ -1,67 +1,148 @@
 version: '3.8'
 
-services:
-  # ============================================
-  # WEB UI SERVICE
-  # ============================================
-  pure-web:
-    build:
-      context: ..
-      dockerfile: docker/web.Dockerfile
-    container_name: pure-web
-    hostname: pure-web
-    network_mode: host
-    environment:
-      - TZ=America/Denver
-      - SQL_SERVER=usidcvsql0252.ctl.intranet
-      - SQL_DATABASE=StorMart
-      - SQL_CRED_KEY=SQLServerDB
-      - KEEPASS_URL=http://usodclpsandadm1.corp.intranet:2000/keepass
-      - SCHEDULER_URL=http://localhost:5051
-      - LOG_DIRECTORY=/app/logs
-      - COLLECTORS_DIR=/app/collectors
-      - DOCKER_API_VERSION=1.43
-      - WEB_PORT=5050
-    volumes:
-      - ../web/app.py:/app/app.py:ro
-      - ../config:/app/config:ro
-      - ../logs_new/scheduler:/app/logs:rw
-      - /var/run/docker.sock:/var/run/docker.sock
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5050/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+# USM v3 — Storage Intelligence Platform
+#
+# Uses network_mode: host so containers share the host network stack.
+# Required to reach internal DNS (*.ctl.intranet, *.corp.intranet).
+#
+# Run:   docker compose -f docker/docker-compose.yml up -d --build
+# Logs:  docker compose -f docker/docker-compose.yml logs -f
+# Stop:  docker compose -f docker/docker-compose.yml down
+#
+# Ports (on host):
+#   8000 — FastAPI backend  (API + auto-docs at http://host:8000/docs)
+#   8080 — React frontend   (dashboard at http://host:8080)
+#
+# v1 (5050/5051) and v2 (8000/8080) can run side-by-side during migration.
 
-  # ============================================
-  # SCHEDULER SERVICE
-  # ============================================
-  pure-scheduler:
+services:
+
+  # ============================================================
+  # BACKEND — FastAPI + APScheduler (collectors run inside here)
+  # ============================================================
+  usm-backend:
     build:
-      context: ..
-      dockerfile: docker/scheduler.Dockerfile
-    container_name: pure-scheduler
-    hostname: pure-scheduler
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: usm-backend
+    hostname: usm-backend
     network_mode: host
     environment:
       - TZ=America/Denver
+      # SQL Server
       - SQL_SERVER=usidcvsql0252.ctl.intranet
       - SQL_DATABASE=StorMart
-      - SQL_CRED_KEY=SQLServerDB
+      - DB_SCHEMA=USM
+      - SQL_DRIVER=ODBC Driver 17 for SQL Server
+      # KeePass
       - KEEPASS_URL=http://usodclpsandadm1.corp.intranet:2000/keepass
-      - JOBS_FILE=/app/config/jobs.json
-      - COLLECTORS_DIR=/app/collectors
+      - SQL_CRED_KEY=SQLServerDB
+      - PURE_CRED_KEY=PureStorage
+      # JWT auth (not enforced yet — set a real value before Phase 3)
+      - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_BEFORE_PRODUCTION}
+      # Notifications (set TEAMS_WEBHOOK_URL in .env to enable)
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - SNOW_ENABLED=false
+      - SNOW_SEVERITIES=critical
+      - SNOW_CATEGORY=Alert > Infrastructure
+      - SNOW_CI=Pure Storage CBS
+      - SNOW_LOCATION=Denver
+      - SNOW_GROUP=${SNOW_GROUP:-}
+      # CORS — frontend on port 8080
+      - CORS_ORIGINS=["http://localhost:8080","http://usodclpsandadm1.corp.intranet:8080"]
+      # Collector intervals (seconds)
+      - METRICS_INTERVAL=60
+      - VOLUMES_INTERVAL=900
+      - ALERTS_INTERVAL=300
+      # Chat / Ollama (local LLM — no data leaves)
+      - OLLAMA_BASE_URL=http://127.0.0.1:11434
+      - OLLAMA_MODEL=qwen2.5:3b
+      - CHAT_ENABLED=true
+      # Paths
       - LOG_DIR=/app/logs
-      - SCHEDULER_PORT=5051
+      - ARRAYS_CONFIG_FILE=/app/config/arrays.txt
     volumes:
-      - ../scheduler:/app/scheduler:ro
-      - ../collectors:/app/collectors:ro
-      - ../config:/app/config:rw
-      - ../logs_new/scheduler:/app/logs:rw
+      - ../logs:/app/logs
+      - ../config:/app/config:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5051/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/ping"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # FRONTEND — React SPA via Nginx on port 8080
+  # ============================================================
+  usm-frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: usm-frontend
+    hostname: usm-frontend
+    network_mode: host
+    environment:
+      - TZ=America/Denver
+    restart: unless-stopped
+    depends_on:
+      - usm-backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # KEEPASS — Credential REST API (gunicorn, 4 workers, cached)
+  # ============================================================
+  usm-keepass:
+    build:
+      context: keepass
+      dockerfile: Dockerfile
+    container_name: usm-keepass
+    hostname: usm-keepass
+    network_mode: host
+    environment:
+      - KEEPASS_DB=/data/keepass/StorageOps-Database.kdbx
+      - KEEPASS_PASSWORD=${KEEPASS_PASSWORD:-n1md@n@s}
+      - CACHE_TTL=60
+    volumes:
+      - /opt/sanadmin/data/nasshare:/data:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:2000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ============================================================
+  # OLLAMA — Local LLM for chat/Text-to-SQL (no data leaves)
+  # ============================================================
+  usm-ollama:
+    image: ollama/ollama:latest
+    container_name: usm-ollama
+    hostname: usm-ollama
+    network_mode: host
+    environment:
+      - OLLAMA_HOST=127.0.0.1:11434
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=1
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 12G
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  ollama-data:

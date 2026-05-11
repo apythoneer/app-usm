@@ -1,7 +1,7 @@
-# USM v2 — convenience commands
+# USM v3 — convenience commands
 # Run from repo root
 
-COMPOSE = docker compose -f docker/docker-compose.v2.yml
+COMPOSE = docker compose -f docker/docker-compose.yml
 
 .PHONY: up down build logs restart status shell-backend shell-frontend
 

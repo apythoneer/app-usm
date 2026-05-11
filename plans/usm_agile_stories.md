@@ -1,6 +1,6 @@
-# USM v2 — Agile User Stories
+# USM v3 — Agile User Stories
 
-## Epic: Unified Storage Monitoring Platform v2
+## Epic: Unified Storage Monitoring Platform v3
 **Goal**: Build a multi-vendor storage monitoring platform that provides a single pane of glass across all storage infrastructure (Pure, NetApp, HPE, Oracle, Hitachi, Dell, CommVault) with real-time capacity, performance, alerting, and AI-powered natural language queries.
 
 ---
@@ -137,7 +137,7 @@
 
 ---
 
-## Sprint 5: Remaining Vendors & Performance (Backlog)
+## Sprint 5: Dell EMC & v3 Release (Completed)
 
 ### USM-501: Dell EMC Collector (Unity/PowerStore)
 **As a** storage administrator  
@@ -147,6 +147,20 @@
 - Dell EMC Unity/PowerStore REST API client
 - Metrics, volumes, hosts, alerts collectors
 - KeePass credential mapping
+- **Result**: Dell collector implemented with capacity, volumes, hosts, alerts
+
+### USM-505: v3 Release — Cleanup & Documentation
+**As a** platform operator  
+**I want** v1 legacy code removed, version bumped to 3.0.0, and comprehensive docs  
+**So that** the codebase is clean, well-documented, and production-ready  
+**Acceptance Criteria**:
+- Remove v1 directories (collectors/, scheduler/, web/, docker/requirements/)
+- Remove old Dockerfiles and compose files
+- Rename docker-compose.v2.yml → docker-compose.yml
+- Version bump to 3.0.0 in config.py
+- Comprehensive README.md with architecture, vendors, API reference, how-to-add-vendor
+- Disable 6 unreachable arrays (HPE DNS failure, StorageGRID auth, CVO unreachable)
+- **Result**: Clean repo, full docs, 84 arrays actively monitored across 7 vendors
 
 ### USM-502: Backend Performance Optimization
 **As a** platform operator  
@@ -178,15 +192,16 @@
 
 ---
 
-## Current Platform Metrics
+## Current Platform Metrics (v3.0.0)
 
 | Metric | Value |
 |--------|-------|
 | **Total Arrays Discovered** | 353 (from DimStorageFinance) |
-| **Arrays Actively Monitored** | 72 |
-| **Vendors with Collectors** | 5 (Pure, NetApp, HPE, Oracle, Hitachi) |
+| **Arrays Actively Monitored** | ~84 |
+| **Vendors with Collectors** | 7 (Pure, NetApp, HPE, Oracle, Hitachi, Dell, StorageGRID) |
 | **Total Volumes Tracked** | 22,500+ |
 | **Total Hosts Cataloged** | 2,740+ |
 | **Total Storage Capacity** | ~10+ PB |
-| **Scheduler Jobs** | 17 (metrics/volumes/alerts per vendor + maintenance) |
+| **Scheduler Jobs** | 21 (metrics/volumes/alerts per vendor + maintenance) |
 | **Collection Cycle** | Metrics: 60s, Alerts: 5min, Volumes: 15min |
+| **AI Chat** | Local Ollama (qwen2.5:3b) Text-to-SQL |
