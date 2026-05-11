@@ -115,8 +115,8 @@ async def test_notifications():
     from app.services.notification import send_teams_message
     ok = await run_in_threadpool(
         send_teams_message,
-        "USM v2 — Test Notification",
-        "This is a test message from Unified Storage Monitoring v2.",
+        "USM v3 — Test Notification",
+        "This is a test message from Unified Storage Monitoring v3.",
     )
     if not ok:
         raise HTTPException(status_code=400, detail="Teams notification failed — check webhook URL")

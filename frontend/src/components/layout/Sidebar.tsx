@@ -22,7 +22,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="h-14 flex items-center px-4 border-b border-gray-800">
         <span className="text-brand-500 font-bold text-lg tracking-tight">USM</span>
-        <span className="text-gray-400 text-xs ml-2 mt-0.5">v2.0</span>
+        <span className="text-gray-400 text-xs ml-2 mt-0.5">v3.0</span>
       </div>
 
       {/* Nav */}
