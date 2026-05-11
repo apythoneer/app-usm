@@ -78,7 +78,7 @@ class HPEClient:
             logger.error(f"[{self.array_name}] Auth error: {e}")
         return False
 
-    def get(self, endpoint: str, params: Dict = None) -> Optional[Any]:
+    def get(self, endpoint: str, params: Dict = None, timeout: int = 60) -> Optional[Any]:
         """GET request, returns parsed JSON or None on failure."""
         if not self.session_key:
             return None
@@ -86,7 +86,7 @@ class HPEClient:
             resp = self._session.get(
                 f"{self.base_url}/{endpoint.lstrip('/')}",
                 params=params,
-                timeout=30,
+                timeout=timeout,
             )
             if resp.status_code == 200:
                 return resp.json()

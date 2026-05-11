@@ -148,21 +148,30 @@ class HitachiVolumesCollector(BaseCollector):
                          v.get("data_reduction", 1), v.get("serial", "")),
                     )
 
-                # Save hosts
+                # Save hosts — use try/except per host to handle duplicate
+                # host names (case-insensitive SQL constraint)
                 cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
                                (self.array_name,))
+                seen_hosts = set()
                 for h in data.get("hosts", {}).values():
                     import json
-                    cursor.execute(
-                        f"""INSERT INTO {SCHEMA}.hosts_cache (
-                            array_name, vendor, host_name, wwn, iqn, nqn,
-                            host_group, volumes, last_updated
-                        ) VALUES (?,?,?,?,?,?,?,?,GETDATE())""",
-                        (h["array_name"], "hitachi", h["host_name"],
-                         h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
-                         h.get("host_group", ""),
-                         json.dumps(h.get("volumes", []))),
-                    )
+                    host_key = h["host_name"].upper()
+                    if host_key in seen_hosts:
+                        continue  # skip case-insensitive duplicate
+                    seen_hosts.add(host_key)
+                    try:
+                        cursor.execute(
+                            f"""INSERT INTO {SCHEMA}.hosts_cache (
+                                array_name, vendor, host_name, wwn, iqn, nqn,
+                                host_group, volumes, last_updated
+                            ) VALUES (?,?,?,?,?,?,?,?,GETDATE())""",
+                            (h["array_name"], "hitachi", h["host_name"],
+                             h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
+                             h.get("host_group", ""),
+                             json.dumps(h.get("volumes", []))),
+                        )
+                    except Exception:
+                        pass  # skip duplicate key violations
 
             result.records_saved = len(data.get("volumes", {})) + len(data.get("hosts", {}))
             return True
