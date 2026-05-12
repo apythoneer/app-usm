@@ -43,16 +43,30 @@ class HitachiVolumesCollector(BaseCollector):
     def collect(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"volumes": {}, "hosts": {}}
 
-        # Get all LDEVs (volumes) — use ldevOption=defined for mapped LDEVs only
-        # Large arrays (600-800TB) can have 3000+ LDEVs; need 300s timeout
-        ldevs_resp = self.client.get("ldevs", params={"count": 16384, "ldevOption": "defined"},
-                                     timeout=300)
-        if not ldevs_resp:
-            # Fallback: get all LDEVs without filter (even more, needs longer)
-            ldevs_resp = self.client.get("ldevs", params={"count": 16384}, timeout=300)
+        # Get LDEVs (volumes) with pagination — VSP SVP limits response size
+        # Paginate in batches of 500 to avoid timeouts on large arrays (5000+ LDEVs)
+        all_ldevs = []
+        start_ldev = 0
+        page_size = 500
+        max_pages = 30  # safety limit: 15,000 LDEVs max
+        for page in range(max_pages):
+            params = {"count": page_size, "ldevOption": "defined"}
+            if start_ldev > 0:
+                params["startLdevId"] = start_ldev
+            resp = self.client.get("ldevs", params=params, timeout=120)
+            if not resp or not resp.get("data"):
+                break
+            batch = resp["data"]
+            all_ldevs.extend(batch)
+            logger.debug(f"[{self.array_name}] LDEV page {page+1}: {len(batch)} items (total: {len(all_ldevs)})")
+            if len(batch) < page_size:
+                break  # last page
+            # Next page starts after the last LDEV ID in this batch
+            last_id = batch[-1].get("ldevId", 0)
+            start_ldev = last_id + 1
 
-        if ldevs_resp and ldevs_resp.get("data"):
-            for ldev in ldevs_resp["data"]:
+        if all_ldevs:
+            for ldev in all_ldevs:
                 ldev_id = ldev.get("ldevId", 0)
                 label = ldev.get("label", "")
                 # Use LDEV ID as prefix to guarantee uniqueness
