@@ -50,10 +50,10 @@ services:
       - SNOW_GROUP=${SNOW_GROUP:-}
       # CORS — frontend on port 8080
       - CORS_ORIGINS=["http://localhost:8080","http://usodclpsandadm1.corp.intranet:8080"]
-      # Collector intervals (seconds)
-      - METRICS_INTERVAL=60
-      - VOLUMES_INTERVAL=900
-      - ALERTS_INTERVAL=300
+      # Collector intervals (seconds) — tuned for 84 arrays across 7 vendors
+      - METRICS_INTERVAL=300
+      - VOLUMES_INTERVAL=1800
+      - ALERTS_INTERVAL=600
       # Chat / Ollama (local LLM — no data leaves)
       - OLLAMA_BASE_URL=http://127.0.0.1:11434
       - OLLAMA_MODEL=qwen2.5:3b
