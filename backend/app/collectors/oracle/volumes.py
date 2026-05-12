@@ -137,10 +137,17 @@ class OracleVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        volumes = data.get("volumes", {})
+
+        # Guard: keep existing data when collection returned nothing
+        if not volumes:
+            logger.warning(f"[{self.array_name}] No volumes collected — keeping existing data")
+            return True
+
         try:
             with get_db_cursor() as cursor:
                 cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
-                for v in data.get("volumes", {}).values():
+                for v in volumes.values():
                     cursor.execute(
                         f"""INSERT INTO {SCHEMA}.volumes_cache (
                             array_name, vendor, volume_name, size, used,

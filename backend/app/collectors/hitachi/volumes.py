@@ -139,11 +139,21 @@ class HitachiVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        volumes = data.get("volumes", {})
+        hosts = data.get("hosts", {})
+
+        # Only delete old data if we have new data to replace it
+        # This prevents losing data when LDEV queries time out
+        if not volumes and not hosts:
+            logger.warning(f"[{self.array_name}] No volumes/hosts collected — keeping existing data")
+            return True
+
         try:
             with get_db_cursor() as cursor:
-                # Save volumes
-                cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
-                               (self.array_name,))
+                # Save volumes — only delete if we have replacements
+                if volumes:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
+                                   (self.array_name,))
                 for v in data.get("volumes", {}).values():
                     cursor.execute(
                         f"""INSERT INTO {SCHEMA}.volumes_cache (
@@ -155,10 +165,10 @@ class HitachiVolumesCollector(BaseCollector):
                          v.get("data_reduction", 1), v.get("serial", "")),
                     )
 
-                # Save hosts — use try/except per host to handle duplicate
-                # host names (case-insensitive SQL constraint)
-                cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
-                               (self.array_name,))
+                # Save hosts — only delete if we have replacements
+                if hosts:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
+                                   (self.array_name,))
                 seen_hosts = set()
                 for h in data.get("hosts", {}).values():
                     import json

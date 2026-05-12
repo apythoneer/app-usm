@@ -152,14 +152,24 @@ class HPEVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        volumes = data.get("volumes", {})
+        hosts = data.get("hosts", {})
+
+        # Guard: keep existing data when collection returned nothing
+        if not volumes and not hosts:
+            logger.warning(f"[{self.array_name}] No volumes/hosts collected — keeping existing data")
+            return True
+
         try:
             with get_db_cursor() as cursor:
-                # Delete old data for this array
-                cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
-                cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?", (self.array_name,))
+                # Only delete if we have replacement data
+                if volumes:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
+                if hosts:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?", (self.array_name,))
 
                 # Insert volumes
-                for v in data.get("volumes", {}).values():
+                for v in volumes.values():
                     cursor.execute(
                         f"""INSERT INTO {SCHEMA}.volumes_cache (
                             array_name, vendor, volume_name, size, used,

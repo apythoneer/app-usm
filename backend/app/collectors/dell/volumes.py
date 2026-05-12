@@ -152,11 +152,20 @@ class DellVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        volumes = data.get("volumes", {})
+        hosts = data.get("hosts", {})
+
+        # Guard: keep existing data when collection returned nothing
+        if not volumes and not hosts:
+            logger.warning(f"[{self.array_name}] No volumes/hosts collected — keeping existing data")
+            return True
+
         try:
             with get_db_cursor() as cursor:
-                cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
-                               (self.array_name,))
-                for v in data.get("volumes", {}).values():
+                if volumes:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
+                                   (self.array_name,))
+                for v in volumes.values():
                     cursor.execute(
                         f"""INSERT INTO {SCHEMA}.volumes_cache (
                             array_name, vendor, volume_name, size, used,
@@ -167,9 +176,10 @@ class DellVolumesCollector(BaseCollector):
                          v.get("data_reduction", 1), v.get("serial", "")),
                     )
 
-                cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
-                               (self.array_name,))
-                for h in data.get("hosts", {}).values():
+                if hosts:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
+                                   (self.array_name,))
+                for h in hosts.values():
                     cursor.execute(
                         f"""INSERT INTO {SCHEMA}.hosts_cache (
                             array_name, vendor, host_name, wwn, iqn, nqn,
