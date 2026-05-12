@@ -43,27 +43,20 @@ class HitachiVolumesCollector(BaseCollector):
     def collect(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {"volumes": {}, "hosts": {}}
 
-        # Get LDEVs (volumes) with pagination — VSP SVP limits response size
-        # Paginate in batches of 500 to avoid timeouts on large arrays (5000+ LDEVs)
+        # Get LDEVs (volumes) — try single request first (works for arrays < 4000 LDEVs)
+        # Fall back to getting ALL ldevs without filter for very large arrays
         all_ldevs = []
-        start_ldev = 0
-        page_size = 500
-        max_pages = 30  # safety limit: 15,000 LDEVs max
-        for page in range(max_pages):
-            params = {"count": page_size, "ldevOption": "defined"}
-            if start_ldev > 0:
-                params["startLdevId"] = start_ldev
-            resp = self.client.get("ldevs", params=params, timeout=120)
-            if not resp or not resp.get("data"):
-                break
-            batch = resp["data"]
-            all_ldevs.extend(batch)
-            logger.debug(f"[{self.array_name}] LDEV page {page+1}: {len(batch)} items (total: {len(all_ldevs)})")
-            if len(batch) < page_size:
-                break  # last page
-            # Next page starts after the last LDEV ID in this batch
-            last_id = batch[-1].get("ldevId", 0)
-            start_ldev = last_id + 1
+        resp = self.client.get("ldevs", params={"count": 8192, "ldevOption": "defined"}, timeout=180)
+        if resp and resp.get("data"):
+            all_ldevs = resp["data"]
+            logger.info(f"[{self.array_name}] Got {len(all_ldevs)} defined LDEVs in single request")
+        else:
+            # Single request failed/timed out — try without ldevOption filter with smaller count
+            logger.info(f"[{self.array_name}] Defined LDEV query failed, trying unfiltered...")
+            resp = self.client.get("ldevs", params={"count": 8192}, timeout=180)
+            if resp and resp.get("data"):
+                all_ldevs = resp["data"]
+                logger.info(f"[{self.array_name}] Got {len(all_ldevs)} total LDEVs (unfiltered)")
 
         if all_ldevs:
             for ldev in all_ldevs:
