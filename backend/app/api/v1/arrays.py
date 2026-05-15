@@ -75,6 +75,15 @@ def _fetch_array(array_name: str) -> Optional[dict]:
 
 
 def _fetch_fleet_stats() -> dict:
+    # Try SQLite cache first (fast local read)
+    try:
+        from app.db.cache import fetch_fleet_stats as _cache_fleet
+        cached = _cache_fleet()
+        if cached and cached.get("total_arrays", 0) > 0:
+            return cached
+    except Exception:
+        pass
+    # Fallback to SQL Server
     with get_db_cursor() as cursor:
         # Combine all stats into a single query using NOLOCK to avoid blocking
         # during concurrent collector writes. This prevents query timeouts.

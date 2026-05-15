@@ -110,6 +110,81 @@ class BaseCollector(ABC):
         """Optional cleanup — override if needed."""
         pass
 
+    def _write_to_cache(self, data: Dict[str, Any]):
+        """Write collected data to SQLite cache. Override in subclasses for custom logic."""
+        from app.db.cache import upsert_metrics, get_cache_cursor
+        import json
+
+        if self.COLLECTOR_TYPE == "metrics":
+            # Build metrics row from collected data
+            cache_row = {
+                "array_name": data.get("array_name", self.array_name),
+                "vendor": data.get("vendor", self.VENDOR),
+                "purity_version": data.get("purity_version") or data.get("firmware_version"),
+                "read_latency_us": data.get("read_latency_us"),
+                "write_latency_us": data.get("write_latency_us"),
+                "read_iops": data.get("read_iops"),
+                "write_iops": data.get("write_iops"),
+                "read_bandwidth": data.get("read_bandwidth"),
+                "write_bandwidth": data.get("write_bandwidth"),
+                "capacity_total": data.get("capacity_total"),
+                "capacity_used": data.get("capacity_used"),
+                "capacity_used_pct": data.get("capacity_used_pct"),
+                "data_reduction": data.get("data_reduction"),
+                "total_reduction": data.get("total_reduction"),
+                "shared_space": data.get("shared_space"),
+                "snapshot_space": data.get("snapshot_space"),
+                "volume_space": data.get("volume_space"),
+                "array_status": data.get("array_status"),
+                "controller_status": data.get("controller_status"),
+                "network_status": data.get("network_status"),
+                "uptime_seconds": data.get("uptime_seconds"),
+                "uptime_str": data.get("uptime_str"),
+                "last_reboot": data.get("last_reboot"),
+                "reboot_count": data.get("reboot_count", 0),
+                "collected_at": data.get("collected_at"),
+            }
+            upsert_metrics(cache_row)
+
+        elif self.COLLECTOR_TYPE == "volumes":
+            volumes = data.get("volumes", {})
+            hosts = data.get("hosts", {})
+            if not volumes and not hosts:
+                return
+            try:
+                with get_cache_cursor() as cur:
+                    if volumes:
+                        cur.execute("DELETE FROM volumes_cache WHERE array_name=?", (self.array_name,))
+                        for v in volumes.values():
+                            cur.execute(
+                                """INSERT OR REPLACE INTO volumes_cache
+                                (array_name, vendor, volume_name, size, used, data_reduction,
+                                 total_reduction, snapshots, created, serial, hosts, host_groups,
+                                 protection_groups, last_updated)
+                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+                                (self.array_name, self.VENDOR, v.get("volume_name", ""),
+                                 v.get("size", 0), v.get("used", 0),
+                                 v.get("data_reduction", 1), v.get("total_reduction"),
+                                 v.get("snapshots", 0), v.get("created", ""),
+                                 v.get("serial", ""),
+                                 json.dumps(v.get("hosts", [])),
+                                 json.dumps(v.get("host_groups", [])),
+                                 json.dumps(v.get("protection_groups", []))))
+                    if hosts:
+                        cur.execute("DELETE FROM hosts_cache WHERE array_name=?", (self.array_name,))
+                        for h in hosts.values():
+                            cur.execute(
+                                """INSERT OR REPLACE INTO hosts_cache
+                                (array_name, vendor, host_name, wwn, iqn, nqn,
+                                 host_group, volumes, last_updated)
+                                VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
+                                (self.array_name, self.VENDOR, h.get("host_name", ""),
+                                 h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
+                                 h.get("host_group", ""),
+                                 json.dumps(h.get("volumes", []))))
+            except Exception as e:
+                self.logger.debug(f"SQLite volumes/hosts cache failed: {e}")
+
     def run(self) -> CollectorResult:
         """Execute the full collection cycle. Called by the scheduler."""
         result = CollectorResult(self.array_name, self.VENDOR, self.COLLECTOR_TYPE)
@@ -127,6 +202,12 @@ class BaseCollector(ABC):
 
             if not self.save(data, result):
                 raise RuntimeError("save() returned False")
+
+            # Dual-write to SQLite cache (non-fatal)
+            try:
+                self._write_to_cache(data)
+            except Exception as ce:
+                self.logger.debug(f"SQLite cache write skipped: {ce}")
 
             result.success = True
             self.logger.info(

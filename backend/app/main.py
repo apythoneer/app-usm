@@ -45,6 +45,13 @@ async def lifespan(app: FastAPI):
         from app.api.v1.settings import load_persisted_settings
         load_persisted_settings()
 
+    # Initialize SQLite read cache
+    from app.db.cache import init_cache
+    try:
+        init_cache()
+    except Exception as e:
+        logger.warning(f"SQLite cache init failed (non-fatal): {e}")
+
     scheduler = build_scheduler()
     scheduler.start()
     app.state.scheduler = scheduler
@@ -95,10 +102,19 @@ async def health():
     from app.services.keepass import cache_summary
 
     db_ok = await run_in_threadpool(test_connection)
+
+    # SQLite cache stats
+    try:
+        from app.db.cache import cache_stats
+        sqlite_cache = cache_stats()
+    except Exception:
+        sqlite_cache = {}
+
     return {
         "status": "healthy" if db_ok else "degraded",
         "version": settings.app_version,
         "database": db_ok,
+        "sqlite_cache": sqlite_cache,
         "collectors": CollectorRegistry.summary(),
         "credential_cache": cache_summary(),
     }
