@@ -38,7 +38,7 @@ function VendorBadge({ vendor }: { vendor: string }) {
 
 // ── Cloud provider icons ─────────────────────────────────────────────────────
 
-const CLOUD_ICONS: Record<string, string> = {
+const PROVIDER_ICONS: Record<string, string> = {
   aws: '☁️',
   azure: '🔷',
   gcp: '🟡',
@@ -49,12 +49,22 @@ const CLOUD_ICONS: Record<string, string> = {
 function isCloudGroup(group?: string | null): boolean {
   if (!group) return false
   const g = group.toLowerCase()
-  return g === 'aws' || g === 'azure' || g === 'gcp'
+  return g.startsWith('cloud-') || g === 'aws' || g === 'azure' || g === 'gcp'
 }
 
 function getCloudProvider(group?: string | null): string {
-  if (!group) return ''
-  return group.toLowerCase()
+  if (!group) return 'other'
+  const g = group.toLowerCase()
+  if (g.startsWith('cloud-aws') || g === 'aws') return 'aws'
+  if (g.startsWith('cloud-azu') || g === 'azure') return 'azure'
+  if (g.startsWith('cloud-gcp') || g === 'gcp') return 'gcp'
+  if (g.startsWith('cloud-')) return 'other'
+  return 'other'
+}
+
+function getDCCode(group?: string | null): string {
+  if (!group) return 'Unknown'
+  return group  // Return the raw DC code (ODC, IDC, DDC, etc.)
 }
 
 // ── Fleet stat card (clickable) ──────────────────────────────────────────────
@@ -347,7 +357,7 @@ function CloudProviderSection({ provider, arrays, onDblClick }: {
   provider: string; arrays: ArraySummary[]; onDblClick: (name: string) => void
 }) {
   const [open, setOpen] = useState(true)
-  const icon = CLOUD_ICONS[provider] ?? '☁️'
+  const icon = PROVIDER_ICONS[provider] ?? '☁️'
   const displayName = provider.toUpperCase()
 
   return (
@@ -382,22 +392,27 @@ function DeploymentSection({ type, arrays, onDblClick }: {
   const [open, setOpen] = useState(true)
   const isCloud = type === 'cloud'
 
-  // For cloud, group by provider
-  const cloudGroups = useMemo(() => {
-    if (!isCloud) return {}
-    return arrays.reduce<Record<string, ArraySummary[]>>((acc, arr) => {
-      const provider = getCloudProvider(arr.group) || 'other'
-      ;(acc[provider] = acc[provider] || []).push(arr)
-      return acc
-    }, {})
+  // For cloud, group by provider. For on-prem, group by DC.
+  const subGroups = useMemo(() => {
+    if (isCloud) {
+      return arrays.reduce<Record<string, ArraySummary[]>>((acc, arr) => {
+        const provider = getCloudProvider(arr.group)
+        ;(acc[provider] = acc[provider] || []).push(arr)
+        return acc
+      }, {})
+    } else {
+      return arrays.reduce<Record<string, ArraySummary[]>>((acc, arr) => {
+        const dc = getDCCode(arr.group)
+        ;(acc[dc] = acc[dc] || []).push(arr)
+        return acc
+      }, {})
+    }
   }, [arrays, isCloud])
 
   const icon = isCloud ? Cloud : Building2
   const Icon = icon
   const label = isCloud ? 'Cloud' : 'On-Premises'
-  const sublabel = isCloud
-    ? Object.keys(cloudGroups).map(p => `${p.toUpperCase()}: ${cloudGroups[p].length}`).join(' · ')
-    : `${arrays.length} arrays`
+  const sublabel = Object.keys(subGroups).map(k => `${k}: ${subGroups[k].length}`).join(' · ')
 
   return (
     <div className="mb-4">
@@ -416,22 +431,16 @@ function DeploymentSection({ type, arrays, onDblClick }: {
 
       {open && (
         <div className="mt-2">
-          {isCloud ? (
-            // Cloud: sub-group by provider
-            Object.entries(cloudGroups)
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([provider, providerArrays]) => (
-                <CloudProviderSection
-                  key={provider}
-                  provider={provider}
-                  arrays={providerArrays}
-                  onDblClick={onDblClick}
-                />
-              ))
-          ) : (
-            // On-Prem: flat table
-            <ArrayTable arrays={arrays} onDblClick={onDblClick} />
-          )}
+          {Object.entries(subGroups)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, groupArrays]) => (
+              <CloudProviderSection
+                key={key}
+                provider={key}
+                arrays={groupArrays as ArraySummary[]}
+                onDblClick={onDblClick}
+              />
+            ))}
         </div>
       )}
     </div>
