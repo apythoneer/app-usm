@@ -327,19 +327,7 @@ async def verify_array(array_name: str):
         # Step 2: Live API connectivity — vendor-specific
         if result.keepass_ok:
             try:
-                if vendor == "netapp":
-                    from app.collectors.netapp.client import NetAppClient
-                    client = NetAppClient(array_name, cred_key)
-                    if client.authenticate():
-                        result.connectivity_ok = True
-                        info = client.get("cluster")
-                        if info:
-                            ver = info.get("version", {})
-                            result.version = ver.get("full", ver.get("generation", ""))
-                        client.disconnect()
-                    else:
-                        result.error = "Authentication failed — check username/password"
-                else:
+                if vendor == "pure":
                     from app.collectors.pure.client import PureClient
                     client = PureClient(array_name)
                     if client.authenticate():
@@ -351,6 +339,74 @@ async def verify_array(array_name: str):
                         client.disconnect()
                     else:
                         result.error = "Authentication failed — check API token"
+
+                elif vendor == "netapp":
+                    from app.collectors.netapp.client import NetAppClient
+                    client = NetAppClient(array_name, cred_key)
+                    if client.authenticate():
+                        result.connectivity_ok = True
+                        info = client.get("cluster")
+                        if info:
+                            ver = info.get("version", {})
+                            result.version = ver.get("full", ver.get("generation", ""))
+                        client.disconnect()
+                    else:
+                        result.error = "Authentication failed — check username/password"
+
+                elif vendor == "hpe":
+                    from app.collectors.hpe.client import HPEClient
+                    client = HPEClient(array_name, cred_key)
+                    if client.authenticate():
+                        result.connectivity_ok = True
+                        info = client.get("system")
+                        if info and info.get("members"):
+                            sys_info = info["members"][0] if isinstance(info["members"], list) else info["members"]
+                            result.version = sys_info.get("systemVersion", sys_info.get("softwareVersion", ""))
+                        client.disconnect()
+                    else:
+                        result.error = "Authentication failed — check username/password"
+
+                elif vendor == "hitachi":
+                    from app.collectors.hitachi.client import HitachiClient
+                    client = HitachiClient(array_name, cred_key)
+                    if client.authenticate():
+                        result.connectivity_ok = True
+                        info = client.get("configuration/version")
+                        if info:
+                            result.version = info.get("productName", "") + " " + info.get("controllerVersion", "")
+                        client.disconnect()
+                    else:
+                        result.error = "Authentication failed — check username/password"
+
+                elif vendor == "dell":
+                    from app.collectors.dell.client import DellUnityClient
+                    client = DellUnityClient(array_name, cred_key)
+                    if client.authenticate():
+                        result.connectivity_ok = True
+                        info = client.get("types/basicSystemInfo/instances")
+                        if info and info.get("entries"):
+                            content = info["entries"][0].get("content", {})
+                            result.version = content.get("softwareVersion", "")
+                        client.disconnect()
+                    else:
+                        result.error = "Authentication failed — check username/password"
+
+                elif vendor == "oracle":
+                    from app.collectors.oracle.client import OracleZFSClient
+                    client = OracleZFSClient(array_name, cred_key)
+                    if client.authenticate():
+                        result.connectivity_ok = True
+                        info = client.get("hardware/v1/chassis")
+                        if info and info.get("chassis"):
+                            ch = info["chassis"][0] if isinstance(info["chassis"], list) else info["chassis"]
+                            result.version = ch.get("product", "")
+                        client.disconnect()
+                    else:
+                        result.error = "Authentication failed — check username/password"
+
+                else:
+                    result.error = f"Verify not implemented for vendor '{vendor}'"
+
             except Exception as e:
                 result.error = f"API: {e}"
 

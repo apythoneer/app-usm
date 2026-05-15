@@ -4,10 +4,11 @@ import { Check, X, RefreshCw, Play, Pause, RotateCw, Plus, Trash2, Zap, Pencil, 
 import { apiClient } from '@/api/client'
 import { settingsApi, managedArraysApi } from '@/api/settings'
 import type { DBTableInfo, ManagedArray, ArrayVerifyResult, Vendor } from '@/api/types'
+import LogsTab from '@/pages/Logs'
 
 // ── Tab nav ───────────────────────────────────────────────────────────────────
 
-const TABS = ['General', 'Arrays', 'Notifications', 'Collection', 'Database', 'Scheduler'] as const
+const TABS = ['General', 'Arrays', 'Notifications', 'Collection', 'Database', 'Scheduler', 'Logs'] as const
 type Tab = typeof TABS[number]
 
 function TabNav({ active, setActive }: { active: Tab; setActive: (t: Tab) => void }) {
@@ -333,13 +334,14 @@ function SchedulerTab({ scheduler, refetchScheduler }: { scheduler: any; refetch
 
 // ── Add Array Modal ──────────────────────────────────────────────────────────
 
-const GROUP_OPTIONS = ['azure', 'aws', 'gcp', 'on-prem']
-const VENDOR_OPTIONS: Vendor[] = ['pure', 'netapp']
+const CLOUD_PROVIDERS = ['aws', 'azure', 'gcp'] as const
+const VENDOR_OPTIONS: Vendor[] = ['pure', 'netapp', 'hpe', 'hitachi', 'dell', 'oracle']
 
 function AddArrayModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
   const [name, setName] = useState('')
   const [vendor, setVendor] = useState<Vendor>('pure')
-  const [group, setGroup] = useState('')
+  const [deployType, setDeployType] = useState<'on-prem' | 'cloud'>('on-prem')
+  const [cloudProvider, setCloudProvider] = useState('')
   const [credKey, setCredKey] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -359,7 +361,7 @@ function AddArrayModal({ onClose, onAdded }: { onClose: () => void; onAdded: () 
       await managedArraysApi.add({
         array_name: name.trim(),
         vendor,
-        group_label: group || undefined,
+        group_label: deployType === 'cloud' ? cloudProvider : 'On-Premises',
         cred_key: credKey.trim() || undefined,
       })
       onAdded()
@@ -410,18 +412,32 @@ function AddArrayModal({ onClose, onAdded }: { onClose: () => void; onAdded: () 
               </select>
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-gray-500">Group</label>
+              <label className="text-xs text-gray-500">Deployment</label>
               <select
-                value={group}
-                onChange={(e) => setGroup(e.target.value)}
+                value={deployType}
+                onChange={(e) => setDeployType(e.target.value as 'on-prem' | 'cloud')}
                 className="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500"
                 disabled={!!result}
               >
-                <option value="">None</option>
-                {GROUP_OPTIONS.map((g) => <option key={g} value={g}>{g}</option>)}
+                <option value="on-prem">On-Prem</option>
+                <option value="cloud">Cloud</option>
               </select>
             </div>
           </div>
+          {deployType === 'cloud' && (
+          <div className="space-y-1">
+            <label className="text-xs text-gray-500">Cloud Provider</label>
+            <select
+              value={cloudProvider}
+              onChange={(e) => setCloudProvider(e.target.value)}
+              className="w-full bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:border-brand-500"
+              disabled={!!result}
+            >
+              <option value="">Select provider…</option>
+              {CLOUD_PROVIDERS.map((p) => <option key={p} value={p}>{p.toUpperCase()}</option>)}
+            </select>
+          </div>
+          )}
 
           <div className="space-y-1">
             <label className="text-xs text-gray-500">
@@ -870,6 +886,7 @@ export default function Settings() {
           {activeTab === 'Collection'    && <CollectionTab settings={settings} scheduler={scheduler} />}
           {activeTab === 'Database'      && <DatabaseTab />}
           {activeTab === 'Scheduler'     && <SchedulerTab scheduler={scheduler} refetchScheduler={refetchScheduler} />}
+          {activeTab === 'Logs'          && <LogsTab />}
         </>
       )}
     </div>

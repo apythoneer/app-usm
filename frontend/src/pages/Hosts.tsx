@@ -1,33 +1,66 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { X, Copy, Download, ChevronLeft, ChevronRight, Search, Filter } from 'lucide-react'
-import { hostsApi } from '@/api/hosts'
+import { Search, Filter, ChevronUp, ChevronDown, X, Download, Copy, Check } from 'lucide-react'
 import { arraysApi } from '@/api/arrays'
-import type { Host, ArraySummary } from '@/api/types'
+import { hostsApi } from '@/api/hosts'
+import type { ArraySummary, Host } from '@/api/types'
 
 const PAGE_SIZE = 50
 
-// ── Host drilldown modal ──────────────────────────────────────────────────────
+// ── Sort header ───────────────────────────────────────────────────────────────
+
+function SortHeader({ label, field, sortBy, sortDir, onSort, align = 'left' }: {
+  label: string; field: string; sortBy: string; sortDir: string
+  onSort: (field: string) => void; align?: 'left' | 'right'
+}) {
+  const active = sortBy === field
+  return (
+    <th
+      className={`px-4 py-2 text-xs text-gray-500 uppercase tracking-wide cursor-pointer hover:text-gray-300 select-none ${
+        align === 'right' ? 'text-right' : 'text-left'
+      }`}
+      onClick={() => onSort(field)}
+    >
+      <span className="inline-flex items-center gap-1">
+        {label}
+        {active ? (
+          sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />
+        ) : (
+          <span className="w-3" />
+        )}
+      </span>
+    </th>
+  )
+}
+
+// ── Vendor badge ──────────────────────────────────────────────────────────────
+
+const VENDOR_COLORS: Record<string, string> = {
+  pure:    'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  netapp:  'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  hpe:     'bg-green-500/10 text-green-400 border-green-500/20',
+  hitachi: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  dell:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  oracle:  'bg-red-500/10 text-red-400 border-red-500/20',
+}
+
+// ── Host detail modal ─────────────────────────────────────────────────────────
 
 function HostModal({ host, onClose }: { host: Host; onClose: () => void }) {
   function formatText() {
-    return [
-      `Host:          ${host.host_name}`,
-      `Array:         ${host.array_name}`,
-      `Vendor:        ${host.vendor}`,
-      `Host Group:    ${host.host_group || '—'}`,
-      ``,
-      `iSCSI IQN:     ${host.iqn || '—'}`,
-      `FC WWN:        ${host.wwn || '—'}`,
-      `NVMe NQN:      ${host.nqn || '—'}`,
-      ``,
-      `Connected Volumes (${(host.volumes ?? []).length}):`,
+    const lines = [
+      `Host: ${host.host_name}`,
+      `Array: ${host.array_name}`,
+      `Vendor: ${host.vendor}`,
+      `Host Group: ${host.host_group || 'None'}`,
+      `IQN: ${host.iqn || 'None'}`,
+      `WWN: ${host.wwn || 'None'}`,
+      `NQN: ${host.nqn || 'None'}`,
+      '',
+      `Volumes (${(host.volumes ?? []).length}):`,
       ...(host.volumes ?? []).map((v) => `  - ${v}`),
-    ].join('\n')
-  }
-
-  function handleCopy() {
-    navigator.clipboard.writeText(formatText())
+    ]
+    return lines.join('\n')
   }
 
   function handleDownload() {
@@ -35,102 +68,63 @@ function HostModal({ host, onClose }: { host: Host; onClose: () => void }) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${host.host_name.replace(/[^a-z0-9]/gi, '_')}.txt`
+    a.download = `${host.array_name}_${host.host_name}.txt`
     a.click()
     URL.revokeObjectURL(url)
   }
 
+  const [copied, setCopied] = useState(false)
+  function handleCopy() {
+    navigator.clipboard.writeText(formatText())
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={onClose}>
-      <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-xl mx-4 max-h-[90vh] overflow-y-auto shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto shadow-2xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
           <div>
-            <h2 className="text-white font-semibold font-mono">{host.host_name}</h2>
+            <h2 className="text-white font-semibold text-lg truncate">{host.host_name}</h2>
             <p className="text-xs text-gray-500 mt-0.5">{host.array_name} · {host.vendor}</p>
           </div>
-          <div className="flex items-center gap-2 ml-4">
-            <button onClick={handleCopy} className="text-gray-400 hover:text-white p-1.5 rounded hover:bg-gray-700" title="Copy to clipboard">
-              <Copy size={16} />
+          <div className="flex items-center gap-2">
+            <button onClick={handleCopy} className="text-gray-400 hover:text-white p-1" title="Copy">
+              {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
             </button>
-            <button onClick={handleDownload} className="text-gray-400 hover:text-white p-1.5 rounded hover:bg-gray-700" title="Download .txt">
+            <button onClick={handleDownload} className="text-gray-400 hover:text-white p-1" title="Download">
               <Download size={16} />
             </button>
-            <button onClick={onClose} className="text-gray-400 hover:text-white p-1.5 rounded hover:bg-gray-700">
-              <X size={16} />
-            </button>
+            <button onClick={onClose} className="text-gray-400 hover:text-white p-1"><X size={18} /></button>
           </div>
         </div>
-
         <div className="p-4 space-y-4">
-          {/* Connectivity map */}
-          <div className="bg-gray-800 rounded-lg p-3">
-            <p className="text-xs text-gray-500 uppercase tracking-wide mb-3">Connectivity Map</p>
-            <div className="font-mono text-xs space-y-0.5">
-              <div className="flex items-center gap-1.5 text-brand-400">
-                <span>◆</span>
-                <span className="font-semibold">{host.array_name}</span>
-                <span className="text-gray-600 text-[10px] ml-1">array</span>
-              </div>
-              <div className="flex items-start gap-0">
-                <span className="text-gray-600 w-4 flex-shrink-0">└─</span>
-                <div className="flex items-center gap-1.5 text-green-400">
-                  <span>▸</span>
-                  <span>{host.host_name}</span>
-                  <span className="text-gray-600 text-[10px]">host</span>
-                </div>
-              </div>
-              {(host.volumes ?? []).length === 0 ? (
-                <div className="flex items-center gap-0">
-                  <span className="text-gray-700 w-8 flex-shrink-0">   └─</span>
-                  <span className="text-gray-600 italic">no connected volumes</span>
-                </div>
-              ) : (
-                (host.volumes ?? []).map((v, idx) => {
-                  const isLast = idx === (host.volumes ?? []).length - 1
-                  return (
-                    <div key={v} className="flex items-center gap-0">
-                      <span className="text-gray-700 w-8 flex-shrink-0">   {isLast ? '└─' : '├─'}</span>
-                      <span className="text-cyan-400">{v}</span>
-                      <span className="text-gray-600 text-[10px] ml-1.5">volume</span>
-                    </div>
-                  )
-                })
-              )}
-            </div>
-          </div>
-
-          {/* Identity */}
-          <div className="bg-gray-800 rounded-lg p-3">
-            <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">Identity</p>
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-              <dt className="text-gray-500">Host Group</dt>
-              <dd className="text-white">{host.host_group || '—'}</dd>
-              <dt className="text-gray-500">iSCSI IQN</dt>
-              <dd className="text-white font-mono text-xs break-all">{host.iqn || '—'}</dd>
-              <dt className="text-gray-500">FC WWN</dt>
-              <dd className="text-white font-mono text-xs break-all">{host.wwn || '—'}</dd>
-              <dt className="text-gray-500">NVMe NQN</dt>
-              <dd className="text-white font-mono text-xs break-all">{host.nqn || '—'}</dd>
-            </dl>
-          </div>
-
-          {/* Connected volumes */}
-          <div className="bg-gray-800 rounded-lg p-3">
-            <p className="text-xs text-gray-500 uppercase tracking-wide mb-2">
-              Connected Volumes ({(host.volumes ?? []).length})
-            </p>
+          {/* Volumes */}
+          <div>
+            <h4 className="text-xs text-gray-500 uppercase tracking-wide mb-2">
+              Mapped Volumes ({(host.volumes ?? []).length})
+            </h4>
             {(host.volumes ?? []).length === 0 ? (
-              <p className="text-sm text-gray-500">No connected volumes</p>
+              <p className="text-gray-600 text-xs">No volumes mapped</p>
             ) : (
-              <ul className="space-y-1 max-h-60 overflow-y-auto">
-                {(host.volumes ?? []).map((v) => (
-                  <li key={v} className="text-sm text-gray-300 font-mono py-0.5">{v}</li>
-                ))}
-              </ul>
+              (host.volumes ?? []).map((v, idx) => (
+                <span key={idx} className="inline-block mr-2 mb-1 px-2 py-0.5 bg-gray-800 text-gray-300 rounded text-xs font-mono">
+                  {v}
+                </span>
+              ))
             )}
+          </div>
+
+          {/* Connection details */}
+          <div className="bg-gray-800 rounded-lg p-3">
+            <h4 className="text-xs text-gray-500 uppercase tracking-wide mb-2">Connection Details</h4>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+              <dt className="text-gray-500">Host Group</dt><dd className="text-gray-200">{host.host_group || '—'}</dd>
+              <dt className="text-gray-500">iSCSI IQN</dt><dd className="text-gray-200 font-mono text-xs truncate">{host.iqn || '—'}</dd>
+              <dt className="text-gray-500">FC WWN</dt><dd className="text-gray-200 font-mono text-xs truncate">{host.wwn || '—'}</dd>
+              <dt className="text-gray-500">NVMe NQN</dt><dd className="text-gray-200 font-mono text-xs truncate">{host.nqn || '—'}</dd>
+              <dt className="text-gray-500">Last Updated</dt><dd className="text-gray-200">{host.last_updated || '—'}</dd>
+            </dl>
           </div>
         </div>
       </div>
@@ -138,7 +132,7 @@ function HostModal({ host, onClose }: { host: Host; onClose: () => void }) {
   )
 }
 
-// ── Pagination controls ───────────────────────────────────────────────────────
+// ── Pagination ────────────────────────────────────────────────────────────────
 
 function Pagination({ total, offset, limit, onChange }: {
   total: number; offset: number; limit: number; onChange: (offset: number) => void
@@ -147,57 +141,40 @@ function Pagination({ total, offset, limit, onChange }: {
   const currentPage = Math.floor(offset / limit) + 1
   if (totalPages <= 1) return null
 
+  function goTo(page: number) { onChange((page - 1) * limit) }
+
   return (
-    <div className="flex items-center justify-between pt-3 border-t border-gray-700/50">
-      <p className="text-xs text-gray-500">
-        Showing {offset + 1}–{Math.min(offset + limit, total)} of {total.toLocaleString()}
-      </p>
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => onChange(Math.max(0, offset - limit))}
-          disabled={offset === 0}
-          className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          <ChevronLeft size={16} />
-        </button>
+    <div className="flex items-center justify-between py-3 px-1 border-t border-gray-800 mt-2">
+      <span className="text-xs text-gray-500">
+        {offset + 1}–{Math.min(offset + limit, total)} of {total.toLocaleString()}
+      </span>
+      <div className="flex gap-1">
         {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
           let page: number
-          if (totalPages <= 7) {
-            page = i + 1
-          } else if (currentPage <= 4) {
-            page = i + 1
-          } else if (currentPage >= totalPages - 3) {
-            page = totalPages - 6 + i
-          } else {
-            page = currentPage - 3 + i
-          }
+          if (totalPages <= 7) page = i + 1
+          else if (currentPage <= 4) page = i + 1
+          else if (currentPage >= totalPages - 3) page = totalPages - 6 + i
+          else page = currentPage - 3 + i
           return (
             <button
               key={page}
-              onClick={() => onChange((page - 1) * limit)}
-              className={`min-w-[28px] h-7 rounded text-xs font-medium ${
+              onClick={() => goTo(page)}
+              className={`text-xs px-2.5 py-1 rounded ${
                 page === currentPage
-                  ? 'bg-brand-600 text-white'
-                  : 'text-gray-400 hover:bg-gray-700 hover:text-white'
+                  ? 'bg-brand-600/30 text-brand-400'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
               }`}
             >
               {page}
             </button>
           )
         })}
-        <button
-          onClick={() => onChange(Math.min((totalPages - 1) * limit, offset + limit))}
-          disabled={offset + limit >= total}
-          className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          <ChevronRight size={16} />
-        </button>
       </div>
     </div>
   )
 }
 
-// ── Hosts page ────────────────────────────────────────────────────────────────
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Hosts() {
   const [search, setSearch] = useState('')
@@ -205,9 +182,10 @@ export default function Hosts() {
   const [arrayFilter, setArrayFilter] = useState('')
   const [vendorFilter, setVendorFilter] = useState('')
   const [offset, setOffset] = useState(0)
+  const [sortBy, setSortBy] = useState('')
+  const [sortDir, setSortDir] = useState('asc')
   const [selectedHost, setSelectedHost] = useState<Host | null>(null)
 
-  // Debounce search
   useEffect(() => {
     const t = setTimeout(() => { setDebouncedSearch(search); setOffset(0) }, 300)
     return () => clearTimeout(t)
@@ -215,30 +193,35 @@ export default function Hosts() {
 
   useEffect(() => { setOffset(0) }, [arrayFilter, vendorFilter])
 
-  // Fetch array list for dropdown
   const { data: arrays = [] } = useQuery<ArraySummary[]>({
     queryKey: ['arrays'],
     queryFn: () => arraysApi.list(),
     staleTime: 60_000,
   })
 
-  const uniqueArrays = useMemo(() =>
-    [...new Set(arrays.map((a) => a.array_name))].sort(),
-    [arrays]
-  )
-  const uniqueVendors = useMemo(() =>
-    [...new Set(arrays.map((a) => a.vendor))].sort(),
-    [arrays]
-  )
+  const uniqueArrays = useMemo(() => [...new Set(arrays.map((a) => a.array_name))].sort(), [arrays])
+  const uniqueVendors = useMemo(() => [...new Set(arrays.map((a) => a.vendor))].sort(), [arrays])
+
+  function handleSort(field: string) {
+    if (sortBy === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortBy(field)
+      setSortDir('asc')
+    }
+    setOffset(0)
+  }
 
   const { data: result, isLoading } = useQuery({
-    queryKey: ['hosts', arrayFilter, debouncedSearch, vendorFilter, offset],
+    queryKey: ['hosts', arrayFilter, debouncedSearch, vendorFilter, offset, sortBy, sortDir],
     queryFn: () => hostsApi.list({
       array_name: arrayFilter || undefined,
       search: debouncedSearch || undefined,
       vendor: vendorFilter || undefined,
       limit: PAGE_SIZE,
       offset,
+      sort_by: sortBy || undefined,
+      sort_dir: sortDir,
     }),
   })
 
@@ -247,7 +230,6 @@ export default function Hosts() {
 
   return (
     <div className="space-y-4">
-      {/* Header + filters */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <h2 className="text-xl font-semibold text-white">
           Hosts <span className="text-gray-500 text-sm ml-2">({total.toLocaleString()})</span>
@@ -261,9 +243,7 @@ export default function Hosts() {
               className="bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-lg pl-8 pr-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
             >
               <option value="">All vendors</option>
-              {uniqueVendors.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
+              {uniqueVendors.map((v) => <option key={v} value={v}>{v}</option>)}
             </select>
           </div>
           <select
@@ -272,9 +252,7 @@ export default function Hosts() {
             className="bg-gray-800 border border-gray-700 text-sm text-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500 w-52 appearance-none cursor-pointer"
           >
             <option value="">All arrays</option>
-            {uniqueArrays.map((a) => (
-              <option key={a} value={a}>{a}</option>
-            ))}
+            {uniqueArrays.map((a) => <option key={a} value={a}>{a}</option>)}
           </select>
           <div className="relative">
             <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500" />
@@ -299,10 +277,10 @@ export default function Hosts() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-700/50 bg-gray-800/40">
-                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Host</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Array</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Vendor</th>
-                  <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Host Group</th>
+                  <SortHeader label="Host" field="host_name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <SortHeader label="Array" field="array_name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <SortHeader label="Vendor" field="vendor" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                  <SortHeader label="Host Group" field="host_group" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                   <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">iSCSI IQN</th>
                   <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">FC WWN</th>
                   <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Volumes</th>
@@ -318,10 +296,8 @@ export default function Hosts() {
                     <td className="px-4 py-2 font-mono text-xs text-gray-200 hover:text-brand-400">{h.host_name}</td>
                     <td className="px-4 py-2 text-xs text-gray-400">{h.array_name}</td>
                     <td className="px-4 py-2 text-xs">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase ${
-                        h.vendor === 'pure' ? 'bg-orange-500/10 text-orange-400 border border-orange-500/20' :
-                        h.vendor === 'netapp' ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                        'bg-gray-500/10 text-gray-400 border border-gray-500/20'
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase border ${
+                        VENDOR_COLORS[h.vendor] ?? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
                       }`}>{h.vendor}</span>
                     </td>
                     <td className="px-4 py-2 text-xs text-gray-400">{h.host_group || '—'}</td>

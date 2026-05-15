@@ -2,7 +2,7 @@ import { apiClient } from './client'
 import type { Host, PaginatedResponse } from './types'
 
 export const hostsApi = {
-  list: (params?: { array_name?: string; search?: string; vendor?: string; limit?: number; offset?: number }) =>
+  list: (params?: { array_name?: string; search?: string; vendor?: string; limit?: number; offset?: number; sort_by?: string; sort_dir?: string }) =>
     apiClient.get<PaginatedResponse<Host>>('/hosts', { params }).then((r) => r.data),
 
   groups: (array_name?: string) =>

@@ -6,7 +6,7 @@ import Hosts from '@/pages/Hosts'
 import Alerts from '@/pages/Alerts'
 import Analytics from '@/pages/Analytics'
 import Settings from '@/pages/Settings'
-import Logs from '@/pages/Logs'
+// Logs page is now a tab inside Settings — /logs redirects to /settings
 import NotFound from '@/pages/NotFound'
 import ChatPanel from '@/components/chat/ChatPanel'
 
@@ -22,7 +22,7 @@ export default function App() {
         <Route path="analytics" element={<Analytics />} />
         <Route path="chat" element={<ChatPanel />} />
         <Route path="settings" element={<Settings />} />
-        <Route path="logs"     element={<Logs />} />
+        <Route path="logs" element={<Navigate to="/settings" replace />} />
         <Route path="*" element={<NotFound />} />
       </Route>
     </Routes>

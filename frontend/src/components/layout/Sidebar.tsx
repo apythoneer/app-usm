@@ -12,7 +12,6 @@ const NAV = [
   { to: '/alerts',    icon: Bell,            label: 'Alerts' },
   { to: '/analytics', icon: BarChart2,       label: 'Analytics' },
   { to: '/chat',      icon: MessageSquare,   label: 'Storage AI' },
-  { to: '/logs',      icon: FileText,        label: 'Logs' },
   { to: '/settings',  icon: Settings,        label: 'Settings' },
 ]
 
