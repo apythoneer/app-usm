@@ -573,6 +573,21 @@ function ArraysTab() {
           </h3>
           <div className="flex gap-2">
             <button
+              onClick={async () => {
+                try {
+                  const res = await apiClient.post('/settings/inventory-sync')
+                  const d = res.data as any
+                  alert(`CMS Sync Complete\n\nNew: ${d.added ?? 0}\nUpdated: ${d.updated ?? 0}\nSkipped: ${d.skipped ?? 0}\nTotal in CMS: ${d.total_in_dim ?? '?'}`)
+                  qc.invalidateQueries({ queryKey: ['managed-arrays'] })
+                } catch (e: any) {
+                  alert('Sync failed: ' + (e?.response?.data?.detail || e.message))
+                }
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs border border-gray-600 text-gray-300 hover:bg-gray-800 rounded-lg"
+            >
+              <RefreshCw size={12} /> Sync from CMS
+            </button>
+            <button
               onClick={() => setShowAdd(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-brand-600 hover:bg-brand-700 text-white rounded-lg"
             >
@@ -617,6 +632,7 @@ function ArraysTab() {
                 <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Vendor</th>
                 <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Model</th>
                 <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Site</th>
+                <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Tag</th>
                 <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">KeePass Key</th>
                 <th className="px-3 py-2 text-center text-xs text-gray-500 uppercase tracking-wide">Status</th>
                 <th className="px-3 py-2 text-center text-xs text-gray-500 uppercase tracking-wide">On</th>
@@ -630,6 +646,13 @@ function ArraysTab() {
                   <td className="px-3 py-1.5 text-xs text-gray-400 capitalize">{arr.vendor}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{arr.model || '—'}</td>
                   <td className="px-3 py-1.5 text-xs text-gray-500">{arr.site || '—'}</td>
+                  <td className="px-3 py-1.5 text-xs">
+                    {arr.group_label ? (
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${
+                        arr.group_label.startsWith('Cloud-') ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' : 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                      }`}>{arr.group_label}</span>
+                    ) : <span className="text-gray-600">—</span>}
+                  </td>
                   <td className="px-3 py-1.5 text-xs text-gray-500 font-mono max-w-[180px] truncate" title={arr.cred_key || 'auto'}>
                     {arr.cred_key || <span className="text-gray-600 italic">none</span>}
                   </td>
@@ -734,6 +757,7 @@ function ArraysTab() {
 function EditArrayModal({ arr, onClose, onSaved }: { arr: ManagedArray; onClose: () => void; onSaved: () => void }) {
   const [credKey, setCredKey] = useState(arr.cred_key || '')
   const [fqdn, setFqdn] = useState(arr.array_fqdn || '')
+  const [groupLabel, setGroupLabel] = useState(arr.group_label || '')
   const [saving, setSaving] = useState(false)
   const [kpFilter, setKpFilter] = useState('')
 
@@ -762,6 +786,7 @@ function EditArrayModal({ arr, onClose, onSaved }: { arr: ManagedArray; onClose:
       await managedArraysApi.update(arr.array_name, {
         cred_key: credKey || undefined,
         array_fqdn: fqdn || undefined,
+        group_label: groupLabel || undefined,
       })
       onSaved()
     } finally {
@@ -796,6 +821,47 @@ function EditArrayModal({ arr, onClose, onSaved }: { arr: ManagedArray; onClose:
               placeholder="e.g. array01.corp.intranet"
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-brand-500"
             />
+          </div>
+
+          {/* Tag / Group Label */}
+          <div>
+            <label className="text-xs text-gray-500 block mb-1">Tag / Group (Dashboard grouping)</label>
+            <div className="flex gap-2">
+              <input
+                value={groupLabel}
+                onChange={(e) => setGroupLabel(e.target.value)}
+                placeholder="e.g. ODC, Cloud-AWS-EUS2-2a"
+                className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs text-gray-200 font-mono placeholder-gray-500 focus:outline-none focus:border-brand-500"
+              />
+              <select
+                value=""
+                onChange={(e) => { if (e.target.value) setGroupLabel(e.target.value) }}
+                className="bg-gray-800 border border-gray-700 text-xs text-gray-400 rounded-lg px-2 py-2 focus:outline-none focus:border-brand-500"
+              >
+                <option value="">Quick set…</option>
+                <optgroup label="On-Prem DCs">
+                  <option value="ODC">ODC</option>
+                  <option value="IDC">IDC</option>
+                  <option value="DDC">DDC</option>
+                  <option value="CDC">CDC</option>
+                  <option value="MDC">MDC</option>
+                  <option value="ADC">ADC</option>
+                </optgroup>
+                <optgroup label="Cloud — AWS">
+                  <option value="Cloud-AWS-EUS2-2a">Cloud-AWS-EUS2-2a</option>
+                  <option value="Cloud-AWS-EUS2-2b">Cloud-AWS-EUS2-2b</option>
+                  <option value="Cloud-AWS-EUS2-2c">Cloud-AWS-EUS2-2c</option>
+                  <option value="Cloud-AWS-EUS1-1b">Cloud-AWS-EUS1-1b</option>
+                </optgroup>
+                <optgroup label="Cloud — Azure">
+                  <option value="Cloud-AZU-EUS2">Cloud-AZU-EUS2</option>
+                  <option value="Cloud-AZU-CUS">Cloud-AZU-CUS</option>
+                </optgroup>
+              </select>
+            </div>
+            <p className="text-[10px] text-gray-600 mt-1">
+              On-Prem: use DC code (ODC, IDC…). Cloud: use Cloud-AWS-* or Cloud-AZU-* prefix.
+            </p>
           </div>
 
           {/* KeePass Credential Key */}
