@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     alert_resolve_days: int = Field(default=7, alias="ALERT_RESOLVE_DAYS")
     alert_purge_days: int = Field(default=30, alias="ALERT_PURGE_DAYS")
 
+    # Metrics history retention (days). Extended to 365 to support YTD
+    # capacity-growth analytics. Set lower to reclaim space.
+    history_retention_days: int = Field(default=365, alias="HISTORY_RETENTION_DAYS")
+
+
     # Chat / Ollama (local LLM)
     ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")

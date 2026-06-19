@@ -152,38 +152,49 @@ class BaseCollector(ABC):
             if not volumes and not hosts:
                 return
             try:
+                # Batched executemany — single transaction per table instead of
+                # one round-trip per row (matches the SQL Server batch path).
                 with get_cache_cursor() as cur:
                     if volumes:
                         cur.execute("DELETE FROM volumes_cache WHERE array_name=?", (self.array_name,))
-                        for v in volumes.values():
-                            cur.execute(
-                                """INSERT OR REPLACE INTO volumes_cache
-                                (array_name, vendor, volume_name, size, used, data_reduction,
-                                 total_reduction, snapshots, created, serial, hosts, host_groups,
-                                 protection_groups, last_updated)
-                                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
-                                (self.array_name, self.VENDOR, v.get("volume_name", ""),
-                                 v.get("size", 0), v.get("used", 0),
-                                 v.get("data_reduction", 1), v.get("total_reduction"),
-                                 v.get("snapshots", 0), v.get("created", ""),
-                                 v.get("serial", ""),
-                                 json.dumps(v.get("hosts", [])),
-                                 json.dumps(v.get("host_groups", [])),
-                                 json.dumps(v.get("protection_groups", []))))
+                        vol_params = [
+                            (self.array_name, self.VENDOR, v.get("volume_name", ""),
+                             v.get("size", 0), v.get("used", 0),
+                             v.get("data_reduction", 1), v.get("total_reduction"),
+                             v.get("snapshots", 0), v.get("created", ""),
+                             v.get("serial", ""),
+                             json.dumps(v.get("hosts", [])),
+                             json.dumps(v.get("host_groups", [])),
+                             json.dumps(v.get("protection_groups", [])))
+                            for v in volumes.values()
+                        ]
+                        cur.executemany(
+                            """INSERT OR REPLACE INTO volumes_cache
+                            (array_name, vendor, volume_name, size, used, data_reduction,
+                             total_reduction, snapshots, created, serial, hosts, host_groups,
+                             protection_groups, last_updated)
+                            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+                            vol_params,
+                        )
                     if hosts:
                         cur.execute("DELETE FROM hosts_cache WHERE array_name=?", (self.array_name,))
-                        for h in hosts.values():
-                            cur.execute(
-                                """INSERT OR REPLACE INTO hosts_cache
-                                (array_name, vendor, host_name, wwn, iqn, nqn,
-                                 host_group, volumes, last_updated)
-                                VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
-                                (self.array_name, self.VENDOR, h.get("host_name", ""),
-                                 h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
-                                 h.get("host_group", ""),
-                                 json.dumps(h.get("volumes", []))))
+                        host_params = [
+                            (self.array_name, self.VENDOR, h.get("host_name", ""),
+                             h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
+                             h.get("host_group", ""),
+                             json.dumps(h.get("volumes", [])))
+                            for h in hosts.values()
+                        ]
+                        cur.executemany(
+                            """INSERT OR REPLACE INTO hosts_cache
+                            (array_name, vendor, host_name, wwn, iqn, nqn,
+                             host_group, volumes, last_updated)
+                            VALUES (?,?,?,?,?,?,?,?,datetime('now'))""",
+                            host_params,
+                        )
             except Exception as e:
                 self.logger.debug(f"SQLite volumes/hosts cache failed: {e}")
+
 
     def run(self) -> CollectorResult:
         """Execute the full collection cycle. Called by the scheduler."""

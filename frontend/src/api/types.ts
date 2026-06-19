@@ -171,3 +171,142 @@ export interface PaginatedResponse<T> {
   offset: number
   data: T[]
 }
+
+// ── Capacity breakdown (usable/used/allocated by vendor & cloud) ──────────────
+
+export interface CapacityBucket {
+  arrays: number
+  usable_tb: number
+  used_tb: number
+  free_tb: number
+  allocated_tb: number
+  utilization_pct: number
+}
+
+export interface VendorBucket extends CapacityBucket { vendor: string }
+export interface CloudBucket extends CapacityBucket { cloud: string }
+export interface VendorCloudBucket extends CapacityBucket { vendor: string; cloud: string }
+
+export interface CapacityBreakdown {
+  fleet: CapacityBucket
+  by_vendor: VendorBucket[]
+  by_cloud: CloudBucket[]
+  by_vendor_cloud: VendorCloudBucket[]
+}
+
+// ── Per-array YTD / trailing growth ───────────────────────────────────────────
+
+export interface GrowthTrendPoint {
+  date: string
+  usable_tb: number
+  used_tb: number
+  used_pct?: number
+}
+
+export interface ArrayGrowth {
+  array_name: string
+  months: number
+  current: {
+    usable_tb?: number
+    used_tb?: number
+    used_pct?: number
+    collected_at?: string
+  }
+  ytd: {
+    start_date: string
+    start_used_tb: number
+    current_used_tb: number
+    growth_tb: number
+    growth_pct?: number
+  } | null
+  trend: GrowthTrendPoint[]
+}
+
+// ── Fleet capacity daily trend (backed by daily_stats) ────────────────────────
+
+export interface DailyTrendPoint {
+  date: string
+  total_capacity_tb: number
+  total_used_tb: number
+  avg_utilization_pct: number
+  avg_data_reduction: number
+  total_arrays: number
+}
+
+export interface DailyTrendResponse {
+  days: number
+  data_points: number
+  data: DailyTrendPoint[]
+}
+
+// ── Top growers / shrinkers (ranked by capacity-used delta) ───────────────────
+
+export interface TopGrower {
+  array_name: string
+  vendor: string
+  start_date: string
+  start_used_tb: number
+  current_used_tb: number
+  delta_tb: number
+  delta_pct?: number | null
+  utilization_pct?: number | null
+}
+
+export interface TopGrowersResponse {
+  days: number
+  count: number
+  data: TopGrower[]
+}
+
+// ── Per-volume growth (backed by volumes_history) ─────────────────────────────
+
+export interface VolumeHistoryCoverage {
+  first_seen: string | null
+  last_seen: string | null
+  rows_total: number
+  distinct_days: number
+}
+
+export interface VolumeGrowthPoint {
+  date: string
+  size_tb: number
+  used_tb: number
+  data_reduction: number
+  snapshots: number
+}
+
+export interface VolumeGrowth {
+  array_name: string
+  volume_name: string
+  days: number
+  data_points: number
+  growth: {
+    start_date: string
+    start_used_tb: number
+    current_used_tb: number
+    growth_tb: number
+    growth_pct?: number | null
+  } | null
+  trend: VolumeGrowthPoint[]
+}
+
+export interface TopVolumeGrower {
+  array_name: string
+  vendor: string
+  volume_name: string
+  start_date: string
+  start_used_tb: number
+  current_used_tb: number
+  delta_tb: number
+  delta_pct?: number | null
+}
+
+export interface TopVolumeGrowersResponse {
+  days: number
+  array_name: string | null
+  count: number
+  data: TopVolumeGrower[]
+}
+
+
+

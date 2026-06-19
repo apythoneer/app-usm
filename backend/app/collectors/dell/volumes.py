@@ -11,8 +11,10 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.dell.client import DellUnityClient
-from app.db.session import get_db_cursor
+from app.db.session import get_fast_cursor, snapshot_volume_history
+
 from app.core.config import get_settings
+
 from app.schemas.array import ArrayConfig
 
 logger = logging.getLogger("usm.dell.volumes")
@@ -161,38 +163,50 @@ class DellVolumesCollector(BaseCollector):
             return True
 
         try:
-            with get_db_cursor() as cursor:
+            # Batched delete-then-insert via fast_executemany
+            with get_fast_cursor() as cursor:
                 if volumes:
                     cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
                                    (self.array_name,))
-                for v in volumes.values():
-                    cursor.execute(
-                        f"""INSERT INTO {SCHEMA}.volumes_cache (
-                            array_name, vendor, volume_name, size, used,
-                            data_reduction, serial, last_updated
-                        ) VALUES (?,?,?,?,?,?,?,GETDATE())""",
+                    vol_params = [
                         (v["array_name"], "dell", v["volume_name"],
                          v.get("size", 0), v.get("used", 0),
-                         v.get("data_reduction", 1), v.get("serial", "")),
+                         v.get("data_reduction", 1), v.get("serial", ""))
+                        for v in volumes.values()
+                    ]
+                    cursor.executemany(
+                        f"""INSERT INTO {SCHEMA}.volumes_cache (
+                            array_name, vendor, volume_name, size, used,
+                            data_reduction, serial
+                        ) VALUES (?,?,?,?,?,?,?)""",
+                        vol_params,
                     )
 
                 if hosts:
                     cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
                                    (self.array_name,))
-                for h in hosts.values():
-                    cursor.execute(
-                        f"""INSERT INTO {SCHEMA}.hosts_cache (
-                            array_name, vendor, host_name, wwn, iqn, nqn,
-                            host_group, volumes, last_updated
-                        ) VALUES (?,?,?,?,?,?,?,?,GETDATE())""",
+                    host_params = [
                         (h["array_name"], "dell", h["host_name"],
                          h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
                          h.get("host_group", ""),
-                         json.dumps(h.get("volumes", []))),
+                         json.dumps(h.get("volumes", [])))
+                        for h in hosts.values()
+                    ]
+                    cursor.executemany(
+                        f"""INSERT INTO {SCHEMA}.hosts_cache (
+                            array_name, vendor, host_name, wwn, iqn, nqn,
+                            host_group, volumes
+                        ) VALUES (?,?,?,?,?,?,?,?)""",
+                        host_params,
                     )
 
-            result.records_saved = len(data.get("volumes", {})) + len(data.get("hosts", {}))
+                # Append a point-in-time snapshot for volume growth analytics.
+                snapshot_volume_history(cursor, self.array_name)
+
+            result.records_saved = len(volumes) + len(hosts)
+
             return True
+
         except Exception as e:
             result.errors.append(str(e))
             logger.error(f"[{self.array_name}] save failed: {e}")
