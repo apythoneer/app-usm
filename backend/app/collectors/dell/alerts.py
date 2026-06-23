@@ -150,8 +150,11 @@ class DellAlertsCollector(BaseCollector):
                     array_name=alert["array_name"], vendor="dell",
                     severity=alert["severity"], event=alert["event"],
                     component=alert.get("component_name", ""),
+                    message_id=str(alert.get("message_id", "")),
+                    opened=alert.get("opened", ""),
                     webhook_url=settings.teams_webhook_url,
                 )
+
                 if ok:
                     self._mark_notified(alert["array_name"], alert["message_id"])
             except Exception as e:
