@@ -146,14 +146,30 @@ class DellAlertsCollector(BaseCollector):
             if not settings.teams_webhook_url:
                 continue
             try:
-                send_teams_alert(
+                ok = send_teams_alert(
                     array_name=alert["array_name"], vendor="dell",
                     severity=alert["severity"], event=alert["event"],
                     component=alert.get("component_name", ""),
                     webhook_url=settings.teams_webhook_url,
                 )
+                if ok:
+                    self._mark_notified(alert["array_name"], alert["message_id"])
             except Exception as e:
                 logger.warning(f"[{self.array_name}] Teams notification failed: {e}")
 
+    def _mark_notified(self, array_name: str, message_id: int):
+        """Mark an alert as notified so it isn't re-sent on the next cycle."""
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE {SCHEMA}.messages SET teams_notified=GETDATE() "
+                    f"WHERE array_name=? AND message_id=?",
+                    (array_name, message_id),
+                )
+        except Exception as e:
+            logger.error(f"[{self.array_name}] Failed to mark notification: {e}")
+
     def disconnect(self):
         self.client.disconnect()
+
+

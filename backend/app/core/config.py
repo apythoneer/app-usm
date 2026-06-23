@@ -48,7 +48,10 @@ class Settings(BaseSettings):
 
     # Notifications
     teams_webhook_url: str = Field(default="", alias="TEAMS_WEBHOOK_URL")
+    # Comma-separated severities that trigger a Teams alert (critical,warning,info)
+    teams_severities: str = Field(default="critical,warning", alias="TEAMS_SEVERITIES")
     snow_enabled: bool = Field(default=False, alias="SNOW_ENABLED")
+
 
     # Collector intervals (seconds)
     metrics_interval: int = Field(default=300, alias="METRICS_INTERVAL")
