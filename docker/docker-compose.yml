@@ -61,9 +61,12 @@ services:
       # Paths
       - LOG_DIR=/app/logs
       - ARRAYS_CONFIG_FILE=/app/config/arrays.txt
+      # SQLite cache
+      - USM_CACHE_DB=/app/data/usm_cache.db
     volumes:
       - ../logs:/app/logs
       - ../config:/app/config:ro
+      - ../data:/app/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/ping"]

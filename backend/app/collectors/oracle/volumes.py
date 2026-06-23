@@ -11,8 +11,10 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.oracle.client import OracleZFSClient
-from app.db.session import get_db_cursor
+from app.db.session import get_fast_cursor, snapshot_volume_history
+
 from app.core.config import get_settings
+
 from app.schemas.array import ArrayConfig
 
 logger = logging.getLogger("usm.oracle.volumes")
@@ -137,21 +139,38 @@ class OracleVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
-        try:
-            with get_db_cursor() as cursor:
-                cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
-                for v in data.get("volumes", {}).values():
-                    cursor.execute(
-                        f"""INSERT INTO {SCHEMA}.volumes_cache (
-                            array_name, vendor, volume_name, size, used,
-                            data_reduction, serial, last_updated
-                        ) VALUES (?,?,?,?,?,?,?,GETDATE())""",
-                        (v["array_name"], "oracle", v["volume_name"],
-                         v.get("size", 0), v.get("used", 0),
-                         v.get("data_reduction", 1), v.get("serial", "")),
-                    )
-            result.records_saved = len(data.get("volumes", {}))
+        volumes = data.get("volumes", {})
+
+        # Guard: keep existing data when collection returned nothing
+        if not volumes:
+            logger.warning(f"[{self.array_name}] No volumes collected — keeping existing data")
             return True
+
+        try:
+            # Batched delete-then-insert via fast_executemany
+            vol_params = [
+                (v["array_name"], "oracle", v["volume_name"],
+                 v.get("size", 0), v.get("used", 0),
+                 v.get("data_reduction", 1), v.get("serial", ""))
+                for v in volumes.values()
+            ]
+            with get_fast_cursor() as cursor:
+                cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
+                cursor.executemany(
+                    f"""INSERT INTO {SCHEMA}.volumes_cache (
+                        array_name, vendor, volume_name, size, used,
+                        data_reduction, serial
+                    ) VALUES (?,?,?,?,?,?,?)""",
+                    vol_params,
+                )
+
+                # Append a point-in-time snapshot for volume growth analytics.
+                snapshot_volume_history(cursor, self.array_name)
+
+            result.records_saved = len(vol_params)
+
+            return True
+
         except Exception as e:
             result.errors.append(str(e))
             logger.error(f"[{self.array_name}] save failed: {e}")

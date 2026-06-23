@@ -138,15 +138,8 @@ class HPEAlertsCollector(BaseCollector):
 
             result.records_saved = len(messages)
 
-            # Fire notifications
-            for alert in new_alerts:
-                send_teams_alert(
-                    array_name=alert["array_name"],
-                    vendor="hpe",
-                    severity=alert["severity"],
-                    event=alert["event"],
-                    component=f"{alert['component_type']}: {alert['component_name']}",
-                )
+            # Fire notifications outside the DB transaction
+            self._send_notifications(new_alerts)
 
             return True
 
@@ -155,5 +148,36 @@ class HPEAlertsCollector(BaseCollector):
             logger.error(f"[{self.array_name}] save failed: {e}")
             return False
 
+    def _send_notifications(self, alerts: List[Dict]):
+        for alert in alerts:
+            if not settings.teams_webhook_url:
+                continue
+            try:
+                ok = send_teams_alert(
+                    array_name=alert["array_name"],
+                    vendor="hpe",
+                    severity=alert["severity"],
+                    event=alert["event"],
+                    component=f"{alert['component_type']}: {alert['component_name']}",
+                )
+                if ok:
+                    self._mark_notified(alert["array_name"], alert["message_id"])
+            except Exception as e:
+                logger.warning(f"[{self.array_name}] Teams notification failed: {e}")
+
+    def _mark_notified(self, array_name: str, message_id: int):
+        """Mark an alert as notified so it isn't re-sent on the next cycle."""
+        try:
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    f"UPDATE {SCHEMA}.messages SET teams_notified=GETDATE() "
+                    f"WHERE array_name=? AND message_id=?",
+                    (array_name, message_id),
+                )
+        except Exception as e:
+            logger.error(f"[{self.array_name}] Failed to mark notification: {e}")
+
     def disconnect(self):
         self.client.disconnect()
+
+

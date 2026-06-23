@@ -3,6 +3,7 @@ Hitachi VSP Volumes Collector — collects LDEVs and host-group mappings.
 Auto-registered with CollectorRegistry.
 """
 
+import json
 import logging
 from datetime import datetime
 from typing import Any, Dict
@@ -10,8 +11,10 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.hitachi.client import HitachiVSPClient
-from app.db.session import get_db_cursor
+from app.db.session import get_fast_cursor, snapshot_volume_history
+
 from app.core.config import get_settings
+
 from app.schemas.array import ArrayConfig
 
 logger = logging.getLogger("usm.hitachi.volumes")
@@ -139,49 +142,70 @@ class HitachiVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        volumes = data.get("volumes", {})
+        hosts = data.get("hosts", {})
+
+        # Only delete old data if we have new data to replace it
+        # This prevents losing data when LDEV queries time out
+        if not volumes and not hosts:
+            logger.warning(f"[{self.array_name}] No volumes/hosts collected — keeping existing data")
+            return True
+
         try:
-            with get_db_cursor() as cursor:
-                # Save volumes
-                cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
-                               (self.array_name,))
-                for v in data.get("volumes", {}).values():
-                    cursor.execute(
+            # Batched delete-then-insert via fast_executemany. Hosts are
+            # de-duplicated case-insensitively in memory (VSP host-group names
+            # can collide), so the batch insert has no duplicate-key rows.
+            vol_params = [
+                (v["array_name"], "hitachi", v["volume_name"],
+                 v.get("size", 0), v.get("used", 0),
+                 v.get("data_reduction", 1), v.get("serial", ""))
+                for v in volumes.values()
+            ]
+
+            host_params = []
+            seen_hosts = set()
+            for h in hosts.values():
+                host_key = h["host_name"].upper()
+                if host_key in seen_hosts:
+                    continue
+                seen_hosts.add(host_key)
+                host_params.append(
+                    (h["array_name"], "hitachi", h["host_name"],
+                     h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
+                     h.get("host_group", ""),
+                     json.dumps(h.get("volumes", [])))
+                )
+
+            with get_fast_cursor() as cursor:
+                if volumes:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
+                                   (self.array_name,))
+                    cursor.executemany(
                         f"""INSERT INTO {SCHEMA}.volumes_cache (
                             array_name, vendor, volume_name, size, used,
-                            data_reduction, serial, last_updated
-                        ) VALUES (?,?,?,?,?,?,?,GETDATE())""",
-                        (v["array_name"], "hitachi", v["volume_name"],
-                         v.get("size", 0), v.get("used", 0),
-                         v.get("data_reduction", 1), v.get("serial", "")),
+                            data_reduction, serial
+                        ) VALUES (?,?,?,?,?,?,?)""",
+                        vol_params,
                     )
 
-                # Save hosts — use try/except per host to handle duplicate
-                # host names (case-insensitive SQL constraint)
-                cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
-                               (self.array_name,))
-                seen_hosts = set()
-                for h in data.get("hosts", {}).values():
-                    import json
-                    host_key = h["host_name"].upper()
-                    if host_key in seen_hosts:
-                        continue  # skip case-insensitive duplicate
-                    seen_hosts.add(host_key)
-                    try:
-                        cursor.execute(
-                            f"""INSERT INTO {SCHEMA}.hosts_cache (
-                                array_name, vendor, host_name, wwn, iqn, nqn,
-                                host_group, volumes, last_updated
-                            ) VALUES (?,?,?,?,?,?,?,?,GETDATE())""",
-                            (h["array_name"], "hitachi", h["host_name"],
-                             h.get("wwn", ""), h.get("iqn", ""), h.get("nqn", ""),
-                             h.get("host_group", ""),
-                             json.dumps(h.get("volumes", []))),
-                        )
-                    except Exception:
-                        pass  # skip duplicate key violations
+                if hosts:
+                    cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
+                                   (self.array_name,))
+                    cursor.executemany(
+                        f"""INSERT INTO {SCHEMA}.hosts_cache (
+                            array_name, vendor, host_name, wwn, iqn, nqn,
+                            host_group, volumes
+                        ) VALUES (?,?,?,?,?,?,?,?)""",
+                        host_params,
+                    )
 
-            result.records_saved = len(data.get("volumes", {})) + len(data.get("hosts", {}))
+                # Append a point-in-time snapshot for volume growth analytics.
+                snapshot_volume_history(cursor, self.array_name)
+
+            result.records_saved = len(vol_params) + len(host_params)
+
             return True
+
         except Exception as e:
             result.errors.append(str(e))
             logger.error(f"[{self.array_name}] save failed: {e}")

@@ -21,12 +21,20 @@ settings = get_settings()
 SCHEMA = settings.db_schema
 
 
+VOLUME_SORT_COLS = {
+    "volume_name", "array_name", "vendor", "size", "used",
+    "data_reduction", "serial", "last_updated",
+}
+
+
 def _fetch_volumes(
     array_name: Optional[str],
     search: Optional[str],
     vendor: Optional[str],
     limit: int,
     offset: int,
+    sort_by: Optional[str] = None,
+    sort_dir: str = "asc",
 ) -> dict:
     where = []
     params = []
@@ -42,13 +50,20 @@ def _fetch_volumes(
 
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
 
+    # Sorting
+    direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
+    if sort_by and sort_by in VOLUME_SORT_COLS:
+        order = f"{sort_by} {direction}, array_name, volume_name"
+    else:
+        order = "array_name, volume_name"
+
     # Total count for pagination
     with get_db_cursor() as cursor:
         cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.volumes_cache WITH (NOLOCK){where_clause}", params)
         total = cursor.fetchone()[0]
 
     # Paginated data
-    sql = f"SELECT * FROM {SCHEMA}.volumes_cache WITH (NOLOCK){where_clause} ORDER BY array_name, volume_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    sql = f"SELECT * FROM {SCHEMA}.volumes_cache WITH (NOLOCK){where_clause} ORDER BY {order} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     with get_db_cursor() as cursor:
         cursor.execute(sql, params + [offset, limit])
         rows = rows_to_dicts(cursor, cursor.fetchall())
@@ -63,8 +78,10 @@ async def list_volumes(
     vendor: Optional[str] = Query(default=None),
     limit: int = Query(default=50, le=5000),
     offset: int = Query(default=0, ge=0),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="asc"),
 ):
-    result = await run_in_threadpool(_fetch_volumes, array_name, search, vendor, limit, offset)
+    result = await run_in_threadpool(_fetch_volumes, array_name, search, vendor, limit, offset, sort_by, sort_dir)
     return {
         "total": result["total"],
         "limit": limit,

@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, useMemo, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Server, AlertTriangle, Database, Activity, Zap, Clock,
-  BarChart2, Users, ChevronDown, ChevronRight, X, HardDrive
+  BarChart2, Users, ChevronDown, ChevronRight, X, HardDrive,
+  Cloud, Building2, Search, Filter,
 } from 'lucide-react'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
@@ -14,13 +16,67 @@ import {
   formatReduction, severityBg, usedPctColor
 } from '@/utils/formatters'
 
-// ── Fleet stat card ───────────────────────────────────────────────────────────
+// ── Vendor badge colors ──────────────────────────────────────────────────────
 
-function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400' }: {
-  icon: React.ElementType; label: string; value: string; sub?: string; color?: string
+const VENDOR_COLORS: Record<string, string> = {
+  pure:    'bg-orange-500/10 text-orange-400 border-orange-500/20',
+  netapp:  'bg-blue-500/10 text-blue-400 border-blue-500/20',
+  hpe:     'bg-green-500/10 text-green-400 border-green-500/20',
+  hitachi: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
+  dell:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+  oracle:  'bg-red-500/10 text-red-400 border-red-500/20',
+}
+
+function VendorBadge({ vendor }: { vendor: string }) {
+  const colors = VENDOR_COLORS[vendor] ?? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase border ${colors}`}>
+      {vendor}
+    </span>
+  )
+}
+
+// ── Cloud provider icons ─────────────────────────────────────────────────────
+
+const PROVIDER_ICONS: Record<string, string> = {
+  aws: '☁️',
+  azure: '🔷',
+  gcp: '🟡',
+}
+
+// ── Deployment type helpers ──────────────────────────────────────────────────
+
+function isCloudGroup(group?: string | null): boolean {
+  if (!group) return false
+  const g = group.toLowerCase()
+  return g.startsWith('cloud-') || g === 'aws' || g === 'azure' || g === 'gcp'
+}
+
+function getCloudProvider(group?: string | null): string {
+  if (!group) return 'other'
+  const g = group.toLowerCase()
+  if (g.startsWith('cloud-aws') || g === 'aws') return 'aws'
+  if (g.startsWith('cloud-azu') || g === 'azure') return 'azure'
+  if (g.startsWith('cloud-gcp') || g === 'gcp') return 'gcp'
+  if (g.startsWith('cloud-')) return 'other'
+  return 'other'
+}
+
+function getDCCode(group?: string | null): string {
+  if (!group) return 'Unknown'
+  return group  // Return the raw DC code (ODC, IDC, DDC, etc.)
+}
+
+// ── Fleet stat card (clickable) ──────────────────────────────────────────────
+
+function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400', onClick }: {
+  icon: React.ElementType; label: string; value: string; sub?: string; color?: string; onClick?: () => void
 }) {
   return (
-    <div className="card flex items-start gap-3 p-4">
+    <div
+      className={`card flex items-start gap-3 p-4 ${onClick ? 'cursor-pointer hover:border-gray-600 transition-colors' : ''}`}
+      onClick={onClick}
+    >
       <div className={`mt-0.5 ${color}`}><Icon size={20} /></div>
       <div className="min-w-0">
         <p className="text-xs text-gray-500 uppercase tracking-wide truncate">{label}</p>
@@ -78,158 +134,138 @@ function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => 
             <h2 className="text-white font-semibold text-lg truncate">{arrayName}</h2>
             {data && <p className="text-xs text-gray-500 mt-0.5">{data.vendor} · {data.model || 'Unknown model'}</p>}
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-white ml-4"><X size={20} /></button>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1">
+            <X size={18} />
+          </button>
         </div>
 
         {/* Tab bar */}
-        <div className="flex border-b border-gray-700 px-4">
+        <div className="flex gap-1 px-4 pt-3 border-b border-gray-800">
           {tabs.map((t) => (
             <button
               key={t.key}
               onClick={() => setTab(t.key)}
-              className={`px-4 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+              className={`px-4 py-2 text-xs font-medium rounded-t-lg transition-colors ${
                 tab === t.key
-                  ? 'border-brand-500 text-white'
-                  : 'border-transparent text-gray-500 hover:text-gray-300'
+                  ? 'bg-gray-800 text-white border border-gray-700 border-b-0'
+                  : 'text-gray-500 hover:text-gray-300'
               }`}
             >
               {t.label}
-              {t.count != null && <span className="ml-1.5 text-gray-600">({t.count})</span>}
+              {t.count != null && <span className="ml-1 text-gray-600">({t.count})</span>}
             </button>
           ))}
         </div>
 
-        {isLoading ? (
-          <div className="p-8 text-center text-gray-400">Loading…</div>
-        ) : !data ? (
-          <div className="p-8 text-center text-gray-500">No data available</div>
-        ) : tab === 'overview' ? (
-          <div className="p-4 grid grid-cols-2 gap-4">
-            {/* Identity */}
-            <div className="col-span-2 bg-gray-800 rounded-lg p-3">
-              <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Identity</p>
-              <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
-                <dt className="text-gray-500">Vendor</dt><dd className="text-white capitalize">{data.vendor}</dd>
-                <dt className="text-gray-500">Firmware</dt><dd className="text-white">{data.firmware_version || '—'}</dd>
-                <dt className="text-gray-500">Model</dt><dd className="text-white">{data.model || '—'}</dd>
-                <dt className="text-gray-500">Uptime</dt><dd className="text-white">{data.uptime_str || '—'}</dd>
-                <dt className="text-gray-500">Array status</dt>
-                <dd className={`font-medium ${data.array_status === 'ok' || data.array_status === 'healthy' ? 'text-green-400' : 'text-red-400'}`}>
-                  {data.array_status || '—'}
-                </dd>
-                <dt className="text-gray-500">Controller</dt>
-                <dd className={`font-medium ${data.controller_status === 'ready' || data.controller_status === 'healthy' ? 'text-green-400' : 'text-yellow-400'}`}>
-                  {data.controller_status || '—'}
-                </dd>
-              </dl>
+        {/* Tab content */}
+        <div className="p-4">
+          {isLoading ? (
+            <p className="text-gray-500 text-sm py-4 text-center">Loading…</p>
+          ) : !data ? (
+            <p className="text-gray-500 text-sm py-4 text-center">No data available</p>
+          ) : tab === 'overview' ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Identity */}
+              <div className="col-span-2 bg-gray-800 rounded-lg p-3">
+                <h4 className="text-xs text-gray-500 uppercase tracking-wide mb-2">Identity</h4>
+                <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+                  <dt className="text-gray-500">Array</dt><dd className="text-gray-200 font-mono text-xs">{data.array_name}</dd>
+                  <dt className="text-gray-500">Vendor</dt><dd className="text-gray-200 capitalize">{data.vendor}</dd>
+                  <dt className="text-gray-500">Model</dt><dd className="text-gray-200">{data.model || '—'}</dd>
+                  <dt className="text-gray-500">Firmware</dt><dd className="text-gray-200">{data.firmware_version || '—'}</dd>
+                  <dt className="text-gray-500">Status</dt><dd className="text-gray-200 capitalize">{data.array_status || '—'}</dd>
+                  <dt className="text-gray-500">Uptime</dt><dd className="text-gray-200">{data.uptime_str || '—'}</dd>
+                </dl>
+              </div>
+              {/* Performance */}
+              <div className="bg-gray-800 rounded-lg p-3">
+                <h4 className="text-xs text-gray-500 uppercase tracking-wide mb-2">Performance</h4>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                  <dt className="text-gray-500">Read IOPS</dt><dd className="text-gray-200">{formatIOPS(data.read_iops)}</dd>
+                  <dt className="text-gray-500">Write IOPS</dt><dd className="text-gray-200">{formatIOPS(data.write_iops)}</dd>
+                  <dt className="text-gray-500">Read Latency</dt><dd className="text-gray-200">{formatLatency(data.read_latency_us)}</dd>
+                  <dt className="text-gray-500">Write Latency</dt><dd className="text-gray-200">{formatLatency(data.write_latency_us)}</dd>
+                </dl>
+              </div>
+              {/* Capacity */}
+              <div className="bg-gray-800 rounded-lg p-3">
+                <h4 className="text-xs text-gray-500 uppercase tracking-wide mb-2">Capacity</h4>
+                <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+                  <dt className="text-gray-500">Total</dt><dd className="text-gray-200">{formatBytes(data.capacity_total_bytes)}</dd>
+                  <dt className="text-gray-500">Used</dt><dd className="text-gray-200">{formatBytes(data.capacity_used_bytes)}</dd>
+                  <dt className="text-gray-500">Utilization</dt><dd className="text-gray-200">{formatPct(data.capacity_used_pct)}</dd>
+                  <dt className="text-gray-500">Data Reduction</dt><dd className="text-gray-200">{formatReduction(data.data_reduction)}</dd>
+                  <dt className="text-gray-500">Snapshots</dt><dd className="text-gray-200">{formatBytes(data.snapshot_space_bytes)}</dd>
+                  <dt className="text-gray-500">Volumes</dt><dd className="text-gray-200">{formatBytes(data.volume_space_bytes)}</dd>
+                </dl>
+              </div>
             </div>
-
-            {/* Performance */}
-            <div className="bg-gray-800 rounded-lg p-3">
-              <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Performance</p>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                <dt className="text-gray-500">Read IOPS</dt><dd className="text-white">{formatIOPS(data.read_iops)}</dd>
-                <dt className="text-gray-500">Write IOPS</dt><dd className="text-white">{formatIOPS(data.write_iops)}</dd>
-                <dt className="text-gray-500">Read latency</dt><dd className="text-white">{formatLatency(data.read_latency_us)}</dd>
-                <dt className="text-gray-500">Write latency</dt><dd className="text-white">{formatLatency(data.write_latency_us)}</dd>
-                <dt className="text-gray-500">Read BW</dt><dd className="text-white">{formatBytes(data.read_bandwidth_bytes)}/s</dd>
-                <dt className="text-gray-500">Write BW</dt><dd className="text-white">{formatBytes(data.write_bandwidth_bytes)}/s</dd>
-              </dl>
-            </div>
-
-            {/* Capacity */}
-            <div className="bg-gray-800 rounded-lg p-3">
-              <p className="text-xs text-gray-500 mb-2 uppercase tracking-wide">Capacity</p>
-              <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-                <dt className="text-gray-500">Total</dt><dd className="text-white">{formatBytes(data.capacity_total_bytes)}</dd>
-                <dt className="text-gray-500">Used</dt><dd className="text-white">{formatBytes(data.capacity_used_bytes)}</dd>
-                <dt className="text-gray-500">Utilization</dt><dd className="text-white">{formatPct(data.capacity_used_pct)}</dd>
-                <dt className="text-gray-500">Data reduction</dt><dd className="text-white">{formatReduction(data.data_reduction)}</dd>
-                <dt className="text-gray-500">Total reduction</dt><dd className="text-white">{formatReduction(data.total_reduction)}</dd>
-                <dt className="text-gray-500">Snapshots</dt><dd className="text-white">{formatBytes(data.snapshot_space_bytes)}</dd>
-              </dl>
-              {data.capacity_used_pct != null && (
-                <div className="mt-3 h-2 rounded-full bg-gray-700 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${usedPctColor(data.capacity_used_pct)}`}
-                    style={{ width: `${Math.min(data.capacity_used_pct, 100)}%` }}
-                  />
+          ) : tab === 'volumes' ? (
+            <div>
+              {volumes.length === 0 ? (
+                <p className="text-gray-500 text-sm text-center py-4">No volumes found</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                        <th className="px-3 py-1.5 text-left text-xs text-gray-500 uppercase">Volume</th>
+                        <th className="px-3 py-1.5 text-right text-xs text-gray-500 uppercase">Size</th>
+                        <th className="px-3 py-1.5 text-right text-xs text-gray-500 uppercase">Used</th>
+                        <th className="px-3 py-1.5 text-right text-xs text-gray-500 uppercase">Reduction</th>
+                        <th className="px-3 py-1.5 text-left text-xs text-gray-500 uppercase">Hosts</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-800/50">
+                      {volumes.map((v) => (
+                        <tr key={v.volume_name} className="hover:bg-gray-800/30">
+                          <td className="px-3 py-1.5 text-xs text-gray-200 font-mono truncate max-w-[200px]">{v.volume_name}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-300 text-right">{formatBytes(v.size_bytes)}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-300 text-right">{formatBytes(v.used_bytes)}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-300 text-right">{formatReduction(v.data_reduction)}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-500 truncate max-w-[150px]">
+                            {(v.hosts ?? []).slice(0, 2).join(', ') || '—'}
+                            {(v.hosts ?? []).length > 2 && ` +${(v.hosts ?? []).length - 2}`}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>
-          </div>
-        ) : tab === 'volumes' ? (
-          <div className="p-4">
-            {volumes.length === 0 ? (
-              <p className="text-gray-500 text-sm text-center py-4">No volumes found</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-700/50 bg-gray-800/40">
-                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Volume</th>
-                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Size</th>
-                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Used</th>
-                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Reduction</th>
-                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Hosts</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-800/50">
-                    {volumes.map((v) => (
-                      <tr key={v.volume_name} className="hover:bg-gray-800/30">
-                        <td className="px-3 py-1.5 font-mono text-xs text-gray-200 truncate max-w-[200px]">{v.volume_name}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-300 text-xs">{formatBytes(v.size_bytes)}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-300 text-xs">{formatBytes(v.used_bytes)}</td>
-                        <td className="px-3 py-1.5 text-right text-gray-300 text-xs">{formatReduction(v.data_reduction)}</td>
-                        <td className="px-3 py-1.5 text-xs text-gray-500 truncate max-w-[150px]">
-                          {(v.hosts ?? []).slice(0, 2).join(', ') || '—'}
-                          {(v.hosts ?? []).length > 2 && ` +${(v.hosts ?? []).length - 2}`}
-                        </td>
+          ) : (
+            /* hosts tab */
+            <div>
+              {hosts.length === 0 ? (
+                <p className="text-gray-500 text-sm text-center py-4">No hosts found</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                        <th className="px-3 py-1.5 text-left text-xs text-gray-500 uppercase">Host</th>
+                        <th className="px-3 py-1.5 text-left text-xs text-gray-500 uppercase">Group</th>
+                        <th className="px-3 py-1.5 text-left text-xs text-gray-500 uppercase">WWN</th>
+                        <th className="px-3 py-1.5 text-right text-xs text-gray-500 uppercase">Volumes</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {(volResult?.total ?? 0) > 200 && (
-                  <p className="text-xs text-gray-600 text-center mt-2">Showing first 200 of {volResult?.total} — view all on Volumes page</p>
-                )}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div className="p-4">
-            {hosts.length === 0 ? (
-              <p className="text-gray-500 text-sm text-center py-4">No hosts found</p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-700/50 bg-gray-800/40">
-                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Host</th>
-                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">Host Group</th>
-                      <th className="px-3 py-2 text-left text-xs text-gray-500 uppercase">IQN / WWN</th>
-                      <th className="px-3 py-2 text-right text-xs text-gray-500 uppercase">Volumes</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-800/50">
-                    {hosts.map((h) => (
-                      <tr key={h.host_name} className="hover:bg-gray-800/30">
-                        <td className="px-3 py-1.5 font-mono text-xs text-gray-200 truncate max-w-[200px]">{h.host_name}</td>
-                        <td className="px-3 py-1.5 text-xs text-gray-400">{h.host_group || '—'}</td>
-                        <td className="px-3 py-1.5 text-xs text-gray-500 font-mono truncate max-w-[180px]">
-                          {h.iqn || h.wwn || '—'}
-                        </td>
-                        <td className="px-3 py-1.5 text-right text-gray-400 text-xs">{(h.volumes ?? []).length}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {(hostResult?.total ?? 0) > 200 && (
-                  <p className="text-xs text-gray-600 text-center mt-2">Showing first 200 of {hostResult?.total} — view all on Hosts page</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+                    </thead>
+                    <tbody className="divide-y divide-gray-800/50">
+                      {hosts.map((h) => (
+                        <tr key={h.host_name} className="hover:bg-gray-800/30">
+                          <td className="px-3 py-1.5 text-xs text-gray-200 font-mono">{h.host_name}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-400">{h.host_group || '—'}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-500 font-mono truncate max-w-[200px]">{h.wwn || h.iqn || '—'}</td>
+                          <td className="px-3 py-1.5 text-xs text-gray-400 text-right">{(h.volumes ?? []).length}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
@@ -243,15 +279,18 @@ function ArrayRow({ array, onDblClick }: { array: ArraySummary; onDblClick: () =
     <tr className="hover:bg-gray-800/40 cursor-pointer select-none transition-colors" onDoubleClick={onDblClick}>
       <td className="px-4 py-2.5 text-sm text-white">
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusOk ? 'bg-green-400' : 'bg-red-400'}`} />
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusOk ? 'bg-green-400' : array.array_status ? 'bg-red-400' : 'bg-gray-600'}`} />
           <span className="truncate max-w-xs font-mono text-xs">{array.array_name}</span>
         </div>
       </td>
+      <td className="px-4 py-2.5 text-sm"><VendorBadge vendor={array.vendor} /></td>
       <td className="px-4 py-2.5 text-sm text-gray-400">{array.model || '—'}</td>
       <td className="px-4 py-2.5 text-sm">
         <span className={`capitalize text-xs px-2 py-0.5 rounded-full border ${statusOk
           ? 'bg-green-500/10 text-green-400 border-green-500/20'
-          : 'bg-red-500/10 text-red-400 border-red-500/20'
+          : array.array_status
+          ? 'bg-red-500/10 text-red-400 border-red-500/20'
+          : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
         }`}>
           {array.array_status || 'unknown'}
         </span>
@@ -284,53 +323,124 @@ function ArrayRow({ array, onDblClick }: { array: ArraySummary; onDblClick: () =
   )
 }
 
-// ── Group section ─────────────────────────────────────────────────────────────
+// ── Array table (shared between sections) ─────────────────────────────────────
 
-const GROUP_ICONS: Record<string, string> = {
-  aws: '☁️', azure: '🔷', gcp: '🟡', 'on-prem': '🏢', 'on-premises': '🏢',
+function ArrayTable({ arrays, onDblClick }: { arrays: ArraySummary[]; onDblClick: (name: string) => void }) {
+  return (
+    <div className="border border-gray-700/50 rounded-lg overflow-hidden">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-gray-700/50 bg-gray-800/40">
+            <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Array</th>
+            <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Vendor</th>
+            <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Model</th>
+            <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Status</th>
+            <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">IOPS</th>
+            <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Latency R/W</th>
+            <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Used</th>
+            <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Total</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-gray-700/30">
+          {arrays.map((a) => (
+            <ArrayRow key={a.array_name} array={a} onDblClick={() => onDblClick(a.array_name)} />
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
-function GroupSection({ groupName, arrays, onDblClick }: {
-  groupName: string; arrays: ArraySummary[]; onDblClick: (name: string) => void
+// ── Cloud provider sub-group ──────────────────────────────────────────────────
+
+function CloudProviderSection({ provider, arrays, onDblClick }: {
+  provider: string; arrays: ArraySummary[]; onDblClick: (name: string) => void
 }) {
   const [open, setOpen] = useState(true)
-  const icon = GROUP_ICONS[groupName.toLowerCase()] ?? '📦'
-  const displayName = groupName === 'On-Premises' ? 'On-Premises' : groupName.toUpperCase()
+  const icon = PROVIDER_ICONS[provider] ?? '☁️'
+  const displayName = provider.toUpperCase()
+
+  return (
+    <div className="ml-4 mb-3">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center gap-2 px-3 py-1.5 bg-gray-800/40 hover:bg-gray-800/60 rounded-lg text-left transition-colors border border-gray-700/30"
+      >
+        {open
+          ? <ChevronDown size={13} className="text-gray-400 flex-shrink-0" />
+          : <ChevronRight size={13} className="text-gray-400 flex-shrink-0" />}
+        <span>{icon}</span>
+        <span className="text-xs font-medium text-gray-300">{displayName}</span>
+        <span className="text-xs text-gray-500">({arrays.length})</span>
+      </button>
+      {open && (
+        <div className="mt-1">
+          <ArrayTable arrays={arrays} onDblClick={onDblClick} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Deployment type section (On-Prem / Cloud) ─────────────────────────────────
+
+function DeploymentSection({ type, arrays, onDblClick }: {
+  type: 'on-prem' | 'cloud'
+  arrays: ArraySummary[]
+  onDblClick: (name: string) => void
+}) {
+  const [open, setOpen] = useState(true)
+  const isCloud = type === 'cloud'
+
+  // For cloud, group by provider. For on-prem, group by DC.
+  const subGroups = useMemo(() => {
+    if (isCloud) {
+      return arrays.reduce<Record<string, ArraySummary[]>>((acc, arr) => {
+        const provider = getCloudProvider(arr.group)
+        ;(acc[provider] = acc[provider] || []).push(arr)
+        return acc
+      }, {})
+    } else {
+      return arrays.reduce<Record<string, ArraySummary[]>>((acc, arr) => {
+        const dc = getDCCode(arr.group)
+        ;(acc[dc] = acc[dc] || []).push(arr)
+        return acc
+      }, {})
+    }
+  }, [arrays, isCloud])
+
+  const icon = isCloud ? Cloud : Building2
+  const Icon = icon
+  const label = isCloud ? 'Cloud' : 'On-Premises'
+  const sublabel = Object.keys(subGroups).map(k => `${k}: ${subGroups[k].length}`).join(' · ')
 
   return (
     <div className="mb-4">
       <button
         onClick={() => setOpen(!open)}
-        className="w-full flex items-center gap-2 px-3 py-2 bg-gray-800/60 hover:bg-gray-800 rounded-lg text-left transition-colors border border-gray-700/50"
+        className="w-full flex items-center gap-2 px-3 py-2.5 bg-gray-800/60 hover:bg-gray-800 rounded-lg text-left transition-colors border border-gray-700/50"
       >
         {open
           ? <ChevronDown size={15} className="text-gray-400 flex-shrink-0" />
           : <ChevronRight size={15} className="text-gray-400 flex-shrink-0" />}
-        <span>{icon}</span>
-        <span className="text-sm font-medium text-gray-300">{displayName}</span>
+        <Icon size={16} className={isCloud ? 'text-blue-400' : 'text-amber-400'} />
+        <span className="text-sm font-semibold text-gray-200">{label}</span>
         <span className="text-xs text-gray-500 ml-1">({arrays.length})</span>
+        <span className="text-xs text-gray-600 ml-auto">{sublabel}</span>
       </button>
 
       {open && (
-        <div className="mt-1 border border-gray-700/50 rounded-lg overflow-hidden">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-gray-700/50 bg-gray-800/40">
-                <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Array</th>
-                <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Version</th>
-                <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Status</th>
-                <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">IOPS</th>
-                <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Latency R/W</th>
-                <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Used</th>
-                <th className="px-4 py-2 text-right text-xs text-gray-500 uppercase tracking-wide">Total</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-700/30">
-              {arrays.map((a) => (
-                <ArrayRow key={a.array_name} array={a} onDblClick={() => onDblClick(a.array_name)} />
-              ))}
-            </tbody>
-          </table>
+        <div className="mt-2">
+          {Object.entries(subGroups)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, groupArrays]) => (
+              <CloudProviderSection
+                key={key}
+                provider={key}
+                arrays={groupArrays as ArraySummary[]}
+                onDblClick={onDblClick}
+              />
+            ))}
         </div>
       )}
     </div>
@@ -340,7 +450,11 @@ function GroupSection({ groupName, arrays, onDblClick }: {
 // ── Dashboard page ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  const navigate = useNavigate()
   const [selectedArray, setSelectedArray] = useState<string | null>(null)
+  const [vendorFilter, setVendorFilter] = useState('')
+  const [searchFilter, setSearchFilter] = useState('')
+  const arraysRef = useRef<HTMLDivElement>(null)
 
   const { data: arrays = [], isLoading: arraysLoading } = useQuery<ArraySummary[]>({
     queryKey: ['arrays'],
@@ -354,21 +468,50 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   })
 
-  const { data: alerts = [] } = useQuery<Alert[]>({
+  const { data: alertsResult } = useQuery({
     queryKey: ['alerts', 'active'],
-    queryFn: () => alertsApi.list({ resolved: false }),
+    queryFn: () => alertsApi.list({ resolved: false, limit: 50 }),
     refetchInterval: 30_000,
   })
+  const alerts: Alert[] = alertsResult?.data ?? []
 
-  // Group arrays by cloud/site label
-  const groups = arrays.reduce<Record<string, ArraySummary[]>>((acc, arr) => {
-    const key = arr.group ?? 'On-Premises'
-    ;(acc[key] = acc[key] || []).push(arr)
-    return acc
-  }, {})
+  // Unique vendors for filter
+  const vendors = useMemo(() => [...new Set(arrays.map(a => a.vendor))].sort(), [arrays])
+
+  // Filter arrays
+  const filteredArrays = useMemo(() => {
+    let result = arrays
+    if (vendorFilter) result = result.filter(a => a.vendor === vendorFilter)
+    if (searchFilter) {
+      const q = searchFilter.toLowerCase()
+      result = result.filter(a =>
+        a.array_name.toLowerCase().includes(q) ||
+        (a.model || '').toLowerCase().includes(q)
+      )
+    }
+    return result
+  }, [arrays, vendorFilter, searchFilter])
+
+  // Split into On-Prem and Cloud
+  const { onPremArrays, cloudArrays } = useMemo(() => {
+    const onPrem: ArraySummary[] = []
+    const cloud: ArraySummary[] = []
+    filteredArrays.forEach(arr => {
+      if (isCloudGroup(arr.group)) {
+        cloud.push(arr)
+      } else {
+        onPrem.push(arr)
+      }
+    })
+    return { onPremArrays: onPrem, cloudArrays: cloud }
+  }, [filteredArrays])
 
   const criticalCount = alerts.filter((a) => a.severity === 'critical').length
   const warningCount  = alerts.filter((a) => a.severity === 'warning').length
+
+  function scrollToArrays() {
+    arraysRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }
 
   return (
     <div className="space-y-6">
@@ -377,60 +520,106 @@ export default function Dashboard() {
         <p className="text-gray-400 mt-0.5 text-sm">Storage Intelligence Platform — fleet overview</p>
       </div>
 
-      {/* Fleet stat cards */}
+      {/* Fleet stat cards — clickable */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
-        <StatCard icon={Server}       label="Arrays"         value={String(fleet?.total_arrays ?? arrays.length)} />
-        <StatCard icon={Database}     label="Total Capacity"
-          value={fleet?.total_capacity_tb != null ? `${fleet.total_capacity_tb.toFixed(1)} TB` : '—'} />
-        <StatCard icon={HardDrive}    label="Used"
+        <StatCard icon={Server} label="Arrays"
+          value={String(fleet?.total_arrays ?? arrays.length)}
+          onClick={scrollToArrays} />
+        <StatCard icon={Database} label="Total Capacity"
+          value={fleet?.total_capacity_tb != null ? `${fleet.total_capacity_tb.toFixed(1)} TB` : '—'}
+          onClick={scrollToArrays} />
+        <StatCard icon={HardDrive} label="Used"
           value={fleet?.total_used_tb != null ? `${fleet.total_used_tb.toFixed(1)} TB` : '—'}
-          sub={fleet?.avg_utilization_pct != null ? `${fleet.avg_utilization_pct.toFixed(1)}% avg` : undefined} />
-        <StatCard icon={BarChart2}    label="Data Reduction"
-          value={fleet?.avg_data_reduction != null ? formatReduction(fleet.avg_data_reduction) : '—'} />
-        <StatCard icon={Zap}          label="Total IOPS"
-          value={fleet?.total_iops != null ? formatIOPS(fleet.total_iops) : '—'} />
-        <StatCard icon={Clock}        label="Avg Latency (R)"
-          value={fleet?.avg_read_latency_us != null ? formatLatency(fleet.avg_read_latency_us) : '—'} />
-        <StatCard icon={Users}        label="Hosts / Volumes"
+          sub={fleet?.avg_utilization_pct != null ? `${fleet.avg_utilization_pct.toFixed(1)}% avg` : undefined}
+          onClick={scrollToArrays} />
+        <StatCard icon={BarChart2} label="Data Reduction"
+          value={fleet?.avg_data_reduction != null ? formatReduction(fleet.avg_data_reduction) : '—'}
+          onClick={() => navigate('/analytics')} />
+        <StatCard icon={Zap} label="Total IOPS"
+          value={fleet?.total_iops != null ? formatIOPS(fleet.total_iops) : '—'}
+          onClick={() => navigate('/analytics')} />
+        <StatCard icon={Clock} label="Avg Latency (R)"
+          value={fleet?.avg_read_latency_us != null ? formatLatency(fleet.avg_read_latency_us) : '—'}
+          onClick={() => navigate('/analytics')} />
+        <StatCard icon={Users} label="Hosts / Volumes"
           value={fleet?.total_hosts != null ? String(fleet.total_hosts) : '—'}
-          sub={fleet?.total_volumes != null ? `${fleet.total_volumes} volumes` : undefined} />
+          sub={fleet?.total_volumes != null ? `${fleet.total_volumes} volumes` : undefined}
+          onClick={() => navigate('/hosts')} />
         <StatCard icon={AlertTriangle} label="Active Alerts"
           value={String(fleet?.active_alerts ?? alerts.length)}
           sub={criticalCount > 0 ? `${criticalCount} critical` : warningCount > 0 ? `${warningCount} warning` : 'all clear'}
-          color={criticalCount > 0 ? 'text-red-400' : warningCount > 0 ? 'text-yellow-400' : 'text-green-400'} />
+          color={criticalCount > 0 ? 'text-red-400' : warningCount > 0 ? 'text-yellow-400' : 'text-green-400'}
+          onClick={() => navigate('/alerts')} />
       </div>
 
-      {/* Arrays by cloud group */}
-      <div>
-        <div className="flex items-center justify-between mb-3">
+      {/* Arrays section */}
+      <div ref={arraysRef}>
+        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
           <h3 className="text-sm font-semibold text-gray-300">Storage Arrays</h3>
-          <span className="text-xs text-gray-500">Double-click a row for details</span>
+          <div className="flex items-center gap-2">
+            {/* Vendor filter */}
+            {vendors.length > 1 && (
+              <div className="relative">
+                <Filter size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+                <select
+                  value={vendorFilter}
+                  onChange={(e) => setVendorFilter(e.target.value)}
+                  className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+                >
+                  <option value="">All vendors</option>
+                  {vendors.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
+            )}
+            {/* Search */}
+            <div className="relative">
+              <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+              <input
+                type="text"
+                placeholder="Search arrays…"
+                value={searchFilter}
+                onChange={(e) => setSearchFilter(e.target.value)}
+                className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 w-40"
+              />
+            </div>
+            <span className="text-xs text-gray-500">
+              {filteredArrays.length} of {arrays.length} · Double-click for details
+            </span>
+          </div>
         </div>
 
         {arraysLoading ? (
           <p className="text-gray-500 text-sm">Loading arrays…</p>
-        ) : arrays.length === 0 ? (
+        ) : filteredArrays.length === 0 ? (
           <p className="text-gray-500 text-sm">
-            No arrays found — check collectors are running and USM-Managed-Arrays is active.
+            {arrays.length === 0
+              ? 'No arrays found — check collectors are running and USM-Managed-Arrays is active.'
+              : 'No arrays match your filters.'}
           </p>
         ) : (
-          Object.entries(groups)
-            .sort(([a], [b]) => a.localeCompare(b))
-            .map(([group, groupArrays]) => (
-              <GroupSection
-                key={group}
-                groupName={group}
-                arrays={groupArrays}
-                onDblClick={setSelectedArray}
-              />
-            ))
+          <>
+            {onPremArrays.length > 0 && (
+              <DeploymentSection type="on-prem" arrays={onPremArrays} onDblClick={setSelectedArray} />
+            )}
+            {cloudArrays.length > 0 && (
+              <DeploymentSection type="cloud" arrays={cloudArrays} onDblClick={setSelectedArray} />
+            )}
+          </>
         )}
       </div>
 
       {/* Active alerts */}
       {alerts.length > 0 && (
         <div className="card">
-          <h3 className="text-sm font-semibold text-gray-300 mb-4">Active Alerts</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-300">Active Alerts</h3>
+            <button
+              onClick={() => navigate('/alerts')}
+              className="text-xs text-brand-400 hover:text-brand-300"
+            >
+              View all →
+            </button>
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

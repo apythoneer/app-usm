@@ -116,13 +116,17 @@ def calculate_daily_stats() -> bool:
         return False
 
 
-def cleanup_old_history(days: int = 7) -> int:
+def cleanup_old_history(days: int = None) -> int:
     """
     Remove metrics_history rows older than `days` days.
-    Keeps the table from growing unbounded.
+    Defaults to settings.history_retention_days (365) so YTD capacity-growth
+    analytics have enough history. Keeps the table from growing unbounded.
     Returns number of rows deleted.
     """
+    if days is None:
+        days = settings.history_retention_days
     try:
+
         with get_db_cursor() as cursor:
             cursor.execute(
                 f"DELETE FROM {SCHEMA}.metrics_history "

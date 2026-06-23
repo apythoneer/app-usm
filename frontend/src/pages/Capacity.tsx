@@ -1,0 +1,750 @@
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
+import { Download, TrendingUp, TrendingDown } from 'lucide-react'
+
+import {
+  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ResponsiveContainer,
+} from 'recharts'
+import { arraysApi } from '@/api/arrays'
+import { volumesApi } from '@/api/volumes'
+import type {
+  CapacityBreakdown, CapacityBucket, VendorBucket, CloudBucket, VendorCloudBucket,
+  DailyTrendResponse, TopGrowersResponse, ArrayGrowth, ArraySummary,
+  VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse, Volume,
+  PaginatedResponse,
+} from '@/api/types'
+
+
+const TREND_RANGES = [
+  { d: 30, label: '30d' },
+  { d: 90, label: '90d' },
+  { d: 180, label: '180d' },
+  { d: 365, label: '1y' },
+]
+
+function trendDate(v: string) {
+  const d = new Date(v)
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' })
+}
+
+
+const tooltipStyle = {
+  contentStyle: { background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 },
+}
+
+function tb(v?: number) {
+  if (v == null) return '—'
+  if (v >= 1000) return `${(v / 1000).toFixed(2)} PB`
+  return `${v.toFixed(1)} TB`
+}
+
+function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
+  return (
+    <div className="card">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className="text-2xl font-semibold text-white mt-1">{value}</p>
+      {sub && <p className="text-xs text-gray-500 mt-0.5">{sub}</p>}
+    </div>
+  )
+}
+
+function UtilBar({ pct }: { pct: number }) {
+  const color = pct >= 90 ? 'bg-red-500' : pct >= 75 ? 'bg-amber-500' : 'bg-brand-500'
+  return (
+    <div className="flex items-center gap-2">
+      <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden min-w-[60px]">
+        <div className={`h-full ${color}`} style={{ width: `${Math.min(pct, 100)}%` }} />
+      </div>
+      <span className="text-xs text-gray-400 w-10 text-right">{pct.toFixed(0)}%</span>
+    </div>
+  )
+}
+
+function BreakdownTable<T extends CapacityBucket>({
+  title, label, rows, keyField,
+}: {
+  title: string
+  label: string
+  rows: T[]
+  keyField: (r: T) => string
+}) {
+  return (
+    <div className="card">
+      <h3 className="text-sm font-semibold text-gray-300 mb-3">{title}</h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+              <th className="py-2 pr-4">{label}</th>
+              <th className="py-2 pr-4 text-right">Arrays</th>
+              <th className="py-2 pr-4 text-right">Usable</th>
+              <th className="py-2 pr-4 text-right">Used</th>
+              <th className="py-2 pr-4 text-right">Free</th>
+              <th className="py-2 pr-4 w-40">Utilization</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={keyField(r)} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                <td className="py-2 pr-4 text-gray-200 font-medium capitalize">{keyField(r)}</td>
+                <td className="py-2 pr-4 text-right text-gray-400">{r.arrays}</td>
+                <td className="py-2 pr-4 text-right text-gray-300">{tb(r.usable_tb)}</td>
+                <td className="py-2 pr-4 text-right text-gray-300">{tb(r.used_tb)}</td>
+                <td className="py-2 pr-4 text-right text-gray-300">{tb(r.free_tb)}</td>
+                <td className="py-2 pr-4"><UtilBar pct={r.utilization_pct} /></td>
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr><td colSpan={6} className="py-6 text-center text-gray-600">No data</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+// ── Fleet capacity over time (daily_stats) ────────────────────────────────────
+
+function FleetTrendChart() {
+  const [days, setDays] = useState(90)
+
+  const { data, isLoading } = useQuery<DailyTrendResponse>({
+    queryKey: ['daily-trend', days],
+    queryFn: () => arraysApi.dailyTrend(days),
+    refetchInterval: 300_000,
+  })
+
+  const points = data?.data ?? []
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-gray-300">Fleet Capacity Over Time</h3>
+        <div className="flex gap-1">
+          {TREND_RANGES.map(({ d, label }) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+                days === d
+                  ? 'bg-brand-600/20 text-brand-400 border-brand-500/30'
+                  : 'text-gray-400 border-gray-700 hover:border-gray-500'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading && <p className="text-gray-500 text-sm">Loading trend…</p>}
+
+      {!isLoading && points.length === 0 && (
+        <div className="text-center py-10 text-gray-600 text-sm">
+          No daily history yet — the fleet trend builds up once daily stats have run.
+        </div>
+      )}
+
+      {points.length > 0 && (
+        <ResponsiveContainer width="100%" height={280}>
+          <LineChart data={points}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+            <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={trendDate} />
+            <YAxis
+              yAxisId="tb"
+              tick={{ fill: '#6b7280', fontSize: 10 }}
+              tickFormatter={(v: number) => `${v} TB`}
+              width={64}
+            />
+            <YAxis
+              yAxisId="pct"
+              orientation="right"
+              domain={[0, 100]}
+              tick={{ fill: '#6b7280', fontSize: 10 }}
+              tickFormatter={(v: number) => `${v}%`}
+              width={44}
+            />
+            <Tooltip {...tooltipStyle} labelFormatter={trendDate} />
+            <Legend wrapperStyle={{ fontSize: 11 }} />
+            <Line
+              yAxisId="tb"
+              type="monotone"
+              dataKey="total_capacity_tb"
+              name="Usable TB"
+              stroke="#6b7280"
+              strokeDasharray="4 3"
+              dot={false}
+              strokeWidth={1.5}
+            />
+            <Line
+              yAxisId="tb"
+              type="monotone"
+              dataKey="total_used_tb"
+              name="Used TB"
+              stroke="#3b82f6"
+              dot={false}
+              strokeWidth={2}
+            />
+            <Line
+              yAxisId="pct"
+              type="monotone"
+              dataKey="avg_utilization_pct"
+              name="Avg Util %"
+              stroke="#f59e0b"
+              dot={false}
+              strokeWidth={1.5}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  )
+}
+
+// ── Per-array growth detail ───────────────────────────────────────────────────
+
+function ArrayGrowthDetail({ arrays }: { arrays: ArraySummary[] }) {
+  const [selected, setSelected] = useState('')
+
+  const { data, isLoading } = useQuery<ArrayGrowth>({
+    queryKey: ['array-growth', selected],
+    queryFn: () => arraysApi.arrayGrowth(selected, 12),
+    enabled: !!selected,
+  })
+
+  const ytd = data?.ytd
+  const trend = data?.trend ?? []
+  const growthPositive = (ytd?.growth_tb ?? 0) >= 0
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-semibold text-gray-300">Per-Array Growth</h3>
+        <select
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-brand-500"
+        >
+          <option value="">Select an array…</option>
+          {[...arrays]
+            .sort((a, b) => a.array_name.localeCompare(b.array_name))
+            .map((a) => (
+              <option key={a.array_name} value={a.array_name}>{a.array_name}</option>
+            ))}
+        </select>
+      </div>
+
+      {!selected && (
+        <div className="text-center py-10 text-gray-600 text-sm">
+          Pick an array to see its YTD growth and monthly capacity trend.
+        </div>
+      )}
+
+      {selected && isLoading && <p className="text-gray-500 text-sm">Loading growth…</p>}
+
+      {selected && !isLoading && data && (
+        <div className="space-y-4">
+          {ytd ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <StatCard label="YTD Start" value={tb(ytd.start_used_tb)} sub={trendDate(ytd.start_date)} />
+              <StatCard label="Current Used" value={tb(ytd.current_used_tb)} />
+              <div className="card">
+                <p className="text-xs text-gray-500">YTD Change</p>
+                <p className={`text-2xl font-semibold mt-1 flex items-center gap-1 ${growthPositive ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {growthPositive ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                  {growthPositive ? '+' : ''}{tb(ytd.growth_tb)}
+                </p>
+              </div>
+              <StatCard
+                label="YTD %"
+                value={ytd.growth_pct != null ? `${ytd.growth_pct > 0 ? '+' : ''}${ytd.growth_pct}%` : '—'}
+              />
+            </div>
+          ) : (
+            <p className="text-gray-600 text-sm">No YTD baseline sample available for this array yet.</p>
+          )}
+
+          {trend.length > 0 && (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={trend}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={trendDate} />
+                <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v: number) => `${v} TB`} width={64} />
+                <Tooltip {...tooltipStyle} labelFormatter={trendDate} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Line type="monotone" dataKey="usable_tb" name="Usable TB" stroke="#6b7280" strokeDasharray="4 3" dot={false} strokeWidth={1.5} />
+                <Line type="monotone" dataKey="used_tb" name="Used TB" stroke="#3b82f6" dot={false} strokeWidth={2} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Top growers / shrinkers ───────────────────────────────────────────────────
+
+function TopMoversTable() {
+  const [days, setDays] = useState(90)
+
+  const { data, isLoading } = useQuery<TopGrowersResponse>({
+    queryKey: ['top-growers', days],
+    queryFn: () => arraysApi.topGrowers(days, 20),
+    refetchInterval: 300_000,
+  })
+
+  const rows = data?.data ?? []
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-sm font-semibold text-gray-300">Top Growers & Shrinkers</h3>
+        <div className="flex gap-1">
+          {TREND_RANGES.map(({ d, label }) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+                days === d
+                  ? 'bg-brand-600/20 text-brand-400 border-brand-500/30'
+                  : 'text-gray-400 border-gray-700 hover:border-gray-500'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading && <p className="text-gray-500 text-sm">Loading…</p>}
+
+      {!isLoading && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                <th className="py-2 pr-4">Array</th>
+                <th className="py-2 pr-4">Vendor</th>
+                <th className="py-2 pr-4 text-right">Start Used</th>
+                <th className="py-2 pr-4 text-right">Current Used</th>
+                <th className="py-2 pr-4 text-right">Change</th>
+                <th className="py-2 pr-4 text-right">Change %</th>
+                <th className="py-2 pr-4 w-40">Utilization</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const up = r.delta_tb >= 0
+                return (
+                  <tr key={r.array_name} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                    <td className="py-2 pr-4 text-gray-200 font-medium">{r.array_name}</td>
+                    <td className="py-2 pr-4 text-gray-400 capitalize">{r.vendor}</td>
+                    <td className="py-2 pr-4 text-right text-gray-300">{tb(r.start_used_tb)}</td>
+                    <td className="py-2 pr-4 text-right text-gray-300">{tb(r.current_used_tb)}</td>
+                    <td className={`py-2 pr-4 text-right font-medium ${up ? 'text-emerald-400' : 'text-red-400'}`}>
+                      <span className="inline-flex items-center gap-1 justify-end">
+                        {up ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                        {up ? '+' : ''}{tb(r.delta_tb)}
+                      </span>
+                    </td>
+                    <td className={`py-2 pr-4 text-right ${up ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {r.delta_pct != null ? `${r.delta_pct > 0 ? '+' : ''}${r.delta_pct}%` : '—'}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {r.utilization_pct != null ? <UtilBar pct={r.utilization_pct} /> : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+              {rows.length === 0 && (
+                <tr><td colSpan={7} className="py-6 text-center text-gray-600">No history in this window yet</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Per-volume growth (backed by volumes_history) ─────────────────────────────
+
+function VolumeGrowthSection({ arrays }: { arrays: ArraySummary[] }) {
+  const [days, setDays] = useState(90)
+  const [selectedArray, setSelectedArray] = useState('')
+  const [selectedVolume, setSelectedVolume] = useState('')
+
+  // Coverage banner: how much per-volume history actually exists yet.
+  const { data: coverage } = useQuery<VolumeHistoryCoverage>({
+    queryKey: ['volume-history-coverage'],
+    queryFn: () => arraysApi.volumeHistoryCoverage(),
+    refetchInterval: 300_000,
+  })
+
+  // Top movers across the fleet (or scoped to selected array).
+  const { data: movers, isLoading: moversLoading } = useQuery<TopVolumeGrowersResponse>({
+    queryKey: ['top-volume-growers', days, selectedArray],
+    queryFn: () => arraysApi.topVolumeGrowers(days, 25, selectedArray || undefined),
+    refetchInterval: 300_000,
+  })
+
+  // Volume picker for the selected array (uses the existing paginated volumes API).
+  const { data: volPage } = useQuery<PaginatedResponse<Volume>>({
+    queryKey: ['volumes-for-growth', selectedArray],
+    queryFn: () => volumesApi.list({ array_name: selectedArray, limit: 500, sort_by: 'size_bytes', sort_dir: 'desc' }),
+    enabled: !!selectedArray,
+  })
+
+  // Per-volume trend for the selected volume.
+  const { data: growth, isLoading: growthLoading } = useQuery<VolumeGrowth>({
+    queryKey: ['volume-growth', selectedArray, selectedVolume, days],
+    queryFn: () => arraysApi.volumeGrowth(selectedArray, selectedVolume, days),
+    enabled: !!selectedArray && !!selectedVolume,
+  })
+
+  const moverRows = movers?.data ?? []
+  const trend = growth?.trend ?? []
+  const g = growth?.growth
+  const up = (g?.growth_tb ?? 0) >= 0
+
+  const hasHistory = (coverage?.rows_total ?? 0) > 0
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-300">Volume Consumption Growth</h3>
+          {coverage && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              {hasHistory
+                ? `History: ${coverage.distinct_days} day(s) · ${coverage.rows_total.toLocaleString()} samples · since ${coverage.first_seen ? trendDate(coverage.first_seen) : '—'}`
+                : 'No per-volume history yet — it begins accumulating on the next collection cycle.'}
+            </p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={selectedArray}
+            onChange={(e) => { setSelectedArray(e.target.value); setSelectedVolume('') }}
+            className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-brand-500"
+          >
+            <option value="">All arrays</option>
+            {[...arrays]
+              .sort((a, b) => a.array_name.localeCompare(b.array_name))
+              .map((a) => (
+                <option key={a.array_name} value={a.array_name}>{a.array_name}</option>
+              ))}
+          </select>
+          <div className="flex gap-1">
+            {TREND_RANGES.map(({ d, label }) => (
+              <button
+                key={d}
+                onClick={() => setDays(d)}
+                className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+                  days === d
+                    ? 'bg-brand-600/20 text-brand-400 border-brand-500/30'
+                    : 'text-gray-400 border-gray-700 hover:border-gray-500'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Per-volume trend (when a specific volume is selected) */}
+      {selectedArray && (
+        <div className="mb-5">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-xs text-gray-500">Volume:</span>
+            <select
+              value={selectedVolume}
+              onChange={(e) => setSelectedVolume(e.target.value)}
+              className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-brand-500 max-w-md"
+            >
+              <option value="">Select a volume…</option>
+              {(volPage?.data ?? []).map((v) => (
+                <option key={v.volume_name} value={v.volume_name}>{v.volume_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {selectedVolume && growthLoading && <p className="text-gray-500 text-sm">Loading volume trend…</p>}
+
+          {selectedVolume && !growthLoading && (
+            <>
+              {g ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                  <StatCard label="Window Start" value={tb(g.start_used_tb)} sub={trendDate(g.start_date)} />
+                  <StatCard label="Current Used" value={tb(g.current_used_tb)} />
+                  <div className="card">
+                    <p className="text-xs text-gray-500">Change</p>
+                    <p className={`text-2xl font-semibold mt-1 flex items-center gap-1 ${up ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {up ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                      {up ? '+' : ''}{tb(g.growth_tb)}
+                    </p>
+                  </div>
+                  <StatCard
+                    label="Change %"
+                    value={g.growth_pct != null ? `${g.growth_pct > 0 ? '+' : ''}${g.growth_pct}%` : '—'}
+                  />
+                </div>
+              ) : (
+                <p className="text-gray-600 text-sm mb-3">
+                  Not enough history for this volume yet — need at least two snapshots in the window.
+                </p>
+              )}
+
+              {trend.length > 0 && (
+                <ResponsiveContainer width="100%" height={240}>
+                  <LineChart data={trend}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                    <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={trendDate} />
+                    <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v: number) => `${v} TB`} width={64} />
+                    <Tooltip {...tooltipStyle} labelFormatter={trendDate} />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    <Line type="monotone" dataKey="size_tb" name="Provisioned TB" stroke="#6b7280" strokeDasharray="4 3" dot={false} strokeWidth={1.5} />
+                    <Line type="monotone" dataKey="used_tb" name="Used TB" stroke="#3b82f6" dot={false} strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Top volume movers (fleet or scoped to array) */}
+      <h4 className="text-xs font-semibold text-gray-400 mb-2">
+        Top Volume Growers & Shrinkers {selectedArray ? `— ${selectedArray}` : '(Fleet-wide)'}
+      </h4>
+
+      {moversLoading && <p className="text-gray-500 text-sm">Loading…</p>}
+
+      {!moversLoading && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                <th className="py-2 pr-4">Volume</th>
+                {!selectedArray && <th className="py-2 pr-4">Array</th>}
+                <th className="py-2 pr-4">Vendor</th>
+                <th className="py-2 pr-4 text-right">Start Used</th>
+                <th className="py-2 pr-4 text-right">Current Used</th>
+                <th className="py-2 pr-4 text-right">Change</th>
+                <th className="py-2 pr-4 text-right">Change %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {moverRows.map((r) => {
+                const rup = r.delta_tb >= 0
+                return (
+                  <tr key={`${r.array_name}|${r.volume_name}`} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                    <td className="py-2 pr-4 text-gray-200 font-medium max-w-xs truncate" title={r.volume_name}>{r.volume_name}</td>
+                    {!selectedArray && <td className="py-2 pr-4 text-gray-400">{r.array_name}</td>}
+                    <td className="py-2 pr-4 text-gray-400 capitalize">{r.vendor}</td>
+                    <td className="py-2 pr-4 text-right text-gray-300">{tb(r.start_used_tb)}</td>
+                    <td className="py-2 pr-4 text-right text-gray-300">{tb(r.current_used_tb)}</td>
+                    <td className={`py-2 pr-4 text-right font-medium ${rup ? 'text-emerald-400' : 'text-red-400'}`}>
+                      <span className="inline-flex items-center gap-1 justify-end">
+                        {rup ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                        {rup ? '+' : ''}{tb(r.delta_tb)}
+                      </span>
+                    </td>
+                    <td className={`py-2 pr-4 text-right ${rup ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {r.delta_pct != null ? `${r.delta_pct > 0 ? '+' : ''}${r.delta_pct}%` : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+              {moverRows.length === 0 && (
+                <tr>
+                  <td colSpan={selectedArray ? 6 : 7} className="py-6 text-center text-gray-600">
+                    No volume history in this window yet
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function Capacity() {
+
+  const [view, setView] = useState<'vendor' | 'cloud'>('vendor')
+  const [exporting, setExporting] = useState(false)
+
+  const { data: arrayList = [] } = useQuery<ArraySummary[]>({
+    queryKey: ['arrays'],
+    queryFn: () => arraysApi.list(),
+  })
+
+
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      await arraysApi.exportCapacityXlsx()
+    } catch (e) {
+      console.error('Capacity export failed', e)
+    } finally {
+      setExporting(false)
+    }
+  }
+
+
+  const { data, isLoading } = useQuery<CapacityBreakdown>({
+    queryKey: ['capacity-breakdown'],
+    queryFn: () => arraysApi.capacityBreakdown(),
+    refetchInterval: 300_000,
+  })
+
+  const fleet = data?.fleet
+  const chartRows = (view === 'vendor' ? data?.by_vendor : data?.by_cloud) ?? []
+  const chartData = chartRows.map((r) => ({
+    name: view === 'vendor' ? (r as VendorBucket).vendor : (r as CloudBucket).cloud,
+    Used: r.used_tb,
+    Free: r.free_tb,
+  }))
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold text-white">Capacity</h2>
+        <div className="flex items-center gap-3">
+          {fleet && (
+            <span className="text-xs text-gray-500">
+              {fleet.arrays} arrays · {tb(fleet.usable_tb)} usable
+            </span>
+          )}
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="flex items-center gap-2 text-xs px-3 py-1.5 rounded border border-gray-700 text-gray-300 hover:border-brand-500 hover:text-brand-400 transition-colors disabled:opacity-50"
+            title="Download a multi-sheet Excel capacity report"
+          >
+            <Download size={14} />
+            {exporting ? 'Exporting…' : 'Export Excel'}
+          </button>
+        </div>
+      </div>
+
+
+      {isLoading && <p className="text-gray-500 text-sm">Loading capacity breakdown…</p>}
+
+      {fleet && (
+        <>
+          {/* Fleet summary */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <StatCard label="Usable (Allocated)" value={tb(fleet.usable_tb)} sub={`${fleet.arrays} arrays`} />
+            <StatCard label="Used" value={tb(fleet.used_tb)} sub={`${fleet.utilization_pct.toFixed(1)}% utilized`} />
+            <StatCard label="Free" value={tb(fleet.free_tb)} />
+            <StatCard label="Utilization" value={`${fleet.utilization_pct.toFixed(1)}%`} />
+          </div>
+
+          {/* ── Capacity Trends ─────────────────────────────────────────── */}
+          <FleetTrendChart />
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <ArrayGrowthDetail arrays={arrayList} />
+            <TopMoversTable />
+          </div>
+
+          {/* ── Per-volume consumption growth (volumes_history) ──────────── */}
+          <VolumeGrowthSection arrays={arrayList} />
+
+
+          {/* View toggle + stacked bar chart */}
+          <div className="card">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-300">
+                Used vs Free by {view === 'vendor' ? 'Platform' : 'Cloud'}
+              </h3>
+
+              <div className="flex gap-1">
+                {(['vendor', 'cloud'] as const).map((v) => (
+                  <button
+                    key={v}
+                    onClick={() => setView(v)}
+                    className={`text-xs px-3 py-1.5 rounded border transition-colors capitalize ${
+                      view === v
+                        ? 'bg-brand-600/20 text-brand-400 border-brand-500/30'
+                        : 'text-gray-400 border-gray-700 hover:border-gray-500'
+                    }`}
+                  >
+                    {v === 'vendor' ? 'Platform' : 'Cloud'}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+                <XAxis dataKey="name" tick={{ fill: '#9ca3af', fontSize: 11 }} />
+                <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v) => `${v} TB`} width={60} />
+                <Tooltip {...tooltipStyle} formatter={(v: number) => tb(v)} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="Used" stackId="cap" fill="#3b82f6" />
+                <Bar dataKey="Free" stackId="cap" fill="#374151" />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Breakdown tables */}
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <BreakdownTable<VendorBucket>
+              title="By Platform"
+              label="Vendor"
+              rows={data!.by_vendor}
+              keyField={(r) => r.vendor}
+            />
+            <BreakdownTable<CloudBucket>
+              title="By Cloud / Group"
+              label="Cloud"
+              rows={data!.by_cloud}
+              keyField={(r) => r.cloud}
+            />
+          </div>
+
+          {/* Vendor × Cloud pivot */}
+          <div className="card">
+            <h3 className="text-sm font-semibold text-gray-300 mb-3">Platform × Cloud</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-gray-500 border-b border-gray-800">
+                    <th className="py-2 pr-4">Vendor</th>
+                    <th className="py-2 pr-4">Cloud</th>
+                    <th className="py-2 pr-4 text-right">Arrays</th>
+                    <th className="py-2 pr-4 text-right">Usable</th>
+                    <th className="py-2 pr-4 text-right">Used</th>
+                    <th className="py-2 pr-4 text-right">Free</th>
+                    <th className="py-2 pr-4 w-40">Utilization</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data!.by_vendor_cloud.map((r: VendorCloudBucket) => (
+                    <tr key={`${r.vendor}|${r.cloud}`} className="border-b border-gray-800/50 hover:bg-gray-800/30">
+                      <td className="py-2 pr-4 text-gray-200 font-medium capitalize">{r.vendor}</td>
+                      <td className="py-2 pr-4 text-gray-400">{r.cloud}</td>
+                      <td className="py-2 pr-4 text-right text-gray-400">{r.arrays}</td>
+                      <td className="py-2 pr-4 text-right text-gray-300">{tb(r.usable_tb)}</td>
+                      <td className="py-2 pr-4 text-right text-gray-300">{tb(r.used_tb)}</td>
+                      <td className="py-2 pr-4 text-right text-gray-300">{tb(r.free_tb)}</td>
+                      <td className="py-2 pr-4"><UtilBar pct={r.utilization_pct} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}

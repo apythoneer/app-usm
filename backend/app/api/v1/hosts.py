@@ -17,12 +17,19 @@ settings = get_settings()
 SCHEMA = settings.db_schema
 
 
+HOST_SORT_COLS = {
+    "host_name", "array_name", "vendor", "host_group", "last_updated",
+}
+
+
 def _fetch_hosts(
     array_name: Optional[str],
     search: Optional[str],
     vendor: Optional[str],
     limit: int,
     offset: int,
+    sort_by: Optional[str] = None,
+    sort_dir: str = "asc",
 ) -> dict:
     where, params = [], []
     if array_name:
@@ -37,11 +44,18 @@ def _fetch_hosts(
 
     where_clause = (" WHERE " + " AND ".join(where)) if where else ""
 
+    # Sorting
+    direction = "DESC" if sort_dir.lower() == "desc" else "ASC"
+    if sort_by and sort_by in HOST_SORT_COLS:
+        order = f"{sort_by} {direction}, array_name, host_name"
+    else:
+        order = "array_name, host_name"
+
     with get_db_cursor() as cursor:
         cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.hosts_cache WITH (NOLOCK){where_clause}", params)
         total = cursor.fetchone()[0]
 
-    sql = f"SELECT * FROM {SCHEMA}.hosts_cache WITH (NOLOCK){where_clause} ORDER BY array_name, host_name OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
+    sql = f"SELECT * FROM {SCHEMA}.hosts_cache WITH (NOLOCK){where_clause} ORDER BY {order} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     with get_db_cursor() as cursor:
         cursor.execute(sql, params + [offset, limit])
         rows = rows_to_dicts(cursor, cursor.fetchall())
@@ -68,8 +82,10 @@ async def list_hosts(
     vendor: Optional[str] = Query(default=None),
     limit: int = Query(default=50, le=5000),
     offset: int = Query(default=0, ge=0),
+    sort_by: Optional[str] = Query(default=None),
+    sort_dir: str = Query(default="asc"),
 ):
-    result = await run_in_threadpool(_fetch_hosts, array_name, search, vendor, limit, offset)
+    result = await run_in_threadpool(_fetch_hosts, array_name, search, vendor, limit, offset, sort_by, sort_dir)
     return {
         "total": result["total"],
         "limit": limit,

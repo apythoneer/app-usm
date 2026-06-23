@@ -48,7 +48,10 @@ class Settings(BaseSettings):
 
     # Notifications
     teams_webhook_url: str = Field(default="", alias="TEAMS_WEBHOOK_URL")
+    # Comma-separated severities that trigger a Teams alert (critical,warning,info)
+    teams_severities: str = Field(default="critical,warning", alias="TEAMS_SEVERITIES")
     snow_enabled: bool = Field(default=False, alias="SNOW_ENABLED")
+
 
     # Collector intervals (seconds)
     metrics_interval: int = Field(default=300, alias="METRICS_INTERVAL")
@@ -58,6 +61,11 @@ class Settings(BaseSettings):
     # Alert lifecycle
     alert_resolve_days: int = Field(default=7, alias="ALERT_RESOLVE_DAYS")
     alert_purge_days: int = Field(default=30, alias="ALERT_PURGE_DAYS")
+
+    # Metrics history retention (days). Extended to 365 to support YTD
+    # capacity-growth analytics. Set lower to reclaim space.
+    history_retention_days: int = Field(default=365, alias="HISTORY_RETENTION_DAYS")
+
 
     # Chat / Ollama (local LLM)
     ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")

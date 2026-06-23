@@ -12,8 +12,10 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
-from app.db.session import get_db_cursor
+from app.db.session import get_fast_cursor, batch_upsert, snapshot_volume_history
+
 from app.core.config import get_settings
+
 from app.schemas.array import ArrayConfig
 
 logger = logging.getLogger("usm.pure.volumes")
@@ -178,18 +180,81 @@ class PureVolumesCollector(BaseCollector):
         return data
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        """Batched, set-based persistence (see db.session.batch_upsert).
+
+        Replaces the old per-row SELECT-then-INSERT/UPDATE loop (which made one
+        round-trip per volume/host and caused multi-minute jobs + ODBC timeouts).
+        """
         try:
-            with get_db_cursor() as cursor:
-                self._save_volumes(cursor, data.get("volumes", {}))
-                self._save_hosts(cursor, data.get("hosts", {}))
-                self._save_host_groups(cursor, data.get("host_groups", {}))
-                self._save_protection_groups(cursor, data.get("protection_groups", {}))
+            volumes = data.get("volumes", {})
+            hosts = data.get("hosts", {})
+            host_groups = data.get("host_groups", {})
+            pgroups = data.get("protection_groups", {})
+
+            # Flatten dict-of-dicts into row lists with JSON-encoded list columns
+            vol_rows = [{
+                "volume_name": name,
+                "size": v["size"], "used": v["used"],
+                "data_reduction": v["data_reduction"], "total_reduction": v["total_reduction"],
+                "snapshots": v.get("snapshots", 0), "created": v["created"], "serial": v["serial"],
+                "hosts": json.dumps(v["hosts"]),
+                "host_groups": json.dumps(v["host_groups"]),
+                "protection_groups": json.dumps(v["protection_groups"]),
+            } for name, v in volumes.items()]
+
+            host_rows = [{
+                "host_name": name,
+                "iqn": h["iqn"], "wwn": h["wwn"], "nqn": h["nqn"],
+                "host_group": h["host_group"], "volumes": json.dumps(h["volumes"]),
+            } for name, h in hosts.items()]
+
+            hg_rows = [{
+                "hgroup_name": name,
+                "hosts": json.dumps(hg["hosts"]), "volumes": json.dumps(hg["volumes"]),
+            } for name, hg in host_groups.items()]
+
+            pg_rows = [{
+                "pgroup_name": name,
+                "volumes": json.dumps(pg["volumes"]), "hosts": json.dumps(pg["hosts"]),
+                "host_groups": json.dumps(pg["host_groups"]), "targets": json.dumps(pg["targets"]),
+                "replication_enabled": pg["replication_enabled"],
+            } for name, pg in pgroups.items()]
+
+            with get_fast_cursor() as cursor:
+                batch_upsert(
+                    cursor, f"{SCHEMA}.volumes_cache",
+                    key_cols=("volume_name",),
+                    update_cols=("size", "used", "data_reduction", "total_reduction",
+                                 "snapshots", "created", "serial", "hosts",
+                                 "host_groups", "protection_groups"),
+                    rows=vol_rows, array_name=self.array_name,
+                )
+                batch_upsert(
+                    cursor, f"{SCHEMA}.hosts_cache",
+                    key_cols=("host_name",),
+                    update_cols=("iqn", "wwn", "nqn", "host_group", "volumes"),
+                    rows=host_rows, array_name=self.array_name,
+                )
+                batch_upsert(
+                    cursor, f"{SCHEMA}.host_groups_cache",
+                    key_cols=("hgroup_name",),
+                    update_cols=("hosts", "volumes"),
+                    rows=hg_rows, array_name=self.array_name,
+                )
+                batch_upsert(
+                    cursor, f"{SCHEMA}.protection_groups_cache",
+                    key_cols=("pgroup_name",),
+                    update_cols=("volumes", "hosts", "host_groups", "targets",
+                                 "replication_enabled"),
+                    rows=pg_rows, array_name=self.array_name,
+                )
+
+                # Append a point-in-time snapshot for volume growth analytics.
+                snapshot_volume_history(cursor, self.array_name)
 
             result.records_saved = (
-                len(data.get("volumes", {}))
-                + len(data.get("hosts", {}))
-                + len(data.get("host_groups", {}))
-                + len(data.get("protection_groups", {}))
+
+                len(vol_rows) + len(host_rows) + len(hg_rows) + len(pg_rows)
             )
             return True
         except Exception as e:
@@ -197,145 +262,6 @@ class PureVolumesCollector(BaseCollector):
             logger.error(f"[{self.array_name}] save failed: {e}")
             return False
 
-    # ------------------------------------------------------------------ helpers
-    def _save_volumes(self, cursor, volumes: dict):
-        cursor.execute(
-            f"SELECT volume_name FROM {SCHEMA}.volumes_cache WHERE array_name=?",
-            (self.array_name,),
-        )
-        existing = {r[0] for r in cursor.fetchall()}
-        for name in existing - set(volumes):
-            cursor.execute(
-                f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=? AND volume_name=?",
-                (self.array_name, name),
-            )
-        for name, v in volumes.items():
-            hj = json.dumps(v["hosts"])
-            hgj = json.dumps(v["host_groups"])
-            pgj = json.dumps(v["protection_groups"])
-            cursor.execute(
-                f"SELECT id FROM {SCHEMA}.volumes_cache WHERE array_name=? AND volume_name=?",
-                (self.array_name, name),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    f"""UPDATE {SCHEMA}.volumes_cache SET
-                        size=?,used=?,data_reduction=?,total_reduction=?,
-                        snapshots=?,created=?,serial=?,hosts=?,host_groups=?,
-                        protection_groups=?,last_updated=GETDATE()
-                    WHERE array_name=? AND volume_name=?""",
-                    (v["size"], v["used"], v["data_reduction"], v["total_reduction"],
-                     v.get("snapshots", 0), v["created"], v["serial"],
-                     hj, hgj, pgj, self.array_name, name),
-                )
-            else:
-                cursor.execute(
-                    f"""INSERT INTO {SCHEMA}.volumes_cache
-                        (array_name,volume_name,size,used,data_reduction,total_reduction,
-                         snapshots,created,serial,hosts,host_groups,protection_groups)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                    (self.array_name, name, v["size"], v["used"],
-                     v["data_reduction"], v["total_reduction"],
-                     v.get("snapshots", 0), v["created"], v["serial"],
-                     hj, hgj, pgj),
-                )
-
-    def _save_hosts(self, cursor, hosts: dict):
-        cursor.execute(
-            f"SELECT host_name FROM {SCHEMA}.hosts_cache WHERE array_name=?",
-            (self.array_name,),
-        )
-        existing = {r[0] for r in cursor.fetchall()}
-        for name in existing - set(hosts):
-            cursor.execute(
-                f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=? AND host_name=?",
-                (self.array_name, name),
-            )
-        for name, h in hosts.items():
-            vj = json.dumps(h["volumes"])
-            cursor.execute(
-                f"SELECT id FROM {SCHEMA}.hosts_cache WHERE array_name=? AND host_name=?",
-                (self.array_name, name),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    f"""UPDATE {SCHEMA}.hosts_cache SET
-                        iqn=?,wwn=?,nqn=?,host_group=?,volumes=?,last_updated=GETDATE()
-                    WHERE array_name=? AND host_name=?""",
-                    (h["iqn"], h["wwn"], h["nqn"], h["host_group"], vj, self.array_name, name),
-                )
-            else:
-                cursor.execute(
-                    f"""INSERT INTO {SCHEMA}.hosts_cache
-                        (array_name,host_name,iqn,wwn,nqn,host_group,volumes)
-                    VALUES (?,?,?,?,?,?,?)""",
-                    (self.array_name, name, h["iqn"], h["wwn"], h["nqn"], h["host_group"], vj),
-                )
-
-    def _save_host_groups(self, cursor, hgroups: dict):
-        cursor.execute(
-            f"SELECT hgroup_name FROM {SCHEMA}.host_groups_cache WHERE array_name=?",
-            (self.array_name,),
-        )
-        existing = {r[0] for r in cursor.fetchall()}
-        for name in existing - set(hgroups):
-            cursor.execute(
-                f"DELETE FROM {SCHEMA}.host_groups_cache WHERE array_name=? AND hgroup_name=?",
-                (self.array_name, name),
-            )
-        for name, hg in hgroups.items():
-            hj = json.dumps(hg["hosts"])
-            vj = json.dumps(hg["volumes"])
-            cursor.execute(
-                f"SELECT id FROM {SCHEMA}.host_groups_cache WHERE array_name=? AND hgroup_name=?",
-                (self.array_name, name),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    f"UPDATE {SCHEMA}.host_groups_cache SET hosts=?,volumes=?,last_updated=GETDATE() "
-                    f"WHERE array_name=? AND hgroup_name=?",
-                    (hj, vj, self.array_name, name),
-                )
-            else:
-                cursor.execute(
-                    f"INSERT INTO {SCHEMA}.host_groups_cache (array_name,hgroup_name,hosts,volumes) VALUES (?,?,?,?)",
-                    (self.array_name, name, hj, vj),
-                )
-
-    def _save_protection_groups(self, cursor, pgroups: dict):
-        cursor.execute(
-            f"SELECT pgroup_name FROM {SCHEMA}.protection_groups_cache WHERE array_name=?",
-            (self.array_name,),
-        )
-        existing = {r[0] for r in cursor.fetchall()}
-        for name in existing - set(pgroups):
-            cursor.execute(
-                f"DELETE FROM {SCHEMA}.protection_groups_cache WHERE array_name=? AND pgroup_name=?",
-                (self.array_name, name),
-            )
-        for name, pg in pgroups.items():
-            vj = json.dumps(pg["volumes"])
-            hj = json.dumps(pg["hosts"])
-            hgj = json.dumps(pg["host_groups"])
-            tj = json.dumps(pg["targets"])
-            cursor.execute(
-                f"SELECT id FROM {SCHEMA}.protection_groups_cache WHERE array_name=? AND pgroup_name=?",
-                (self.array_name, name),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    f"""UPDATE {SCHEMA}.protection_groups_cache SET
-                        volumes=?,hosts=?,host_groups=?,targets=?,replication_enabled=?,last_updated=GETDATE()
-                    WHERE array_name=? AND pgroup_name=?""",
-                    (vj, hj, hgj, tj, pg["replication_enabled"], self.array_name, name),
-                )
-            else:
-                cursor.execute(
-                    f"""INSERT INTO {SCHEMA}.protection_groups_cache
-                        (array_name,pgroup_name,volumes,hosts,host_groups,targets,replication_enabled)
-                    VALUES (?,?,?,?,?,?,?)""",
-                    (self.array_name, name, vj, hj, hgj, tj, pg["replication_enabled"]),
-                )
-
     def disconnect(self):
+
         self.client.disconnect()
