@@ -17,11 +17,18 @@ import type {
 
 
 const TREND_RANGES = [
+  { d: 7, label: '7d' },
+  { d: 14, label: '14d' },
   { d: 30, label: '30d' },
   { d: 90, label: '90d' },
   { d: 180, label: '180d' },
   { d: 365, label: '1y' },
 ]
+
+// Default window. History only began accumulating in mid-June 2026, so a short
+// window fills the charts today; the longer ranges become useful as data grows.
+const DEFAULT_TREND_DAYS = 14
+
 
 function trendDate(v: string) {
   const d = new Date(v)
@@ -108,7 +115,8 @@ function BreakdownTable<T extends CapacityBucket>({
 // ── Fleet capacity over time (daily_stats) ────────────────────────────────────
 
 function FleetTrendChart() {
-  const [days, setDays] = useState(90)
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
 
   const { data, isLoading } = useQuery<DailyTrendResponse>({
     queryKey: ['daily-trend', days],
@@ -288,7 +296,8 @@ function ArrayGrowthDetail({ arrays }: { arrays: ArraySummary[] }) {
 // ── Top growers / shrinkers ───────────────────────────────────────────────────
 
 function TopMoversTable() {
-  const [days, setDays] = useState(90)
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
 
   const { data, isLoading } = useQuery<TopGrowersResponse>({
     queryKey: ['top-growers', days],
@@ -373,7 +382,8 @@ function TopMoversTable() {
 // ── Per-volume growth (backed by volumes_history) ─────────────────────────────
 
 function VolumeGrowthSection({ arrays }: { arrays: ArraySummary[] }) {
-  const [days, setDays] = useState(90)
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
   const [selectedArray, setSelectedArray] = useState('')
   const [selectedVolume, setSelectedVolume] = useState('')
 
