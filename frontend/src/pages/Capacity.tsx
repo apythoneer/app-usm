@@ -30,7 +30,7 @@ const TREND_RANGES = [
 
 // Default window. History only began accumulating in mid-June 2026, so a short
 // window fills the charts today; the longer ranges become useful as data grows.
-const DEFAULT_TREND_DAYS = 14
+const DEFAULT_TREND_DAYS = 90
 
 
 function trendDate(v: string) {
@@ -166,20 +166,25 @@ function FleetGrowthSummary() {
 
   const points = data?.data ?? []
 
-  // Derive growth metrics from the daily used-capacity series.
+  // Prefer the server-authoritative projection so the growth summary and the
+  // "Projected Full" stat are consistent everywhere. Fall back to a local
+  // derivation only if the API hasn't been upgraded yet.
+  const proj = data?.projection
   const used = points.map((p) => p.total_used_tb)
   const first = used.length ? used[0] : 0
   const last = used.length ? used[used.length - 1] : 0
-  const deltaTb = last - first
-  const deltaPct = first > 0 ? (deltaTb / first) * 100 : null
-  const spanDays = points.length > 1 ? points.length - 1 : 0
-  const perDay = spanDays > 0 ? linregSlope(used) : 0  // robust avg TB/day
-  const growing = deltaTb >= 0
+  const deltaTb = proj ? proj.net_change_tb : last - first
+  const deltaPct = proj ? proj.net_change_pct : first > 0 ? (deltaTb / first) * 100 : null
+  const spanDays = proj ? proj.span_days : points.length > 1 ? points.length - 1 : 0
+  const perDay = proj ? proj.avg_rate_tb_per_day : spanDays > 0 ? linregSlope(used) : 0
+  const trend = proj ? proj.trend : deltaTb > 0.01 ? 'growing' : deltaTb < -0.01 ? 'declining' : 'stable'
+  const growing = trend === 'growing'
 
-  // Headroom + naive projection to full (only meaningful while growing).
-  const lastUsable = points.length ? points[points.length - 1].total_capacity_tb : 0
-  const headroomTb = Math.max(lastUsable - last, 0)
-  const daysToFull = perDay > 0.0001 ? Math.round(headroomTb / perDay) : null
+  const lastUsable = proj ? proj.usable_tb : points.length ? points[points.length - 1].total_capacity_tb : 0
+  const headroomTb = proj ? proj.headroom_tb : Math.max(lastUsable - last, 0)
+  const daysToFull = proj ? proj.days_to_full : perDay > 0.0001 ? Math.round(headroomTb / perDay) : null
+  const projectedFullDate = proj ? proj.projected_full_date : null
+  const lastCollected = data?.last_collected ?? null
 
   // Per-step day-over-day change, for the colored gain/loss bar chart.
   const deltaSeries = points.map((p, i) => ({
@@ -195,6 +200,9 @@ function FleetGrowthSummary() {
           {points.length > 0 && (
             <p className="text-xs text-gray-500 mt-0.5">
               {trendDate(points[0].date)} → {trendDate(points[points.length - 1].date)} · {points.length} daily points
+              {lastCollected && (
+                <span className="ml-2 text-gray-600">· updated {trendDate(lastCollected)}</span>
+              )}
             </p>
           )}
         </div>
@@ -241,9 +249,25 @@ function FleetGrowthSummary() {
             <GrowthStat label="Free Headroom" value={tb(headroomTb)} sub={`of ${tb(lastUsable)} usable`} />
             <GrowthStat
               label="Projected Full"
-              value={daysToFull != null ? `~${daysToFull}d` : '—'}
-              sub={daysToFull != null ? 'at current rate' : (perDay <= 0 ? 'not growing' : 'n/a')}
-              tone={daysToFull != null && daysToFull < 90 ? 'down' : 'neutral'}
+              value={
+                daysToFull != null
+                  ? `~${daysToFull}d`
+                  : trend === 'declining'
+                  ? 'N/A'
+                  : trend === 'stable'
+                  ? 'N/A'
+                  : '—'
+              }
+              sub={
+                daysToFull != null
+                  ? projectedFullDate
+                    ? `by ${trendDate(projectedFullDate)}`
+                    : 'at current rate'
+                  : trend === 'declining'
+                  ? 'reclaiming — not filling'
+                  : 'stable — not filling'
+              }
+              tone={daysToFull != null && daysToFull < 90 ? 'down' : daysToFull != null && daysToFull < 180 ? 'neutral' : 'neutral'}
             />
           </div>
 
