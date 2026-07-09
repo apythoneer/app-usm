@@ -52,6 +52,20 @@ class Settings(BaseSettings):
     teams_severities: str = Field(default="critical,warning", alias="TEAMS_SEVERITIES")
     snow_enabled: bool = Field(default=False, alias="SNOW_ENABLED")
 
+    # Capacity alerting — per-array threshold crossings + fleet projected-full
+    capacity_alerts_enabled: bool = Field(default=True, alias="CAPACITY_ALERTS_ENABLED")
+    # Comma-separated utilization % thresholds that trigger a per-array Teams alert
+    capacity_alert_thresholds: str = Field(default="80,90,95", alias="CAPACITY_ALERT_THRESHOLDS")
+    # Minimum days between re-sending the same threshold/projection alert
+    capacity_alert_resend_days: int = Field(default=7, alias="CAPACITY_ALERT_RESEND_DAYS")
+    # Alert when the fleet is projected to fill within this many days
+    capacity_projected_full_days: int = Field(default=30, alias="CAPACITY_PROJECTED_FULL_DAYS")
+    # Trailing window (days of daily_stats) used to compute the growth projection
+    capacity_alert_trend_days: int = Field(default=90, alias="CAPACITY_ALERT_TREND_DAYS")
+    # How often the scheduler runs the capacity alert check (hours)
+    capacity_alert_check_interval_hours: int = Field(default=12, alias="CAPACITY_ALERT_CHECK_INTERVAL_HOURS")
+
+
 
     # Collector intervals (seconds)
     metrics_interval: int = Field(default=300, alias="METRICS_INTERVAL")

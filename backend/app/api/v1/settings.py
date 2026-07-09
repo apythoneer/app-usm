@@ -33,6 +33,13 @@ class SettingsResponse(BaseModel):
     teams_webhook_url: str
     registered_vendors: list
     registered_collectors: dict
+    capacity_alerts_enabled: bool
+    capacity_alert_thresholds: str
+    capacity_alert_resend_days: int
+    capacity_projected_full_days: int
+    capacity_alert_trend_days: int
+    capacity_alert_check_interval_hours: int
+
 
 
 class NotificationUpdate(BaseModel):
@@ -98,7 +105,22 @@ async def get_app_settings():
         teams_webhook_url=url,
         registered_vendors=CollectorRegistry.vendors(),
         registered_collectors=CollectorRegistry.summary(),
+        capacity_alerts_enabled=settings.capacity_alerts_enabled,
+        capacity_alert_thresholds=settings.capacity_alert_thresholds,
+        capacity_alert_resend_days=settings.capacity_alert_resend_days,
+        capacity_projected_full_days=settings.capacity_projected_full_days,
+        capacity_alert_trend_days=settings.capacity_alert_trend_days,
+        capacity_alert_check_interval_hours=settings.capacity_alert_check_interval_hours,
     )
+
+
+@router.post("/capacity-alerts/run")
+async def trigger_capacity_alert_check():
+    """Manually trigger the capacity alert check (thresholds + fleet projection)."""
+    from app.services.capacity_alerts import run_capacity_alert_checks
+    result = await run_in_threadpool(run_capacity_alert_checks)
+    return result
+
 
 
 @router.put("/notifications")
