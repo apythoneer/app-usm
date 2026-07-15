@@ -1,7 +1,22 @@
 # USM v3 — convenience commands
 # Run from repo root
 
-COMPOSE = docker compose -f docker/docker-compose.yml
+# --env-file is REQUIRED and must come before -f.
+#
+# Compose derives its project directory from the compose file's location, so
+# `docker compose -f docker/docker-compose.yml` looks for docker/.env and
+# silently ignores the .env at the repo root. Every ${VAR:-default} in the
+# compose file therefore fell back to its default: SECRET_KEY has been running
+# as the literal "CHANGE_ME_BEFORE_PRODUCTION" placeholder, and KEEPASS_PASSWORD
+# resolved to the old hardcoded fallback rather than the .env value.
+#
+# It surfaced only when the KEEPASS_PASSWORD fallback was removed and compose
+# started refusing to interpolate. Passing --env-file explicitly points it back
+# at the root .env.
+#
+# (Teams is unaffected: the webhook is persisted in the app_settings table and
+# loaded at startup by load_persisted_settings(), not read from the environment.)
+COMPOSE = docker compose --env-file .env -f docker/docker-compose.yml
 
 # ── Deploy target (dev server over SSH) ───────────────────────────────────────
 # Override on the command line, e.g.:
