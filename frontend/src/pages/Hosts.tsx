@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search, Filter, ChevronUp, ChevronDown, X, Download, Copy, Check } from 'lucide-react'
+import ErrorState from '@/components/common/ErrorState'
 import { arraysApi } from '@/api/arrays'
 import { hostsApi } from '@/api/hosts'
 import type { ArraySummary, Host } from '@/api/types'
@@ -212,7 +213,7 @@ export default function Hosts() {
     setOffset(0)
   }
 
-  const { data: result, isLoading } = useQuery({
+  const { data: result, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hosts', arrayFilter, debouncedSearch, vendorFilter, offset, sortBy, sortDir],
     queryFn: () => hostsApi.list({
       array_name: arrayFilter || undefined,
@@ -268,7 +269,11 @@ export default function Hosts() {
       </div>
 
       <div className="card overflow-x-auto">
-        {isLoading ? (
+        {isError ? (
+          // Checked before the empty branch — see ErrorState for why an outage
+          // must not render as "No hosts found".
+          <ErrorState what="hosts" error={error} onRetry={() => refetch()} />
+        ) : isLoading ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : hosts.length === 0 ? (
           <p className="text-gray-500 text-sm py-4 text-center">No hosts found</p>

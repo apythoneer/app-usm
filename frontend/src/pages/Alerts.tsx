@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Filter, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import ErrorState from '@/components/common/ErrorState'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { severityBg } from '@/utils/formatters'
@@ -122,7 +123,7 @@ export default function Alerts() {
     setOffset(0)
   }
 
-  const { data: result, isLoading } = useQuery({
+  const { data: result, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['alerts', severity, vendorFilter, arrayFilter, showResolved, offset, sortBy, sortDir],
     queryFn: () => alertsApi.list({
       severity,
@@ -207,7 +208,12 @@ export default function Alerts() {
 
       {/* Table */}
       <div className="card">
-        {isLoading ? (
+        {isError ? (
+          // Checked before the empty branch — a failed request leaves `alerts`
+          // empty, which would otherwise render as "No alerts found" and report
+          // an outage as a healthy, quiet fleet.
+          <ErrorState what="alerts" error={error} onRetry={() => refetch()} />
+        ) : isLoading ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : alerts.length === 0 ? (
           <p className="text-gray-500 text-sm py-4 text-center">No alerts found</p>

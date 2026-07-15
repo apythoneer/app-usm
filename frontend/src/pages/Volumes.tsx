@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Search, Filter, ChevronUp, ChevronDown, X, Download, Copy, Check } from 'lucide-react'
+import ErrorState from '@/components/common/ErrorState'
 import { arraysApi } from '@/api/arrays'
 import { volumesApi } from '@/api/volumes'
 import type { ArraySummary, Volume } from '@/api/types'
@@ -306,7 +307,7 @@ export default function Volumes() {
     setOffset(0)
   }
 
-  const { data: result, isLoading } = useQuery({
+  const { data: result, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['volumes', arrayFilter, debouncedSearch, vendorFilter, offset, sortBy, sortDir],
     queryFn: () => volumesApi.list({
       array_name: arrayFilter || undefined,
@@ -367,7 +368,11 @@ export default function Volumes() {
       </div>
 
       <div className="card overflow-x-auto">
-        {isLoading ? (
+        {isError ? (
+          // Checked before the empty branch — see ErrorState for why an outage
+          // must not render as "No volumes found".
+          <ErrorState what="volumes" error={error} onRetry={() => refetch()} />
+        ) : isLoading ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : volumes.length === 0 ? (
           <p className="text-gray-500 text-sm py-4 text-center">No volumes found</p>

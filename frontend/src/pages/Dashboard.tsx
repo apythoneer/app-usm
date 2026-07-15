@@ -6,6 +6,7 @@ import {
   BarChart2, Users, ChevronDown, ChevronRight, X, HardDrive,
   Cloud, Building2, Search, Filter,
 } from 'lucide-react'
+import ErrorState from '@/components/common/ErrorState'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { volumesApi } from '@/api/volumes'
@@ -468,7 +469,13 @@ export default function Dashboard() {
   const arraysRef = useRef<HTMLDivElement>(null)
 
 
-  const { data: arrays = [], isLoading: arraysLoading } = useQuery<ArraySummary[]>({
+  const {
+    data: arrays = [],
+    isLoading: arraysLoading,
+    isError: arraysError,
+    error: arraysErrorObj,
+    refetch: refetchArrays,
+  } = useQuery<ArraySummary[]>({
     queryKey: ['arrays'],
     queryFn: () => arraysApi.list(),
     refetchInterval: 60_000,
@@ -629,7 +636,17 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {arraysLoading ? (
+        {arraysError ? (
+          // Must be checked BEFORE the empty branch: a failed request leaves
+          // `arrays` at its [] default, which previously fell through to
+          // "No arrays found — check collectors are running", reporting a
+          // backend outage as an empty fleet and blaming the wrong subsystem.
+          <ErrorState
+            what="arrays"
+            error={arraysErrorObj}
+            onRetry={() => refetchArrays()}
+          />
+        ) : arraysLoading ? (
           <p className="text-gray-500 text-sm">Loading arrays…</p>
         ) : filteredArrays.length === 0 ? (
           <p className="text-gray-500 text-sm">
