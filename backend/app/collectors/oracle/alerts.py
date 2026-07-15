@@ -137,7 +137,10 @@ class OracleAlertsCollector(BaseCollector):
                     array_name=alert["array_name"], vendor="oracle",
                     severity=alert["severity"], event=alert["event"],
                     component=f"{alert['component_type']}: {alert['component_name']}",
+                    message_id=str(alert.get("message_id", "")),
+                    opened=alert.get("opened", ""),
                 )
+
                 if ok:
                     self._mark_notified(alert["array_name"], alert["message_id"])
             except Exception as e:

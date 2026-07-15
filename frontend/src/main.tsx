@@ -11,7 +11,14 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 30_000,       // 30s before refetch
       refetchInterval: 60_000, // auto-refresh every 60s
-      retry: 2,
+      // Retry transient failures only. A 4xx is a client/contract error that will
+      // never succeed on retry — retrying it just delays the error state by ~3
+      // round-trips and triples the load on an endpoint that is already refusing.
+      retry: (failureCount, error) => {
+        const status = (error as { response?: { status?: number } })?.response?.status
+        if (status && status >= 400 && status < 500) return false
+        return failureCount < 2
+      },
     },
   },
 })

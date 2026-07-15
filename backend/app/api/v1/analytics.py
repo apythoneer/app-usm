@@ -3,7 +3,7 @@ Analytics API — time-series metrics history.
 """
 
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
@@ -11,11 +11,13 @@ from fastapi.responses import StreamingResponse
 
 from app.db.session import get_db_cursor, rows_to_dicts
 from app.core.config import get_settings
+from app.services.capacity_projection import compute_daily_trend
 
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 settings = get_settings()
 SCHEMA = settings.db_schema
+
 
 
 def _fetch_history(array_name: str, hours: int, limit: int) -> List[dict]:
@@ -63,47 +65,28 @@ async def get_daily_stats(days: int = Query(default=30, ge=1, le=365)):
     return {"days": days, "data": rows}
 
 
-def _fetch_daily_trend(days: int) -> List[dict]:
-    """
-    Fleet capacity over time, ascending by date, for charting.
-    Reads pre-aggregated daily_stats (cheap — one row per day).
-    """
-    with get_db_cursor() as cursor:
-        cursor.execute(
-            f"""SELECT TOP {days}
-                stat_date,
-                total_arrays,
-                total_capacity_tb,
-                total_used_tb,
-                avg_utilization_pct,
-                avg_data_reduction
-            FROM {SCHEMA}.daily_stats WITH (NOLOCK)
-            ORDER BY stat_date DESC""",
-        )
-        rows = rows_to_dicts(cursor, cursor.fetchall())
-
-    # Return ascending for left-to-right time-series rendering.
-    out: List[dict] = []
-    for r in reversed(rows):
-        out.append({
-            "date": str(r.get("stat_date")),
-            "total_capacity_tb": round(float(r.get("total_capacity_tb") or 0), 2),
-            "total_used_tb": round(float(r.get("total_used_tb") or 0), 2),
-            "avg_utilization_pct": round(float(r.get("avg_utilization_pct") or 0), 1),
-            "avg_data_reduction": round(float(r.get("avg_data_reduction") or 0), 2),
-            "total_arrays": int(r.get("total_arrays") or 0),
-        })
-    return out
-
-
 @router.get("/daily-trend")
 async def get_daily_trend(days: int = Query(default=90, ge=1, le=365)):
     """
     Fleet capacity time-series for charting: total usable/used TB and average
     utilization per day, ascending by date. Backed by the daily_stats table.
+
+    Includes a server-computed `projection` (net change, avg rate, headroom,
+    projected-full date, trend classification) plus `last_collected` so the UI
+    can render a single consistent growth summary and a freshness badge.
+
+    The projection math lives in app/services/capacity_projection.py so it's
+    shared with the capacity alerting scheduler job (single source of truth).
     """
-    rows = await run_in_threadpool(_fetch_daily_trend, days)
-    return {"days": days, "data_points": len(rows), "data": rows}
+    result = await run_in_threadpool(compute_daily_trend, days)
+    return {
+        "days": days,
+        "data_points": len(result["data"]),
+        "data": result["data"],
+        "last_collected": result["last_collected"],
+        "projection": result["projection"],
+    }
+
 
 
 

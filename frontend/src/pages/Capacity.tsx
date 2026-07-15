@@ -3,9 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { Download, TrendingUp, TrendingDown } from 'lucide-react'
 
 import {
-  BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  BarChart, Bar, LineChart, Line, ReferenceLine,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, Cell,
   ResponsiveContainer,
 } from 'recharts'
+
+
 import { arraysApi } from '@/api/arrays'
 import { volumesApi } from '@/api/volumes'
 import type {
@@ -17,11 +20,18 @@ import type {
 
 
 const TREND_RANGES = [
+  { d: 7, label: '7d' },
+  { d: 14, label: '14d' },
   { d: 30, label: '30d' },
   { d: 90, label: '90d' },
   { d: 180, label: '180d' },
   { d: 365, label: '1y' },
 ]
+
+// Default window. History only began accumulating in mid-June 2026, so a short
+// window fills the charts today; the longer ranges become useful as data grows.
+const DEFAULT_TREND_DAYS = 90
+
 
 function trendDate(v: string) {
   const d = new Date(v)
@@ -105,10 +115,193 @@ function BreakdownTable<T extends CapacityBucket>({
   )
 }
 
+// ── Fleet growth / decline summary (daily_stats) ──────────────────────────────
+
+// Linear least-squares slope of y over index 0..n-1 → average units per step.
+function linregSlope(ys: number[]): number {
+  const n = ys.length
+  if (n < 2) return 0
+  const xMean = (n - 1) / 2
+  const yMean = ys.reduce((a, b) => a + b, 0) / n
+  let num = 0
+  let den = 0
+  for (let i = 0; i < n; i++) {
+    num += (i - xMean) * (ys[i] - yMean)
+    den += (i - xMean) * (i - xMean)
+  }
+  return den === 0 ? 0 : num / den
+}
+
+function GrowthStat({
+  label, value, sub, tone = 'neutral',
+}: {
+  label: string
+  value: string
+  sub?: string
+  tone?: 'up' | 'down' | 'neutral'
+}) {
+  const color =
+    tone === 'up' ? 'text-emerald-400' : tone === 'down' ? 'text-red-400' : 'text-white'
+  return (
+    <div className="card">
+      <p className="text-xs text-gray-500">{label}</p>
+      <p className={`text-2xl font-semibold mt-1 flex items-center gap-1 ${color}`}>
+        {tone === 'up' && <TrendingUp size={18} />}
+        {tone === 'down' && <TrendingDown size={18} />}
+        {value}
+      </p>
+      {sub && <p className="text-xs text-gray-500 mt-0.5">{sub}</p>}
+    </div>
+  )
+}
+
+function FleetGrowthSummary() {
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
+  const { data, isLoading } = useQuery<DailyTrendResponse>({
+    queryKey: ['daily-trend', days],
+    queryFn: () => arraysApi.dailyTrend(days),
+    refetchInterval: 300_000,
+  })
+
+  const points = data?.data ?? []
+
+  // Prefer the server-authoritative projection so the growth summary and the
+  // "Projected Full" stat are consistent everywhere. Fall back to a local
+  // derivation only if the API hasn't been upgraded yet.
+  const proj = data?.projection
+  const used = points.map((p) => p.total_used_tb)
+  const first = used.length ? used[0] : 0
+  const last = used.length ? used[used.length - 1] : 0
+  const deltaTb = proj ? proj.net_change_tb : last - first
+  const deltaPct = proj ? proj.net_change_pct : first > 0 ? (deltaTb / first) * 100 : null
+  const spanDays = proj ? proj.span_days : points.length > 1 ? points.length - 1 : 0
+  const perDay = proj ? proj.avg_rate_tb_per_day : spanDays > 0 ? linregSlope(used) : 0
+  const trend = proj ? proj.trend : deltaTb > 0.01 ? 'growing' : deltaTb < -0.01 ? 'declining' : 'stable'
+  const growing = trend === 'growing'
+
+  const lastUsable = proj ? proj.usable_tb : points.length ? points[points.length - 1].total_capacity_tb : 0
+  const headroomTb = proj ? proj.headroom_tb : Math.max(lastUsable - last, 0)
+  const daysToFull = proj ? proj.days_to_full : perDay > 0.0001 ? Math.round(headroomTb / perDay) : null
+  const projectedFullDate = proj ? proj.projected_full_date : null
+  const lastCollected = data?.last_collected ?? null
+
+  // Per-step day-over-day change, for the colored gain/loss bar chart.
+  const deltaSeries = points.map((p, i) => ({
+    date: p.date,
+    change: i === 0 ? 0 : +(p.total_used_tb - points[i - 1].total_used_tb).toFixed(2),
+  }))
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-300">Storage Consumption — Growth &amp; Decline</h3>
+          {points.length > 0 && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              {trendDate(points[0].date)} → {trendDate(points[points.length - 1].date)} · {points.length} daily points
+              {lastCollected && (
+                <span className="ml-2 text-gray-600">· updated {trendDate(lastCollected)}</span>
+              )}
+            </p>
+          )}
+        </div>
+        <div className="flex gap-1">
+          {TREND_RANGES.map(({ d, label }) => (
+            <button
+              key={d}
+              onClick={() => setDays(d)}
+              className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+                days === d
+                  ? 'bg-brand-600/20 text-brand-400 border-brand-500/30'
+                  : 'text-gray-400 border-gray-700 hover:border-gray-500'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {isLoading && <p className="text-gray-500 text-sm">Loading growth…</p>}
+
+      {!isLoading && points.length < 2 && (
+        <div className="text-center py-10 text-gray-600 text-sm">
+          Not enough daily history in this window yet to compute growth.
+        </div>
+      )}
+
+      {points.length >= 2 && (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <GrowthStat
+              label={`Net Change (${spanDays}d)`}
+              value={`${growing ? '+' : ''}${tb(deltaTb)}`}
+              sub={deltaPct != null ? `${deltaPct > 0 ? '+' : ''}${deltaPct.toFixed(1)}%` : undefined}
+              tone={growing ? 'up' : 'down'}
+            />
+            <GrowthStat
+              label="Avg Rate"
+              value={`${perDay >= 0 ? '+' : ''}${tb(Math.abs(perDay))}/day`}
+              sub={perDay >= 0 ? 'consuming' : 'reclaiming'}
+              tone={perDay >= 0 ? 'up' : 'down'}
+            />
+            <GrowthStat label="Free Headroom" value={tb(headroomTb)} sub={`of ${tb(lastUsable)} usable`} />
+            <GrowthStat
+              label="Projected Full"
+              value={
+                daysToFull != null
+                  ? `~${daysToFull}d`
+                  : trend === 'declining'
+                  ? 'N/A'
+                  : trend === 'stable'
+                  ? 'N/A'
+                  : '—'
+              }
+              sub={
+                daysToFull != null
+                  ? projectedFullDate
+                    ? `by ${trendDate(projectedFullDate)}`
+                    : 'at current rate'
+                  : trend === 'declining'
+                  ? 'reclaiming — not filling'
+                  : 'stable — not filling'
+              }
+              tone={daysToFull != null && daysToFull < 90 ? 'down' : daysToFull != null && daysToFull < 180 ? 'neutral' : 'neutral'}
+            />
+          </div>
+
+          <p className="text-xs text-gray-500 mb-1">Day-over-day change (used capacity)</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <BarChart data={deltaSeries}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey="date" tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={trendDate} />
+              <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={(v: number) => `${v} TB`} width={64} />
+              <Tooltip
+                {...tooltipStyle}
+                labelFormatter={trendDate}
+                formatter={(v: number) => [`${v >= 0 ? '+' : ''}${tb(v)}`, 'Change']}
+              />
+              <ReferenceLine y={0} stroke="#6b7280" />
+              <Bar dataKey="change">
+                {deltaSeries.map((d, i) => (
+                  <Cell key={i} fill={d.change >= 0 ? '#10b981' : '#ef4444'} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── Fleet capacity over time (daily_stats) ────────────────────────────────────
 
 function FleetTrendChart() {
-  const [days, setDays] = useState(90)
+
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
 
   const { data, isLoading } = useQuery<DailyTrendResponse>({
     queryKey: ['daily-trend', days],
@@ -288,7 +481,8 @@ function ArrayGrowthDetail({ arrays }: { arrays: ArraySummary[] }) {
 // ── Top growers / shrinkers ───────────────────────────────────────────────────
 
 function TopMoversTable() {
-  const [days, setDays] = useState(90)
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
 
   const { data, isLoading } = useQuery<TopGrowersResponse>({
     queryKey: ['top-growers', days],
@@ -373,7 +567,8 @@ function TopMoversTable() {
 // ── Per-volume growth (backed by volumes_history) ─────────────────────────────
 
 function VolumeGrowthSection({ arrays }: { arrays: ArraySummary[] }) {
-  const [days, setDays] = useState(90)
+  const [days, setDays] = useState(DEFAULT_TREND_DAYS)
+
   const [selectedArray, setSelectedArray] = useState('')
   const [selectedVolume, setSelectedVolume] = useState('')
 
@@ -648,7 +843,9 @@ export default function Capacity() {
           </div>
 
           {/* ── Capacity Trends ─────────────────────────────────────────── */}
+          <FleetGrowthSummary />
           <FleetTrendChart />
+
 
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
             <ArrayGrowthDetail arrays={arrayList} />

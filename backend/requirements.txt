@@ -16,6 +16,9 @@ apscheduler>=3.10.0
 requests>=2.31.0
 urllib3>=2.1.0
 
+# Excel export (analytics capacity report)
+openpyxl>=3.1.0
+
 # Auth (Phase 3 — wired but not enforced yet)
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4

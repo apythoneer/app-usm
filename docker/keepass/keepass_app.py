@@ -22,8 +22,18 @@ logger = logging.getLogger("keepass")
 
 # Configuration from environment variables
 KEEPASS_DB = os.environ.get("KEEPASS_DB", "/data/StorageOps-Database.kdbx")
-KEEPASS_PASSWORD = os.environ.get("KEEPASS_PASSWORD", "n1md@n@s")
 CACHE_TTL = int(os.environ.get("CACHE_TTL", "60"))  # seconds
+
+# The vault master password is required and has no default. It previously carried a
+# hardcoded fallback, which meant the master password for every array/SQL credential
+# was committed to source control. Fail loudly rather than silently unlocking the
+# vault with a known-compromised value.
+KEEPASS_PASSWORD = os.environ.get("KEEPASS_PASSWORD")
+if not KEEPASS_PASSWORD:
+    raise RuntimeError(
+        "KEEPASS_PASSWORD is not set. Provide it via the environment "
+        "(see .env.example) — there is no default."
+    )
 
 # In-memory cache
 _cache = {}

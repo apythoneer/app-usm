@@ -288,7 +288,29 @@ def build_scheduler() -> AsyncIOScheduler:
     )
     logger.info("Scheduled inventory_sync at 03:00 UTC")
 
+    # Capacity alerting — per-array threshold crossings + fleet projected-full,
+    # runs every CAPACITY_ALERT_CHECK_INTERVAL_HOURS (default 12h). First run
+    # is delayed 2 minutes after startup so metrics_current/daily_stats have
+    # had a chance to populate.
+    if settings.capacity_alerts_enabled:
+        scheduler.add_job(
+            _run_capacity_alerts,
+            trigger=IntervalTrigger(
+                hours=settings.capacity_alert_check_interval_hours,
+                start_date=datetime.now() + timedelta(minutes=2),
+            ),
+            id="capacity_alerts",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
+        logger.info(
+            f"Scheduled capacity_alerts every {settings.capacity_alert_check_interval_hours}h"
+        )
+
     return scheduler
+
+
 
 
 async def _run_daily_stats():
@@ -360,3 +382,28 @@ async def _run_inventory_sync():
     # Invalidate arrays cache so collectors pick up new arrays
     invalidate_arrays_cache()
     logger.info(f"Inventory sync: {stats}")
+
+
+def _capacity_alerts_sync() -> dict:
+    from app.services.capacity_alerts import run_capacity_alert_checks
+    return run_capacity_alert_checks()
+
+
+async def _run_capacity_alerts():
+    """
+    Per-array utilization threshold checks + fleet growth/projected-full check.
+    Writes/resolves rows in USM.messages and sends Teams notifications
+    (throttled to once per CAPACITY_ALERT_RESEND_DAYS per alert).
+    """
+    loop = asyncio.get_event_loop()
+    try:
+        result = await loop.run_in_executor(_executor, _capacity_alerts_sync)
+    except Exception as e:
+        logger.error(f"Capacity alert check failed: {e}")
+        result = {"enabled": True, "error": str(e)}
+    _job_status["capacity_alerts"] = {
+        "last_run": datetime.now().isoformat(),
+        **result,
+    }
+    logger.info(f"Capacity alerts check: {result}")
+

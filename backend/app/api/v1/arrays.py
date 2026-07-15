@@ -75,15 +75,20 @@ def _fetch_array(array_name: str) -> Optional[dict]:
 
 
 def _fetch_fleet_stats() -> dict:
-    # Try SQLite cache first (fast local read)
-    try:
-        from app.db.cache import fetch_fleet_stats as _cache_fleet
-        cached = _cache_fleet()
-        if cached and cached.get("total_arrays", 0) > 0:
-            return cached
-    except Exception:
-        pass
-    # Fallback to SQL Server
+    # SQL Server is the single source of truth for current-state reads.
+    #
+    # This previously tried the SQLite cache first and returned it whenever
+    # total_arrays > 0. That was wrong: the SQLite `messages` table is created
+    # but never written (base.py `_write_to_cache` only mirrors metrics and
+    # volumes), so the cached active_alerts count was always 0 — and because the
+    # cache short-circuited before SQL Server, the dashboard reported 0 active
+    # alerts across the whole fleet. It also let dashboard counts (SQLite) drift
+    # from the Volumes/Hosts pages (SQL Server), which read a different store.
+    #
+    # The query below is a single NOLOCK round-trip (see b2d1f59) and the June
+    # batching work removed most of the write contention that made it slow, so
+    # serving it live is cheap. SQLite remains a write-through mirror and backs
+    # /health; it is not a read path until it can mirror alert state correctly.
     with get_db_cursor() as cursor:
         # Combine all stats into a single query using NOLOCK to avoid blocking
         # during concurrent collector writes. This prevents query timeouts.

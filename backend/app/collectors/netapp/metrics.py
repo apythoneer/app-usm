@@ -31,7 +31,11 @@ class NetAppMetricsCollector(BaseCollector):
         cred_key = array_config.cred_key
         if not cred_key:
             raise ValueError(f"NetApp array '{array_config.name}' has no cred_key configured")
-        self.client = NetAppClient(array_config.name, cred_key)
+        self.client = NetAppClient(
+            array_config.name, cred_key,
+            fqdn=array_config.array_fqdn, mgmt_ip=array_config.mgmt_ip,
+        )
+
 
     def authenticate(self) -> bool:
         return self.client.authenticate()

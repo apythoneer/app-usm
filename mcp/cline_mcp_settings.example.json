@@ -1,0 +1,52 @@
+{
+  "mcpServers": {
+    "usm-docs": {
+      "command": "c:/Users/AD64490/OneDrive - Lumen/Desktop/unified_storage_monitoring/mcp/.venv/Scripts/python.exe",
+      "args": [
+        "c:/Users/AD64490/OneDrive - Lumen/Desktop/unified_storage_monitoring/mcp/usm_docs_server.py"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "list_docs",
+        "get_doc",
+        "search_docs",
+        "get_schema",
+        "get_collector_contract",
+        "get_vendor_pattern",
+        "get_architecture",
+        "list_vendors"
+      ]
+    },
+    "usm-dev": {
+      "command": "c:/Users/AD64490/OneDrive - Lumen/Desktop/unified_storage_monitoring/mcp/.venv/Scripts/python.exe",
+      "args": [
+        "c:/Users/AD64490/OneDrive - Lumen/Desktop/unified_storage_monitoring/mcp/usm_dev_server.py"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "validate_collector",
+        "lint_schema",
+        "check_env",
+        "list_endpoints"
+      ]
+    },
+    "usm-ops": {
+      "command": "c:/Users/AD64490/OneDrive - Lumen/Desktop/unified_storage_monitoring/mcp/.venv/Scripts/python.exe",
+      "args": [
+        "c:/Users/AD64490/OneDrive - Lumen/Desktop/unified_storage_monitoring/mcp/usm_ops_server.py"
+      ],
+      "env": {
+        "USM_API_BASE": "http://usodclpsandadm1.corp.intranet:8000"
+      },
+      "disabled": false,
+      "autoApprove": [
+        "health",
+        "fleet_status",
+        "list_arrays",
+        "array_detail",
+        "scheduler_status",
+        "recent_alerts"
+      ]
+    }
+  }
+}

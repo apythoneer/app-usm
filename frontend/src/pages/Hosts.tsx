@@ -1,6 +1,9 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Search, Filter, ChevronUp, ChevronDown, X, Download, Copy, Check } from 'lucide-react'
+import ErrorState from '@/components/common/ErrorState'
+import Pagination from '@/components/common/Pagination'
+import VendorBadge from '@/components/common/VendorBadge'
 import { arraysApi } from '@/api/arrays'
 import { hostsApi } from '@/api/hosts'
 import type { ArraySummary, Host } from '@/api/types'
@@ -31,17 +34,6 @@ function SortHeader({ label, field, sortBy, sortDir, onSort, align = 'left' }: {
       </span>
     </th>
   )
-}
-
-// ── Vendor badge ──────────────────────────────────────────────────────────────
-
-const VENDOR_COLORS: Record<string, string> = {
-  pure:    'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  netapp:  'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  hpe:     'bg-green-500/10 text-green-400 border-green-500/20',
-  hitachi: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  dell:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  oracle:  'bg-red-500/10 text-red-400 border-red-500/20',
 }
 
 // ── Host detail modal ─────────────────────────────────────────────────────────
@@ -132,48 +124,6 @@ function HostModal({ host, onClose }: { host: Host; onClose: () => void }) {
   )
 }
 
-// ── Pagination ────────────────────────────────────────────────────────────────
-
-function Pagination({ total, offset, limit, onChange }: {
-  total: number; offset: number; limit: number; onChange: (offset: number) => void
-}) {
-  const totalPages = Math.ceil(total / limit)
-  const currentPage = Math.floor(offset / limit) + 1
-  if (totalPages <= 1) return null
-
-  function goTo(page: number) { onChange((page - 1) * limit) }
-
-  return (
-    <div className="flex items-center justify-between py-3 px-1 border-t border-gray-800 mt-2">
-      <span className="text-xs text-gray-500">
-        {offset + 1}–{Math.min(offset + limit, total)} of {total.toLocaleString()}
-      </span>
-      <div className="flex gap-1">
-        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-          let page: number
-          if (totalPages <= 7) page = i + 1
-          else if (currentPage <= 4) page = i + 1
-          else if (currentPage >= totalPages - 3) page = totalPages - 6 + i
-          else page = currentPage - 3 + i
-          return (
-            <button
-              key={page}
-              onClick={() => goTo(page)}
-              className={`text-xs px-2.5 py-1 rounded ${
-                page === currentPage
-                  ? 'bg-brand-600/30 text-brand-400'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
-              }`}
-            >
-              {page}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
-
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Hosts() {
@@ -212,7 +162,7 @@ export default function Hosts() {
     setOffset(0)
   }
 
-  const { data: result, isLoading } = useQuery({
+  const { data: result, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['hosts', arrayFilter, debouncedSearch, vendorFilter, offset, sortBy, sortDir],
     queryFn: () => hostsApi.list({
       array_name: arrayFilter || undefined,
@@ -268,7 +218,11 @@ export default function Hosts() {
       </div>
 
       <div className="card overflow-x-auto">
-        {isLoading ? (
+        {isError ? (
+          // Checked before the empty branch — see ErrorState for why an outage
+          // must not render as "No hosts found".
+          <ErrorState what="hosts" error={error} onRetry={() => refetch()} />
+        ) : isLoading ? (
           <p className="text-gray-500 text-sm">Loading...</p>
         ) : hosts.length === 0 ? (
           <p className="text-gray-500 text-sm py-4 text-center">No hosts found</p>
@@ -296,9 +250,7 @@ export default function Hosts() {
                     <td className="px-4 py-2 font-mono text-xs text-gray-200 hover:text-brand-400">{h.host_name}</td>
                     <td className="px-4 py-2 text-xs text-gray-400">{h.array_name}</td>
                     <td className="px-4 py-2 text-xs">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase border ${
-                        VENDOR_COLORS[h.vendor] ?? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
-                      }`}>{h.vendor}</span>
+                      <VendorBadge vendor={h.vendor} />
                     </td>
                     <td className="px-4 py-2 text-xs text-gray-400">{h.host_group || '—'}</td>
                     <td className="px-4 py-2 text-xs text-gray-500 font-mono truncate max-w-[180px]">{h.iqn || '—'}</td>

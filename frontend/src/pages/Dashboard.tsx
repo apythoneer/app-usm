@@ -6,6 +6,8 @@ import {
   BarChart2, Users, ChevronDown, ChevronRight, X, HardDrive,
   Cloud, Building2, Search, Filter,
 } from 'lucide-react'
+import ErrorState from '@/components/common/ErrorState'
+import VendorBadge from '@/components/common/VendorBadge'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { volumesApi } from '@/api/volumes'
@@ -16,33 +18,23 @@ import {
   formatReduction, severityBg, usedPctColor
 } from '@/utils/formatters'
 
-// ── Vendor badge colors ──────────────────────────────────────────────────────
-
-const VENDOR_COLORS: Record<string, string> = {
-  pure:    'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  netapp:  'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  hpe:     'bg-green-500/10 text-green-400 border-green-500/20',
-  hitachi: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  dell:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  oracle:  'bg-red-500/10 text-red-400 border-red-500/20',
-}
-
-function VendorBadge({ vendor }: { vendor: string }) {
-  const colors = VENDOR_COLORS[vendor] ?? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
-  return (
-    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase border ${colors}`}>
-      {vendor}
-    </span>
-  )
-}
-
 // ── Cloud provider icons ─────────────────────────────────────────────────────
 
 const PROVIDER_ICONS: Record<string, string> = {
   aws: '☁️',
   azure: '🔷',
   gcp: '🟡',
+  other: '☁️',
 }
+
+// Human-friendly cloud provider labels for filter dropdown
+const PROVIDER_LABELS: Record<string, string> = {
+  aws: 'AWS',
+  azure: 'Azure',
+  gcp: 'GCP',
+  other: 'Other Cloud',
+}
+
 
 // ── Deployment type helpers ──────────────────────────────────────────────────
 
@@ -453,10 +445,18 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [selectedArray, setSelectedArray] = useState<string | null>(null)
   const [vendorFilter, setVendorFilter] = useState('')
+  const [cloudFilter, setCloudFilter] = useState('')   // '', 'on-prem', 'aws', 'azure', 'gcp', 'other'
   const [searchFilter, setSearchFilter] = useState('')
   const arraysRef = useRef<HTMLDivElement>(null)
 
-  const { data: arrays = [], isLoading: arraysLoading } = useQuery<ArraySummary[]>({
+
+  const {
+    data: arrays = [],
+    isLoading: arraysLoading,
+    isError: arraysError,
+    error: arraysErrorObj,
+    refetch: refetchArrays,
+  } = useQuery<ArraySummary[]>({
     queryKey: ['arrays'],
     queryFn: () => arraysApi.list(),
     refetchInterval: 60_000,
@@ -482,6 +482,16 @@ export default function Dashboard() {
   const filteredArrays = useMemo(() => {
     let result = arrays
     if (vendorFilter) result = result.filter(a => a.vendor === vendorFilter)
+    if (cloudFilter) {
+      if (cloudFilter === 'on-prem') {
+        result = result.filter(a => !isCloudGroup(a.group))
+      } else if (cloudFilter === 'cloud') {
+        result = result.filter(a => isCloudGroup(a.group))
+      } else {
+        // specific provider: aws / azure / gcp / other
+        result = result.filter(a => isCloudGroup(a.group) && getCloudProvider(a.group) === cloudFilter)
+      }
+    }
     if (searchFilter) {
       const q = searchFilter.toLowerCase()
       result = result.filter(a =>
@@ -490,7 +500,8 @@ export default function Dashboard() {
       )
     }
     return result
-  }, [arrays, vendorFilter, searchFilter])
+  }, [arrays, vendorFilter, cloudFilter, searchFilter])
+
 
   // Split into On-Prem and Cloud
   const { onPremArrays, cloudArrays } = useMemo(() => {
@@ -571,7 +582,25 @@ export default function Dashboard() {
                 </select>
               </div>
             )}
+            {/* Cloud provider / deployment filter */}
+            <div className="relative">
+              <Cloud size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+              <select
+                value={cloudFilter}
+                onChange={(e) => setCloudFilter(e.target.value)}
+                className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+              >
+                <option value="">All deployments</option>
+                <option value="on-prem">On-Premises</option>
+                <option value="cloud">All Cloud</option>
+                <option value="aws">{PROVIDER_LABELS.aws}</option>
+                <option value="azure">{PROVIDER_LABELS.azure}</option>
+                <option value="gcp">{PROVIDER_LABELS.gcp}</option>
+                <option value="other">{PROVIDER_LABELS.other}</option>
+              </select>
+            </div>
             {/* Search */}
+
             <div className="relative">
               <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
               <input
@@ -588,7 +617,17 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {arraysLoading ? (
+        {arraysError ? (
+          // Must be checked BEFORE the empty branch: a failed request leaves
+          // `arrays` at its [] default, which previously fell through to
+          // "No arrays found — check collectors are running", reporting a
+          // backend outage as an empty fleet and blaming the wrong subsystem.
+          <ErrorState
+            what="arrays"
+            error={arraysErrorObj}
+            onRetry={() => refetchArrays()}
+          />
+        ) : arraysLoading ? (
           <p className="text-gray-500 text-sm">Loading arrays…</p>
         ) : filteredArrays.length === 0 ? (
           <p className="text-gray-500 text-sm">

@@ -233,10 +233,24 @@ export interface DailyTrendPoint {
   total_arrays: number
 }
 
+export interface DailyTrendProjection {
+  span_days: number
+  net_change_tb: number
+  net_change_pct: number | null
+  avg_rate_tb_per_day: number
+  headroom_tb: number
+  usable_tb: number
+  days_to_full: number | null
+  projected_full_date: string | null
+  trend: 'growing' | 'declining' | 'stable'
+}
+
 export interface DailyTrendResponse {
   days: number
   data_points: number
   data: DailyTrendPoint[]
+  last_collected?: string | null
+  projection?: DailyTrendProjection
 }
 
 // ── Top growers / shrinkers (ranked by capacity-used delta) ───────────────────
