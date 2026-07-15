@@ -118,24 +118,47 @@ def calculate_daily_stats() -> bool:
 
 def cleanup_old_history(days: int = None) -> int:
     """
-    Remove metrics_history rows older than `days` days.
+    Remove metrics_history AND volumes_history rows older than `days` days.
     Defaults to settings.history_retention_days (365) so YTD capacity-growth
-    analytics have enough history. Keeps the table from growing unbounded.
-    Returns number of rows deleted.
+    analytics have enough history. Keeps the tables from growing unbounded.
+    Returns total number of rows deleted across both tables.
+
+    volumes_history was previously not cleaned up at all — only metrics_history
+    was — so it grew unbounded from the day it shipped (2026-06-19). Deleted in
+    batches because it is the far larger table and an unbatched DELETE would hold
+    a long lock and bloat the transaction log.
     """
     if days is None:
         days = settings.history_retention_days
+    deleted = 0
     try:
-
         with get_db_cursor() as cursor:
             cursor.execute(
                 f"DELETE FROM {SCHEMA}.metrics_history "
                 f"WHERE collected_at < DATEADD(DAY, -?, GETDATE())",
                 (days,),
             )
-            deleted = cursor.rowcount
-        logger.info(f"Cleanup: removed {deleted} history rows older than {days} days")
-        return deleted
+            deleted = cursor.rowcount or 0
+        logger.info(f"Cleanup: removed {deleted} metrics_history rows older than {days} days")
     except Exception as e:
-        logger.error(f"History cleanup failed: {e}")
-        return 0
+        logger.error(f"metrics_history cleanup failed: {e}")
+
+    vol_deleted = 0
+    try:
+        # Batched: keeps each transaction short so collectors are not blocked.
+        while True:
+            with get_db_cursor() as cursor:
+                cursor.execute(
+                    f"DELETE TOP (50000) FROM {SCHEMA}.volumes_history "
+                    f"WHERE collected_at < DATEADD(DAY, -?, GETDATE())",
+                    (days,),
+                )
+                n = cursor.rowcount or 0
+            vol_deleted += n
+            if n < 50000:
+                break
+        logger.info(f"Cleanup: removed {vol_deleted} volumes_history rows older than {days} days")
+    except Exception as e:
+        logger.error(f"volumes_history cleanup failed: {e}")
+
+    return deleted + vol_deleted

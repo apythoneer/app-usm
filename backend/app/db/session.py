@@ -241,7 +241,20 @@ def snapshot_volume_history(cursor, array_name: str) -> int:
     column defaults to GETDATE() so every volume in this batch shares the same
     timestamp, which keeps per-collection grouping clean for trend queries.
 
-    Returns the number of history rows written (== current volume count).
+    AT MOST ONE SNAPSHOT PER ARRAY PER DAY. The volumes collector runs every 30
+    minutes, so writing unconditionally appended ~48 identical-granularity samples
+    per volume per day: volumes_history reached 41.8M rows / 5.5 GB within 26 days
+    of shipping, growing ~1.9M rows/day with no retention (~700M rows/year).
+
+    Daily is the right granularity because it is all the readers can use:
+      - /analytics/volume-growth plots one point per sample; at 48/day a 90-day
+        chart was 4,320 points for 90 days of signal.
+      - /analytics/top-volume-growers takes ROW_NUMBER() ... rn=1, i.e. only the
+        EARLIEST sample in the window, and compares it against volumes_cache.
+    Neither reads sub-daily detail, so the other ~47 samples/day were pure cost.
+
+    Returns the number of history rows written, or 0 if today's snapshot already
+    exists for this array (i.e. this was a no-op).
     """
     cursor.execute(
         f"""
@@ -253,8 +266,13 @@ def snapshot_volume_history(cursor, array_name: str) -> int:
             data_reduction, total_reduction, snapshots, GETDATE()
         FROM {SCHEMA}.volumes_cache
         WHERE array_name = ?
+          AND NOT EXISTS (
+              SELECT 1 FROM {SCHEMA}.volumes_history
+              WHERE array_name = ?
+                AND collected_at >= CAST(GETDATE() AS DATE)
+          )
         """,
-        (array_name,),
+        (array_name, array_name),
     )
     try:
         return cursor.rowcount if cursor.rowcount is not None else 0
