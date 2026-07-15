@@ -5,6 +5,7 @@ import Volumes from '@/pages/Volumes'
 import Hosts from '@/pages/Hosts'
 import Alerts from '@/pages/Alerts'
 import Analytics from '@/pages/Analytics'
+import Capacity from '@/pages/Capacity'
 import Settings from '@/pages/Settings'
 // Logs page is now a tab inside Settings — /logs redirects to /settings
 import NotFound from '@/pages/NotFound'
@@ -20,6 +21,7 @@ export default function App() {
         <Route path="hosts" element={<Hosts />} />
         <Route path="alerts" element={<Alerts />} />
         <Route path="analytics" element={<Analytics />} />
+        <Route path="capacity" element={<Capacity />} />
         <Route path="chat" element={<ChatPanel />} />
         <Route path="settings" element={<Settings />} />
         <Route path="logs" element={<Navigate to="/settings" replace />} />

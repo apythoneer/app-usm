@@ -42,7 +42,17 @@ const PROVIDER_ICONS: Record<string, string> = {
   aws: '☁️',
   azure: '🔷',
   gcp: '🟡',
+  other: '☁️',
 }
+
+// Human-friendly cloud provider labels for filter dropdown
+const PROVIDER_LABELS: Record<string, string> = {
+  aws: 'AWS',
+  azure: 'Azure',
+  gcp: 'GCP',
+  other: 'Other Cloud',
+}
+
 
 // ── Deployment type helpers ──────────────────────────────────────────────────
 
@@ -453,8 +463,10 @@ export default function Dashboard() {
   const navigate = useNavigate()
   const [selectedArray, setSelectedArray] = useState<string | null>(null)
   const [vendorFilter, setVendorFilter] = useState('')
+  const [cloudFilter, setCloudFilter] = useState('')   // '', 'on-prem', 'aws', 'azure', 'gcp', 'other'
   const [searchFilter, setSearchFilter] = useState('')
   const arraysRef = useRef<HTMLDivElement>(null)
+
 
   const { data: arrays = [], isLoading: arraysLoading } = useQuery<ArraySummary[]>({
     queryKey: ['arrays'],
@@ -482,6 +494,16 @@ export default function Dashboard() {
   const filteredArrays = useMemo(() => {
     let result = arrays
     if (vendorFilter) result = result.filter(a => a.vendor === vendorFilter)
+    if (cloudFilter) {
+      if (cloudFilter === 'on-prem') {
+        result = result.filter(a => !isCloudGroup(a.group))
+      } else if (cloudFilter === 'cloud') {
+        result = result.filter(a => isCloudGroup(a.group))
+      } else {
+        // specific provider: aws / azure / gcp / other
+        result = result.filter(a => isCloudGroup(a.group) && getCloudProvider(a.group) === cloudFilter)
+      }
+    }
     if (searchFilter) {
       const q = searchFilter.toLowerCase()
       result = result.filter(a =>
@@ -490,7 +512,8 @@ export default function Dashboard() {
       )
     }
     return result
-  }, [arrays, vendorFilter, searchFilter])
+  }, [arrays, vendorFilter, cloudFilter, searchFilter])
+
 
   // Split into On-Prem and Cloud
   const { onPremArrays, cloudArrays } = useMemo(() => {
@@ -571,7 +594,25 @@ export default function Dashboard() {
                 </select>
               </div>
             )}
+            {/* Cloud provider / deployment filter */}
+            <div className="relative">
+              <Cloud size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+              <select
+                value={cloudFilter}
+                onChange={(e) => setCloudFilter(e.target.value)}
+                className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+              >
+                <option value="">All deployments</option>
+                <option value="on-prem">On-Premises</option>
+                <option value="cloud">All Cloud</option>
+                <option value="aws">{PROVIDER_LABELS.aws}</option>
+                <option value="azure">{PROVIDER_LABELS.azure}</option>
+                <option value="gcp">{PROVIDER_LABELS.gcp}</option>
+                <option value="other">{PROVIDER_LABELS.other}</option>
+              </select>
+            </div>
             {/* Search */}
+
             <div className="relative">
               <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
               <input

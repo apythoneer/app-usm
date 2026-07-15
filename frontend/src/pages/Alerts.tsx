@@ -128,7 +128,12 @@ export default function Alerts() {
       severity,
       vendor: vendorFilter || undefined,
       array_name: arrayFilter || undefined,
-      resolved: showResolved || undefined,
+      // Unchecked -> resolved:false (active only). Checked -> omit the filter so
+      // resolved alerts are included alongside active ones.
+      // NB: `showResolved || undefined` sent `undefined` when unchecked, which the
+      // backend reads as "no filter" (`if resolved is not None`), leaking resolved
+      // alerts into the active view and disagreeing with the Dashboard count.
+      resolved: showResolved ? undefined : false,
       limit: PAGE_SIZE,
       offset,
       sort_by: sortBy || undefined,
