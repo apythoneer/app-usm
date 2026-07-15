@@ -64,14 +64,21 @@ htmlcov/
 .continue/
 
 # Debug/test scripts
-debug_*.py
-explore_*.py
-test_*.py
-fix_*.py
-reset_*.py
+# NOTE: these patterns target throwaway scratch scripts in the repo root, NOT the
+# real test suite. They are anchored to the root (leading /) so that
+# backend/tests/test_*.py is tracked — an unanchored `test_*.py` silently ignored
+# every pytest file ever written, which is why backend/tests/ stayed empty.
+/debug_*.py
+/explore_*.py
+/test_*.py
+/fix_*.py
+/reset_*.py
 validate_usm.ps1
 *_sync.tar
 
 # Build artifacts
 *.pyc
 *.pyo
+
+# Generated reports (produced by scripts/generate_capacity_report.py)
+/usm_capacity_report.xlsx
