@@ -539,8 +539,36 @@ def init_database() -> None:
                 used               BIGINT  DEFAULT 0,
                 data_reduction     FLOAT   DEFAULT 1.0,
                 total_reduction    FLOAT   DEFAULT 1.0,
-                snapshots          INT     DEFAULT 0
+                -- BIGINT, not INT: `snapshots` is snapshot space in BYTES (not a
+                -- count — that's snap_count), so it routinely exceeds 2^31. It must
+                -- match volumes_cache.snapshots, which snapshot_volume_history()
+                -- copies from via INSERT...SELECT. See the migration below.
+                snapshots          BIGINT  DEFAULT 0
             )
+        """)
+
+        # Migration: widen volumes_history.snapshots INT -> BIGINT.
+        #
+        # This column shipped as INT in f1cfbcb while volumes_cache.snapshots is
+        # BIGINT. snapshot_volume_history() does
+        #     INSERT INTO volumes_history (... snapshots ...)
+        #     SELECT ... snapshots ... FROM volumes_cache
+        # so any volume with >2GiB of snapshot space made SQL Server fail the
+        # server-side conversion with:
+        #     22003 Arithmetic overflow error converting expression to data type int
+        # That aborted the whole transaction — including the volumes_cache upsert
+        # that ran just before it in the same cursor — so the array's ENTIRE volume
+        # inventory silently failed to save.
+        #
+        # Only Pure was affected: it is the sole vendor reporting non-zero
+        # snapshots (max ~1.45e12 across 311 volumes); every other vendor reports 0
+        # and so never crossed the INT boundary. It ran ~912x/day from 2026-06-19
+        # (the day volumes_history shipped) until 2026-07-15.
+        #
+        # Unconditional ALTER, matching the purity_version migration above: it is a
+        # no-op when the column is already BIGINT.
+        cursor.execute(f"""
+            ALTER TABLE {SCHEMA}.volumes_history ALTER COLUMN snapshots BIGINT
         """)
 
         # ------------------------------------------------------------------
