@@ -21,11 +21,23 @@ settings = get_settings()
 class NetAppClient:
     """Thin session wrapper around the NetApp ONTAP REST API."""
 
-    def __init__(self, array_name: str, cred_key: str):
+    def __init__(
+        self,
+        array_name: str,
+        cred_key: str,
+        fqdn: Optional[str] = None,
+        mgmt_ip: Optional[str] = None,
+    ):
         self.array_name = array_name
         self.cred_key = cred_key
-        self.base_url = f"https://{array_name}/api"
+        # Prefer a resolvable FQDN, then management IP, then fall back to the
+        # array name. Short array names (e.g. cloud CVO instances) are often not
+        # DNS-resolvable from the monitoring host, which caused connection
+        # failures — using array_fqdn / mgmt_ip from inventory avoids that.
+        self.host = (fqdn or "").strip() or (mgmt_ip or "").strip() or array_name
+        self.base_url = f"https://{self.host}/api"
         self.session: Optional[requests.Session] = None
+
 
     def authenticate(self) -> bool:
         """Authenticate using Basic Auth from KeePass credentials."""
@@ -100,7 +112,8 @@ class NetAppClient:
                 next_link = data.get("_links", {}).get("next", {}).get("href")
                 if next_link:
                     # next_link is a relative path like /api/storage/volumes?start.uuid=...
-                    url = f"https://{self.array_name}{next_link}"
+                    url = f"https://{self.host}{next_link}"
+
                     p = {}  # params are already in the next URL
                 else:
                     break

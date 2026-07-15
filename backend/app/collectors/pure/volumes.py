@@ -185,12 +185,22 @@ class PureVolumesCollector(BaseCollector):
         Replaces the old per-row SELECT-then-INSERT/UPDATE loop (which made one
         round-trip per volume/host and caused multi-minute jobs + ODBC timeouts).
         """
-        try:
-            volumes = data.get("volumes", {})
-            hosts = data.get("hosts", {})
-            host_groups = data.get("host_groups", {})
-            pgroups = data.get("protection_groups", {})
+        volumes = data.get("volumes", {})
+        hosts = data.get("hosts", {})
+        host_groups = data.get("host_groups", {})
+        pgroups = data.get("protection_groups", {})
 
+        # Only delete old data if we have new data to replace it.
+        # client.get() returns None on any API failure and collect() swallows that
+        # into empty dicts, so an empty result here means "collection failed", not
+        # "the array has no volumes". Without this guard batch_upsert(delete_missing=True)
+        # treats every existing row as stale and wipes the array's inventory on a
+        # single transient API error. Mirrors the guard in hitachi/hpe/dell/oracle.
+        if not volumes and not hosts:
+            logger.warning(f"[{self.array_name}] No volumes/hosts collected — keeping existing data")
+            return True
+
+        try:
             # Flatten dict-of-dicts into row lists with JSON-encoded list columns
             vol_rows = [{
                 "volume_name": name,

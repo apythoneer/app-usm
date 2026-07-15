@@ -34,7 +34,11 @@ class NetAppVolumesCollector(BaseCollector):
         cred_key = array_config.cred_key
         if not cred_key:
             raise ValueError(f"NetApp array '{array_config.name}' has no cred_key configured")
-        self.client = NetAppClient(array_config.name, cred_key)
+        self.client = NetAppClient(
+            array_config.name, cred_key,
+            fqdn=array_config.array_fqdn, mgmt_ip=array_config.mgmt_ip,
+        )
+
 
     def authenticate(self) -> bool:
         return self.client.authenticate()
@@ -123,10 +127,19 @@ class NetAppVolumesCollector(BaseCollector):
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
         """Batched, set-based persistence (see db.session.batch_upsert)."""
-        try:
-            volumes = data.get("volumes", {})
-            hosts = data.get("hosts", {})
+        volumes = data.get("volumes", {})
+        hosts = data.get("hosts", {})
 
+        # Only delete old data if we have new data to replace it. An empty result
+        # means the ONTAP API call failed (client.get() returns None and collect()
+        # swallows it), not that the cluster has no volumes. Without this guard
+        # batch_upsert(delete_missing=True) wipes the array's inventory on a single
+        # transient error or auth failure. Mirrors hitachi/hpe/dell/oracle.
+        if not volumes and not hosts:
+            logger.warning(f"[{self.array_name}] No volumes/hosts collected — keeping existing data")
+            return True
+
+        try:
             vol_rows = [{
                 "volume_name": name, "vendor": "netapp",
                 "size": v["size"], "used": v["used"],
