@@ -57,15 +57,47 @@ class NetAppClient:
         session.verify = False
         session.headers["Accept"] = "application/hal+json"
 
-        # Test connectivity with a lightweight call
+        # Test connectivity with a lightweight call.
+        #
+        # Distinguish "cannot reach the box" from "the box rejected us". Both used
+        # to log "Auth error: ..." and surface as base.py's generic
+        # RuntimeError("Authentication failed"), so a DNS typo and a bad password
+        # were indistinguishable in the logs. That cost real time: the June 2026
+        # perf review attributed ~3k failures/day to "stale KeePass entries /
+        # cred_key mapping" and proposed auditing the vault, when the actual cause
+        # for every failing array was that array_fqdn does not resolve.
         try:
             resp = session.get(f"{self.base_url}/cluster", timeout=15)
             if resp.status_code == 200:
                 self.session = session
                 return True
-            logger.error(f"[{self.array_name}] Auth HTTP {resp.status_code}")
+            if resp.status_code in (401, 403):
+                logger.error(
+                    f"[{self.array_name}] Credentials rejected (HTTP {resp.status_code}) "
+                    f"by {self.host} — check KeePass entry '{self.cred_key}'"
+                )
+            else:
+                logger.error(
+                    f"[{self.array_name}] Unexpected HTTP {resp.status_code} from {self.host} "
+                    f"(reachable, but /cluster did not return 200)"
+                )
+        except requests.exceptions.ConnectionError as e:
+            # Covers DNS resolution failures (socket.gaierror) and refused/unroutable
+            # TCP. NOT a credentials problem — do not send the reader to the vault.
+            reason = "name does not resolve" if "gaierror" in repr(e) or "Name or service" in str(e) \
+                else "host unreachable"
+            logger.error(
+                f"[{self.array_name}] Cannot reach '{self.host}' ({reason}) — this is a "
+                f"connectivity/inventory problem, not credentials. Check array_fqdn / "
+                f"mgmt_ip in managed_arrays, or disable the array if decommissioned."
+            )
+        except requests.exceptions.Timeout:
+            logger.error(
+                f"[{self.array_name}] Timed out after 15s connecting to '{self.host}' — "
+                f"reachable-but-slow or filtered; not a credentials problem."
+            )
         except Exception as e:
-            logger.error(f"[{self.array_name}] Auth error: {e}")
+            logger.error(f"[{self.array_name}] Unexpected error contacting '{self.host}': {e}")
         return False
 
     def get(self, endpoint: str, params: Dict = None) -> Optional[Any]:
