@@ -131,6 +131,18 @@ def init_cache() -> None:
         """)
 
         # messages mirror (alerts)
+        #
+        # ⚠️ NOT CURRENTLY MIRRORED — this table is created but never written.
+        # base.py `_write_to_cache()` only handles COLLECTOR_TYPE "metrics" and
+        # "volumes"; there is no "alerts" branch. Do not read alert state from
+        # here — it is always empty, which previously caused the dashboard to
+        # report 0 active alerts fleet-wide.
+        #
+        # Populating it needs more than an alerts branch in `_write_to_cache`:
+        # alert state is also mutated directly in SQL Server by
+        # services/capacity_alerts.py, the alert_cleanup job, and netapp/alerts.py
+        # auto-resolve. All of those would need matching mirror writes, or the
+        # mirror will silently drift.
         cur.execute("""
             CREATE TABLE IF NOT EXISTS messages (
                 id              INTEGER PRIMARY KEY,
@@ -219,37 +231,20 @@ def fetch_metrics(array_name: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def fetch_fleet_stats() -> Optional[Dict[str, Any]]:
-    """Compute fleet stats from SQLite cache."""
-    try:
-        with get_cache_cursor() as cur:
-            cur.execute("""
-                SELECT
-                    COUNT(*) as total_arrays,
-                    COALESCE(SUM(capacity_total), 0) / 1099511627776.0 as total_capacity_tb,
-                    COALESCE(SUM(capacity_used), 0) / 1099511627776.0 as total_used_tb,
-                    AVG(capacity_used_pct) as avg_utilization_pct,
-                    SUM(COALESCE(read_iops, 0) + COALESCE(write_iops, 0)) as total_iops,
-                    AVG(read_latency_us) as avg_read_latency_us,
-                    AVG(write_latency_us) as avg_write_latency_us,
-                    AVG(data_reduction) as avg_data_reduction
-                FROM metrics_current
-            """)
-            row = cur.fetchone()
-            if not row:
-                return None
-            stats = dict(row)
-            # Get counts from other tables
-            cur.execute("SELECT COUNT(*) as c FROM volumes_cache")
-            stats["total_volumes"] = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) as c FROM hosts_cache")
-            stats["total_hosts"] = cur.fetchone()["c"]
-            cur.execute("SELECT COUNT(*) as c FROM messages WHERE resolved=0 AND suppressed=0")
-            stats["active_alerts"] = cur.fetchone()["c"]
-            return stats
-    except Exception as e:
-        logger.warning(f"SQLite cache fetch_fleet_stats failed: {e}")
-        return None
+# NOTE: fetch_fleet_stats() was removed deliberately — do not reintroduce it.
+#
+# It computed fleet totals from this cache, including
+#   SELECT COUNT(*) FROM messages WHERE resolved=0 AND suppressed=0
+# but nothing ever writes the `messages` table (see the table comment above), so
+# it always reported 0 active alerts. /arrays/fleet-stats called it first and
+# only fell back to SQL Server when total_arrays was 0, so the dashboard showed
+# 0 active alerts fleet-wide from 2026-05-15 until this was removed.
+#
+# Fleet stats are now served from SQL Server, which is the source of truth for
+# current state. If this cache ever becomes a read path again, it must first
+# mirror alert state — including the resolve/purge paths that currently write
+# only to SQL Server (services/capacity_alerts.py, the alert_cleanup job, and
+# netapp/alerts.py auto-resolve).
 
 
 def cache_stats() -> Dict[str, int]:
