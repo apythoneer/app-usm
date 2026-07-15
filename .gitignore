@@ -82,3 +82,8 @@ validate_usm.ps1
 
 # Generated reports (produced by scripts/generate_capacity_report.py)
 /usm_capacity_report.xlsx
+
+# SQLite runtime sidecars (WAL mode creates these next to usm_cache.db)
+*.db-wal
+*.db-shm
+data/
