@@ -565,9 +565,22 @@ def init_database() -> None:
         # and so never crossed the INT boundary. It ran ~912x/day from 2026-06-19
         # (the day volumes_history shipped) until 2026-07-15.
         #
-        # Unconditional ALTER, matching the purity_version migration above: it is a
-        # no-op when the column is already BIGINT.
+        # GUARDED, unlike the unconditional purity_version ALTER above — that one is
+        # only safe because metrics_current holds ~90 rows. volumes_history is
+        # 41.8M rows / 5.5 GB and grows ~1.9M rows/day, and int->bigint is a
+        # SIZE-OF-DATA operation: SQL Server rewrites every row and holds a
+        # schema-modification lock for the duration. Running that unconditionally on
+        # every container start would block startup for minutes, every time.
+        #
+        # The IF EXISTS check makes it fire exactly once, then cost nothing.
+        # system_type_id 56 = int; 127 = bigint.
         cursor.execute(f"""
+            IF EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.volumes_history')
+                  AND name = 'snapshots'
+                  AND system_type_id = 56
+            )
             ALTER TABLE {SCHEMA}.volumes_history ALTER COLUMN snapshots BIGINT
         """)
 
