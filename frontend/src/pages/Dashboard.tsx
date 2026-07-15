@@ -7,6 +7,7 @@ import {
   Cloud, Building2, Search, Filter,
 } from 'lucide-react'
 import ErrorState from '@/components/common/ErrorState'
+import VendorBadge from '@/components/common/VendorBadge'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { volumesApi } from '@/api/volumes'
@@ -16,26 +17,6 @@ import {
   formatBytes, formatIOPS, formatLatency, formatPct,
   formatReduction, severityBg, usedPctColor
 } from '@/utils/formatters'
-
-// ── Vendor badge colors ──────────────────────────────────────────────────────
-
-const VENDOR_COLORS: Record<string, string> = {
-  pure:    'bg-orange-500/10 text-orange-400 border-orange-500/20',
-  netapp:  'bg-blue-500/10 text-blue-400 border-blue-500/20',
-  hpe:     'bg-green-500/10 text-green-400 border-green-500/20',
-  hitachi: 'bg-purple-500/10 text-purple-400 border-purple-500/20',
-  dell:    'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
-  oracle:  'bg-red-500/10 text-red-400 border-red-500/20',
-}
-
-function VendorBadge({ vendor }: { vendor: string }) {
-  const colors = VENDOR_COLORS[vendor] ?? 'bg-gray-500/10 text-gray-400 border-gray-500/20'
-  return (
-    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium uppercase border ${colors}`}>
-      {vendor}
-    </span>
-  )
-}
 
 // ── Cloud provider icons ─────────────────────────────────────────────────────
 
