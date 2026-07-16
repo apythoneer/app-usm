@@ -112,7 +112,9 @@ VIEW {SCHEMA}.vw_cms_array_to_app_db — THE bridge from storage to applications
   app_sox_critical ['Yes'|'No'|NULL], app_bia_critical ['Yes'|'No'|NULL],
   database_name, database_type, database_status
   VALUES: the criticality flags are the strings 'Yes'/'No' — NOT 'Y'/'N', NOT 1/0.
-  NULL means no application is mapped to that host (~9k rows).
+  NULL app_acronym/app_name means the host has storage but no mapped application
+  (~9k rows). For "which applications..." questions you MUST add
+  `WHERE app_acronym IS NOT NULL` or the results are mostly empty app rows.
 
 VIEW {SCHEMA}.vw_cms_app_to_server — which servers an application runs on
   Columns: app_id, app_acronym, app_name, app_sox_critical ['Yes'|'No'],
@@ -294,14 +296,21 @@ _THINK_RE = _re.compile(r"<think>.*?</think>", _re.DOTALL | _re.IGNORECASE)
 
 
 def _strip_think(text: str) -> str:
-    """Remove qwen3-style <think>...</think> reasoning blocks from a response.
+    """Strip qwen3 chain-of-thought, including the malformed cases seen live.
 
-    qwen3:30b-a3b is a reasoning model: on /api/generate it emits its chain of
-    thought inside <think></think> before the answer. If num_predict is small the
-    budget is spent thinking and the visible answer is empty — which is why the
-    DGX answer fell back to a raw dict. Strip the block and keep what's left.
+    qwen3 emits reasoning before the answer. In practice the tags are often
+    NOT a clean <think>...</think> pair:
+      - orphan close: "Okay, let's see...</think>The answer"  (no opening tag)
+      - orphan open (truncated mid-thought): "<think>Okay, let's..."  (no close)
+    The first case is exactly what leaked verbatim into the DGX answers, because a
+    pair-only regex matched nothing. Handle all three shapes.
     """
-    return _THINK_RE.sub("", text or "").strip()
+    t = text or ""
+    t = _THINK_RE.sub("", t)                       # 1. complete <think>...</think>
+    if "</think>" in t:                            # 2. orphan close -> keep tail
+        t = t.rsplit("</think>", 1)[-1]
+    t = _re.sub(r"<think>.*$", "", t, flags=_re.DOTALL | _re.IGNORECASE)  # 3. orphan open
+    return t.strip()
 
 
 def _render_rows(rows: List[Dict], limit: int = 8) -> str:
@@ -370,6 +379,16 @@ class ChatService:
         # Service Auth policies issues no reusable cookie).
         self.headers = headers or {}
         self.name = name
+        # qwen3 is a reasoning model. Observed live: its <think> chain eats the
+        # num_predict budget and the SQL/answer never appears (empty responses),
+        # and the Ollama `think:false` flag was NOT honored by this endpoint. The
+        # reliable switch is qwen3's own /no_think token in the prompt. qwen2.5
+        # (local) has no reasoning mode, so we only inject it for reasoning models.
+        self.reasoning = "qwen3" in (self.model or "").lower()
+
+    def _no_think(self, prompt: str) -> str:
+        """Prepend qwen3's /no_think switch for reasoning models; no-op otherwise."""
+        return f"/no_think\n{prompt}" if self.reasoning else prompt
 
     @classmethod
     def for_backend(cls, backend: str = "local") -> "ChatService":
@@ -486,7 +505,7 @@ class ChatService:
         # build_system_prompt(). Storage questions keep the ~7.2k prompt; CMS
         # questions get ~14.6k, which on the CPU 3b is the difference between a
         # usable answer and 78.7s for this call alone.
-        messages = [{"role": "system", "content": build_system_prompt(question)}]
+        messages = [{"role": "system", "content": self._no_think(build_system_prompt(question))}]
 
         # Add conversation context if provided (for multi-turn)
         if context:
@@ -505,7 +524,10 @@ class ChatService:
                 "stream": False,
                 "options": {
                     "temperature": 0.1,
-                    "num_predict": 500,
+                    # Generous headroom: even with /no_think a reasoning model may
+                    # emit a short think block, and truncating it produced EMPTY
+                    # SQL responses live ("did not return a SQL query").
+                    "num_predict": 1024,
                 },
             },
             timeout=180,
@@ -539,9 +561,9 @@ class ChatService:
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
-                    "prompt": build_system_prompt(question) + "\n\n" + fix_prompt,
+                    "prompt": self._no_think(build_system_prompt(question) + "\n\n" + fix_prompt),
                     "stream": False,
-                    "options": {"temperature": 0.1, "num_predict": 500},
+                    "options": {"temperature": 0.1, "num_predict": 1024},
                 },
                 timeout=180,
                 headers=self.headers,
@@ -549,8 +571,7 @@ class ChatService:
             )
             _raise_if_not_json(resp, self.name)
             resp.raise_for_status()
-            raw = resp.json().get("response", "")
-            fixed = extract_sql_from_response(raw)
+            fixed = extract_sql_from_response(resp.json().get("response", ""))
             logger.info(f"LLM self-corrected SQL: {fixed[:200]}")
             return fixed
         except Exception as e:
@@ -592,13 +613,13 @@ class ChatService:
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
-                    "prompt": prompt,
+                    # /no_think (via _no_think) is the reliable qwen3 switch — the
+                    # Ollama "think": false flag was NOT honored by this endpoint
+                    # (reasoning still leaked verbatim into answers). num_predict is
+                    # generous so a stray think block can't truncate the answer.
+                    "prompt": self._no_think(prompt),
                     "stream": False,
-                    # think=false asks reasoning models (qwen3) to skip the
-                    # <think> block; num_predict is generous so that even if the
-                    # model ignores it, the answer isn't truncated inside reasoning.
-                    "think": False,
-                    "options": {"temperature": 0.3, "num_predict": 512},
+                    "options": {"temperature": 0.3, "num_predict": 1024},
                 },
                 timeout=180,
                 headers=self.headers,
