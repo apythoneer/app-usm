@@ -86,6 +86,22 @@ TABLE {SCHEMA}.volumes_history — Per-volume time-series, one row per volume pe
   size BIGINT (bytes), used BIGINT (bytes), data_reduction FLOAT, total_reduction FLOAT,
   snapshots BIGINT (snapshot SPACE in bytes, NOT a count)
   NOTE: very large table (40M+ rows). ALWAYS filter by collected_at and/or array_name/volume_name.
+
+-- ── COMMON QUERY PATTERNS (follow these table choices exactly) ───────────────
+-- Array names look like '2bja', '09rw', 'purecbs-gp-prod-eus2-02' — they are
+-- exact array_name values. Match with `=`, NOT LIKE.
+--
+-- "what hosts are on / connected to array X"
+--     SELECT host_name, wwn, iqn, host_group FROM {SCHEMA}.hosts_cache WHERE array_name = 'X'
+--     (Use hosts_cache. Do NOT read the volumes_cache.hosts JSON column for this.)
+-- "what volumes are on array X"
+--     SELECT volume_name, size, used FROM {SCHEMA}.volumes_cache WHERE array_name = 'X'
+-- "how full is array X" / "utilization of X"
+--     SELECT array_name, capacity_used_pct, capacity_total, capacity_used FROM {SCHEMA}.metrics_current WHERE array_name = 'X'
+-- "arrays over N% utilized"
+--     SELECT array_name, vendor, capacity_used_pct FROM {SCHEMA}.metrics_current WHERE capacity_used_pct > N ORDER BY capacity_used_pct DESC
+-- "open/active alerts [on X]"
+--     SELECT array_name, severity, event, opened FROM {SCHEMA}.messages WHERE resolved = 0 AND suppressed = 0 [AND array_name = 'X']
 """.strip()
 
 
@@ -148,6 +164,14 @@ VIEW {SCHEMA}.vw_cms_switch_to_host_app_db — SAN switch/port → host → arra
   NOTE: one row per switch-port x app/db combination, so it fans out (a host with
   8 ports and 120 apps yields 960 rows). Use DISTINCT or aggregate, and always
   filter by switch_name or host_name.
+
+-- ── CMS QUERY PATTERNS ──────────────────────────────────────────────────────
+-- "what applications are on array X"
+--     SELECT DISTINCT app_acronym, app_name FROM {SCHEMA}.vw_cms_array_to_app_db WHERE array_name = 'X' AND app_acronym IS NOT NULL
+-- "what databases are on array X"
+--     SELECT DISTINCT database_name, database_type FROM {SCHEMA}.vw_cms_array_to_app_db WHERE array_name = 'X' AND database_name IS NOT NULL
+-- "what servers does app X run on"
+--     SELECT server_name, server_os, server_status FROM {SCHEMA}.vw_cms_app_to_server WHERE app_acronym = 'X'
 """.strip()
 
 # Full schema — kept for callers/tests that want the complete picture.

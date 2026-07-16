@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
     chat_enabled: bool = Field(default=True, alias="CHAT_ENABLED")
     chat_query_timeout: int = Field(default=10, alias="CHAT_QUERY_TIMEOUT")
+    # Max concurrent chat requests. The backend is a single uvicorn worker that
+    # also hosts the scheduler; unbounded chat (each holding a worker thread up to
+    # 180s waiting on the LLM) can starve the API and flip the container
+    # unhealthy — which is exactly what happened. Excess requests get a fast 503.
+    chat_max_concurrent: int = Field(default=2, alias="CHAT_MAX_CONCURRENT")
 
     # ── Second chat backend: DGX Spark (benchmark / POC) ─────────────────────
     # Used to compare the CPU-hosted qwen2.5:3b against dedicated GPU hardware
