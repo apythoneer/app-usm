@@ -34,6 +34,12 @@ def _get_service(backend: str) -> ChatService:
     return _services[backend]
 
 
+# Concurrency guard. asyncio is single-threaded, so the check-then-increment
+# below is race-free (no await between them). Prevents a burst of chat requests
+# from starving the single-worker API — the cause of the 2026-07-16 hang.
+_chat_inflight = 0
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
     context: Optional[List[Dict]] = Field(default=None, description="Previous Q&A turns for multi-turn conversation")
@@ -64,14 +70,26 @@ async def chat(req: ChatRequest):
     if not settings.chat_enabled:
         raise HTTPException(status_code=503, detail="Chat feature is disabled")
 
-    svc = _get_service(req.backend)
-    if req.backend == "dgx":
-        # Make the off-network hop auditable — this is the one path that leaves
-        # the host with real inventory data.
-        logger.warning("chat routed to DGX (off-network): %r", req.message[:80])
+    global _chat_inflight
+    if _chat_inflight >= settings.chat_max_concurrent:
+        # Fast-fail rather than pile up and starve the API. 503 + Retry-After.
+        raise HTTPException(
+            status_code=503,
+            detail="The assistant is busy with other questions — please try again in a moment.",
+            headers={"Retry-After": "10"},
+        )
+    _chat_inflight += 1
+    try:
+        svc = _get_service(req.backend)
+        if req.backend == "dgx":
+            # Make the off-network hop auditable — this is the one path that
+            # leaves the host with real inventory data.
+            logger.warning("chat routed to DGX (off-network): %r", req.message[:80])
 
-    result = await run_in_threadpool(svc.ask, req.message, req.context)
-    return ChatResponse(**result)
+        result = await run_in_threadpool(svc.ask, req.message, req.context)
+        return ChatResponse(**result)
+    finally:
+        _chat_inflight -= 1
 
 
 @router.get("/status")
