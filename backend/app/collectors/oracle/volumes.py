@@ -11,7 +11,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.oracle.client import OracleZFSClient
-from app.db.session import get_fast_cursor, snapshot_volume_history
+from app.db.session import get_fast_cursor, snapshot_volume_history, would_shrink_below
 
 from app.core.config import get_settings
 
@@ -155,6 +155,19 @@ class OracleVolumesCollector(BaseCollector):
                 for v in volumes.values()
             ]
             with get_fast_cursor() as cursor:
+                # Partial-collection guard — preserve inventory on a collapsed set.
+                blocked, existing = would_shrink_below(
+                    cursor, f"{SCHEMA}.volumes_cache", self.array_name,
+                    len(vol_params), settings.collect_shrink_min_ratio,
+                )
+                if blocked:
+                    logger.error(
+                        f"[{self.array_name}] Refusing to replace {existing} volumes "
+                        f"with only {len(vol_params)} — partial/failed collection. "
+                        f"Keeping existing data."
+                    )
+                    result.errors.append(f"partial collect: {len(vol_params)} of ~{existing} volumes")
+                    return False
                 cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
                 cursor.executemany(
                     f"""INSERT INTO {SCHEMA}.volumes_cache (
