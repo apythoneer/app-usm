@@ -16,10 +16,27 @@ class IntervalUpdate(BaseModel):
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
+def _scheduler(request: Request):
+    """Return the scheduler, or 503 if this process is API-only (RUN_SCHEDULER=false).
+
+    In the split deployment the scheduler lives in the collector container, so an
+    API-only worker has no scheduler to inspect or control. Fail clearly instead
+    of AttributeError -> 500.
+    """
+    sched = getattr(request.app.state, "scheduler", None)
+    if sched is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Scheduler is not running in this process (API-only role). "
+                   "Query the collector service for job status/control.",
+        )
+    return sched
+
+
 @router.get("/status")
 async def scheduler_status(request: Request):
     """Current status of all collector jobs."""
-    scheduler = request.app.state.scheduler
+    scheduler = _scheduler(request)
     registered = CollectorRegistry.summary()
     job_status = get_job_status()
 
@@ -44,7 +61,7 @@ async def scheduler_status(request: Request):
 @router.post("/jobs/{job_id}/run")
 async def run_job_now(job_id: str, request: Request):
     """Trigger a job to run immediately."""
-    scheduler = request.app.state.scheduler
+    scheduler = _scheduler(request)
     job = scheduler.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -54,7 +71,7 @@ async def run_job_now(job_id: str, request: Request):
 
 @router.post("/jobs/{job_id}/pause")
 async def pause_job(job_id: str, request: Request):
-    scheduler = request.app.state.scheduler
+    scheduler = _scheduler(request)
     job = scheduler.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -64,7 +81,7 @@ async def pause_job(job_id: str, request: Request):
 
 @router.post("/jobs/{job_id}/resume")
 async def resume_job(job_id: str, request: Request):
-    scheduler = request.app.state.scheduler
+    scheduler = _scheduler(request)
     job = scheduler.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
@@ -76,7 +93,7 @@ async def resume_job(job_id: str, request: Request):
 async def update_job_interval(job_id: str, body: IntervalUpdate, request: Request):
     """Update a job's polling interval (seconds) — takes effect immediately."""
     from apscheduler.triggers.interval import IntervalTrigger
-    scheduler = request.app.state.scheduler
+    scheduler = _scheduler(request)
     job = scheduler.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")

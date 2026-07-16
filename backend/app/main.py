@@ -52,14 +52,23 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"SQLite cache init failed (non-fatal): {e}")
 
-    scheduler = build_scheduler()
-    scheduler.start()
-    app.state.scheduler = scheduler
+    # Only the collector-role process runs the scheduler. An API-only process
+    # (RUN_SCHEDULER=false) skips it entirely, so it can run multiple uvicorn
+    # workers without every worker duplicating collection.
+    scheduler = None
+    if settings.run_scheduler:
+        scheduler = build_scheduler()
+        scheduler.start()
+        app.state.scheduler = scheduler
+        logger.info("Scheduler STARTED (RUN_SCHEDULER=true)")
+    else:
+        logger.info("Scheduler DISABLED (RUN_SCHEDULER=false) — API-only role")
 
     yield
 
-    logger.info("Shutting down scheduler...")
-    scheduler.shutdown(wait=False)
+    if scheduler is not None:
+        logger.info("Shutting down scheduler...")
+        scheduler.shutdown(wait=False)
 
 
 # ------------------------------------------------------------------ app

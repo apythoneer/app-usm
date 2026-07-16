@@ -23,6 +23,16 @@ class Settings(BaseSettings):
     debug: bool = False
     log_dir: str = "/app/logs"
 
+    # Process role. The scheduler + collectors currently run INSIDE the API
+    # process, which forces a single uvicorn worker (multiple workers would each
+    # run the scheduler -> duplicate collection). This flag lets the same image
+    # run in two roles:
+    #   RUN_SCHEDULER=true  (default) — hosts the scheduler/collectors. Run ONE.
+    #   RUN_SCHEDULER=false           — API only; safe to run with N uvicorn workers.
+    # Default true so existing single-container deployments are unchanged. The
+    # split into an api-only + collector container is opt-in via compose.
+    run_scheduler: bool = Field(default=True, alias="RUN_SCHEDULER")
+
     # API
     api_v1_prefix: str = "/api/v1"
     cors_origins: List[str] = ["http://localhost:5173", "http://localhost:3000"]
