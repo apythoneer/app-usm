@@ -58,6 +58,20 @@ services:
       - OLLAMA_BASE_URL=http://127.0.0.1:11434
       - OLLAMA_MODEL=qwen2.5:3b
       - CHAT_ENABLED=true
+      # Second chat backend: DGX Spark (benchmark/POC), reached through
+      # Cloudflare Access. Empty by default so it is opt-in, never accidental.
+      # NOTE: this backend is OFF-NETWORK. The local backend above sends nothing
+      # outside the host; anything routed to the DGX sends question text (and,
+      # for the answer-formatting step, SQL result rows) to an external endpoint.
+      # The benchmark harness deliberately uses SQL-generation only, which sends
+      # schema + question and no row data.
+      - CHAT_DGX_BASE_URL=${CHAT_DGX_BASE_URL:-}
+      - CHAT_DGX_MODEL=${CHAT_DGX_MODEL:-qwen3:30b-a3b}
+      # Cloudflare Access service token. Values live in .env (never in this file
+      # or in git). Without them the DGX endpoint 302s to an IdP login page and
+      # every call returns HTML instead of JSON.
+      - CF_ACCESS_CLIENT_ID=${CF_ACCESS_CLIENT_ID:-}
+      - CF_ACCESS_CLIENT_SECRET=${CF_ACCESS_CLIENT_SECRET:-}
       # Paths
       - LOG_DIR=/app/logs
       - ARRAYS_CONFIG_FILE=/app/config/arrays.txt

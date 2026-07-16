@@ -107,11 +107,31 @@ class Settings(BaseSettings):
     )
 
 
-    # Chat / Ollama (local LLM)
+    # Chat / Ollama (local LLM — CPU, in-container)
     ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
     chat_enabled: bool = Field(default=True, alias="CHAT_ENABLED")
     chat_query_timeout: int = Field(default=10, alias="CHAT_QUERY_TIMEOUT")
+
+    # ── Second chat backend: DGX Spark (benchmark / POC) ─────────────────────
+    # Used to compare the CPU-hosted qwen2.5:3b against dedicated GPU hardware
+    # running qwen3:30b-a3b, to evidence a hardware business case.
+    #
+    # NOTE ON DATA EGRESS: unlike the local backend, this one sends question text
+    # AND SQL result rows (array names, volume names, capacities) to an external
+    # host over the public internet. docker-compose still describes chat as
+    # "local LLM — no data leaves"; that stops being true for any request routed
+    # here. Left empty by default so this is opt-in, never accidental.
+    chat_dgx_base_url: str = Field(default="", alias="CHAT_DGX_BASE_URL")
+    chat_dgx_model: str = Field(default="qwen3:30b-a3b", alias="CHAT_DGX_MODEL")
+
+    # Cloudflare Access service token for the DGX endpoint. It sits behind
+    # Zero Trust, which 302s unauthenticated calls to an IdP login page — so
+    # without these every request silently becomes an HTML redirect, not JSON.
+    # The Access app also needs a policy with action "Service Auth"; a token
+    # alone is not sufficient.
+    cf_access_client_id: str = Field(default="", alias="CF_ACCESS_CLIENT_ID")
+    cf_access_client_secret: str = Field(default="", alias="CF_ACCESS_CLIENT_SECRET")
 
     # Arrays config file
     arrays_config_file: str = Field(default="/app/config/arrays.txt", alias="ARRAYS_CONFIG_FILE")
