@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, ChevronDown, Database, Clock, MessageSquare, Trash2 } from 'lucide-react'
-import { chatApi, type ChatMessage } from '@/api/chat'
+import { Send, Loader2, ChevronDown, Database, Clock, MessageSquare, Trash2, Cpu, Cloud, AlertTriangle } from 'lucide-react'
+import { chatApi, type ChatMessage, type ChatBackend } from '@/api/chat'
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
   const isUser = msg.role === 'user'
@@ -79,12 +79,21 @@ export default function ChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>(loadMessages)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [backend, setBackend] = useState<ChatBackend>('local')
+  const [dgxConfigured, setDgxConfigured] = useState(false)
+  const [dgxModel, setDgxModel] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
+    // Only offer the DGX toggle if the backend says it's configured.
+    chatApi.status()
+      .then((s) => { setDgxConfigured(!!s.dgx_configured); setDgxModel(s.dgx_model ?? null) })
+      .catch(() => setDgxConfigured(false))
   }, [])
+
+  const isDgx = backend === 'dgx'
 
   // Sync to sessionStorage whenever messages change
   useEffect(() => {
@@ -105,7 +114,7 @@ export default function ChatPanel() {
     setLoading(true)
 
     try {
-      const resp = await chatApi.send(msg, messages)
+      const resp = await chatApi.send(msg, messages, backend)
       const assistantMsg: ChatMessage = {
         role: 'assistant',
         content: resp.answer,
@@ -143,7 +152,35 @@ export default function ChatPanel() {
         <div className="flex items-center gap-3">
           <MessageSquare size={20} className="text-brand-400" />
           <h1 className="text-xl font-semibold text-gray-200">Storage AI Assistant</h1>
-          <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full border border-gray-700">POC · qwen2.5:3b · Local</span>
+          {/* Backend selector — only shown when a DGX endpoint is configured. */}
+          {dgxConfigured ? (
+            <div className="flex items-center rounded-full bg-gray-800 border border-gray-700 p-0.5 text-[11px]">
+              <button
+                onClick={() => setBackend('local')}
+                disabled={loading}
+                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full transition-colors ${
+                  !isDgx ? 'bg-brand-600 text-white' : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title="qwen2.5:3b on CPU — all data stays on this host"
+              >
+                <Cpu size={11} /> Local
+              </button>
+              <button
+                onClick={() => setBackend('dgx')}
+                disabled={loading}
+                className={`flex items-center gap-1 px-2.5 py-0.5 rounded-full transition-colors ${
+                  isDgx ? 'bg-amber-600 text-white' : 'text-gray-400 hover:text-gray-200'
+                }`}
+                title={`${dgxModel ?? 'DGX'} — sends questions and result rows OFF-NETWORK`}
+              >
+                <Cloud size={11} /> DGX
+              </button>
+            </div>
+          ) : (
+            <span className="text-[10px] text-gray-500 bg-gray-800 px-2 py-0.5 rounded-full border border-gray-700">
+              POC · qwen2.5:3b · Local
+            </span>
+          )}
         </div>
         {messages.length > 0 && (
           <button
@@ -168,7 +205,11 @@ export default function ChatPanel() {
                 </div>
                 <div>
                   <p className="text-gray-300 font-medium mb-1">Ask me anything about your storage infrastructure</p>
-                  <p className="text-xs text-gray-600">All data stays local — no information leaves this server</p>
+                  <p className="text-xs text-gray-600">
+                    {isDgx
+                      ? 'DGX backend — questions and results are sent off-network for inference'
+                      : 'All data stays local — no information leaves this server'}
+                  </p>
                 </div>
                 <div className="grid grid-cols-2 gap-2 max-w-lg">
                   {SUGGESTIONS.map((s) => (
@@ -218,9 +259,16 @@ export default function ChatPanel() {
                 <Send size={16} />
               </button>
             </div>
-            <p className="mt-2 text-[10px] text-gray-600 text-center">
-              Local AI · No data leaves this server · Powered by Ollama
-            </p>
+            {isDgx ? (
+              <p className="mt-2 text-[10px] text-amber-500/80 text-center flex items-center justify-center gap-1">
+                <AlertTriangle size={10} />
+                DGX ({dgxModel ?? 'remote'}) · questions and result rows are sent off-network
+              </p>
+            ) : (
+              <p className="mt-2 text-[10px] text-gray-600 text-center">
+                Local AI · No data leaves this server · Powered by Ollama
+              </p>
+            )}
           </div>
         </div>
       </div>

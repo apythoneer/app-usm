@@ -4,7 +4,7 @@ Uses local Ollama LLM for Text-to-SQL (no data leaves the host).
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, HTTPException
@@ -17,12 +17,31 @@ logger = logging.getLogger("usm.api.chat")
 router = APIRouter(prefix="/chat", tags=["chat"])
 settings = get_settings()
 
-_chat_service = ChatService()
+# One cached service per backend. 'local' is always available; 'dgx' is built
+# lazily and only if configured, so an unconfigured DGX never blocks startup.
+_services: Dict[str, ChatService] = {"local": ChatService.for_backend("local")}
+
+
+def _get_service(backend: str) -> ChatService:
+    if backend not in ("local", "dgx"):
+        raise HTTPException(status_code=400, detail=f"Unknown chat backend '{backend}'")
+    if backend not in _services:
+        try:
+            _services[backend] = ChatService.for_backend(backend)
+        except ValueError as e:
+            # DGX not configured (no CHAT_DGX_BASE_URL). 503 = capability absent.
+            raise HTTPException(status_code=503, detail=str(e))
+    return _services[backend]
 
 
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=1000)
     context: Optional[List[Dict]] = Field(default=None, description="Previous Q&A turns for multi-turn conversation")
+    # WARNING: 'dgx' routes to an OFF-NETWORK model (ai.racktocloud.com). The
+    # local backend keeps all data on the host; the DGX backend sends the
+    # question AND the SQL result rows out for answer formatting. Defaults to
+    # 'local' so egress is always an explicit choice.
+    backend: Literal["local", "dgx"] = Field(default="local")
 
 
 class ChatResponse(BaseModel):
@@ -45,17 +64,24 @@ async def chat(req: ChatRequest):
     if not settings.chat_enabled:
         raise HTTPException(status_code=503, detail="Chat feature is disabled")
 
-    result = await run_in_threadpool(
-        _chat_service.ask, req.message, req.context
-    )
+    svc = _get_service(req.backend)
+    if req.backend == "dgx":
+        # Make the off-network hop auditable — this is the one path that leaves
+        # the host with real inventory data.
+        logger.warning("chat routed to DGX (off-network): %r", req.message[:80])
+
+    result = await run_in_threadpool(svc.ask, req.message, req.context)
     return ChatResponse(**result)
 
 
 @router.get("/status")
 async def chat_status():
-    """Check if the chat service (Ollama) is available and model is loaded."""
-    status = await run_in_threadpool(_chat_service.check_ollama)
+    """Chat availability, and which backends are configured."""
+    status = await run_in_threadpool(_services["local"].check_ollama)
     return {
         "chat_enabled": settings.chat_enabled,
         "ollama": status,
+        # Lets the UI show/hide the DGX toggle instead of guessing.
+        "dgx_configured": bool(settings.chat_dgx_base_url),
+        "dgx_model": settings.chat_dgx_model if settings.chat_dgx_base_url else None,
     }
