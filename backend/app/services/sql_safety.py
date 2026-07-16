@@ -97,6 +97,10 @@ def extract_sql_from_response(text: str) -> str:
     Extract SQL query from LLM response text.
     Handles markdown code blocks, plain SQL, and mixed text.
     """
+    # Strip reasoning-model <think>...</think> first, so we don't extract a
+    # SELECT the model was merely reasoning about rather than its final query.
+    text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.DOTALL | re.IGNORECASE)
+
     # Try ```sql ... ``` blocks first
     sql_blocks = re.findall(r'```(?:sql)?\s*\n?(.*?)```', text, re.DOTALL | re.IGNORECASE)
     if sql_blocks:
