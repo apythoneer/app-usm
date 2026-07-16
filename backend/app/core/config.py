@@ -78,7 +78,25 @@ class Settings(BaseSettings):
 
     # Metrics history retention (days). Extended to 365 to support YTD
     # capacity-growth analytics. Set lower to reclaim space.
+    # Applies to metrics_history: ~90 rows per collection, so 365d is cheap.
     history_retention_days: int = Field(default=365, alias="HISTORY_RETENTION_DAYS")
+
+    # volumes_history retention (days) — deliberately SEPARATE from, and much
+    # shorter than, history_retention_days.
+    #
+    # volumes_history is ~44k rows per collection (one per volume) against
+    # metrics_history's ~90 (one per array) — roughly 500x the write volume, or
+    # ~1.9M rows/day at current fleet size. Reusing the 365d metrics window would
+    # mean ~700M rows / ~90GB. It is kept per-collection rather than daily because
+    # the intra-day resolution feeds volume anomaly detection, so the cost has to
+    # be paid here, in the retention window, rather than by discarding resolution.
+    #
+    # 90d ~= 171M rows / ~22GB at current fleet size, and matches the Capacity
+    # page's default trend window. Lower it if that is too heavy — 30d (~57M rows
+    # / ~7.5GB) is still a generous anomaly-detection baseline.
+    volume_history_retention_days: int = Field(
+        default=90, alias="VOLUME_HISTORY_RETENTION_DAYS"
+    )
 
 
     # Chat / Ollama (local LLM)
