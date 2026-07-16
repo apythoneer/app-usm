@@ -288,6 +288,40 @@ Results ({row_count} rows):
 Answer:"""
 
 
+import re as _re
+
+_THINK_RE = _re.compile(r"<think>.*?</think>", _re.DOTALL | _re.IGNORECASE)
+
+
+def _strip_think(text: str) -> str:
+    """Remove qwen3-style <think>...</think> reasoning blocks from a response.
+
+    qwen3:30b-a3b is a reasoning model: on /api/generate it emits its chain of
+    thought inside <think></think> before the answer. If num_predict is small the
+    budget is spent thinking and the visible answer is empty — which is why the
+    DGX answer fell back to a raw dict. Strip the block and keep what's left.
+    """
+    return _THINK_RE.sub("", text or "").strip()
+
+
+def _render_rows(rows: List[Dict], limit: int = 8) -> str:
+    """Human-readable fallback when the LLM summary is empty/unavailable.
+
+    Never show a raw Python dict to a user. Renders the first `limit` rows as
+    compact lines, dropping None-valued columns so the signal isn't buried.
+    """
+    if not rows:
+        return "The query returned no results."
+    lines = [f"Found {len(rows)} result{'s' if len(rows) != 1 else ''}."]
+    for r in rows[:limit]:
+        parts = [f"{k}: {v}" for k, v in r.items() if v is not None and v != ""]
+        if parts:
+            lines.append("• " + ", ".join(parts))
+    if len(rows) > limit:
+        lines.append(f"…and {len(rows) - limit} more.")
+    return "\n".join(lines)
+
+
 def _raise_if_not_json(resp, backend: str) -> None:
     """
     Turn a non-JSON LLM response into an actionable error instead of the cryptic
@@ -544,9 +578,10 @@ class ChatService:
             results_str += f"\n... ({len(rows) - 15} more rows)"
 
         prompt = (
-            f"Summarize these SQL query results in 2-3 clear sentences. "
-            f"Use exact numbers. Format bytes as TB/GB. Format large numbers with commas. "
-            f"Convert microseconds to ms if >1000.\n\n"
+            f"Summarize these SQL query results in 2-3 clear sentences for a "
+            f"storage administrator. Use exact numbers. Format bytes as TB/GB. "
+            f"Format large numbers with commas. Convert microseconds to ms if "
+            f">1000. Answer directly — do not restate the question.\n\n"
             f"Question: {question}\n"
             f"Data ({len(rows)} rows):\n{results_str}\n\n"
             f"Answer:"
@@ -559,7 +594,11 @@ class ChatService:
                     "model": self.model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.3, "num_predict": 200},
+                    # think=false asks reasoning models (qwen3) to skip the
+                    # <think> block; num_predict is generous so that even if the
+                    # model ignores it, the answer isn't truncated inside reasoning.
+                    "think": False,
+                    "options": {"temperature": 0.3, "num_predict": 512},
                 },
                 timeout=180,
                 headers=self.headers,
@@ -567,16 +606,15 @@ class ChatService:
             )
             _raise_if_not_json(resp, self.name)
             resp.raise_for_status()
-            answer = resp.json().get("response", "").strip()
+            answer = _strip_think(resp.json().get("response", ""))
             if answer:
                 return answer
+            logger.warning("LLM format returned empty after strip; using fallback")
         except Exception as e:
             logger.warning(f"LLM format failed, using fallback: {e}")
 
-        # Fallback: simple key-value format
-        if len(rows) == 1:
-            return ", ".join(f"{k}: {v}" for k, v in rows[0].items())
-        return f"Found {len(rows)} results. First: {rows[0]}"
+        # Fallback: readable rows, never a raw dict.
+        return _render_rows(rows)
 
     def check_ollama(self) -> Dict[str, Any]:
         """Health check — is Ollama running and model loaded?"""
