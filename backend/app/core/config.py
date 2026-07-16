@@ -91,11 +91,19 @@ class Settings(BaseSettings):
     # the intra-day resolution feeds volume anomaly detection, so the cost has to
     # be paid here, in the retention window, rather than by discarding resolution.
     #
-    # 90d ~= 171M rows / ~22GB at current fleet size, and matches the Capacity
-    # page's default trend window. Lower it if that is too heavy — 30d (~57M rows
-    # / ~7.5GB) is still a generous anomaly-detection baseline.
+    # Sizing at current fleet size (~44k volumes, 48 collections/day), measured
+    # from the live table (5,465 MB / 42.26M rows => ~0.13 KB/row):
+    #     30d  ~=  57M rows  /  ~7 GB
+    #     90d  ~= 171M rows  / ~22 GB
+    #    180d  ~= 342M rows  / ~44 GB   <-- current setting
+    #    365d  ~= 700M rows  / ~90 GB
+    #
+    # 180d is a deliberate choice: it buys two full quarters of intra-day baseline
+    # for anomaly detection. It is not free — budget ~44GB and expect the nightly
+    # cleanup to delete ~1.9M rows/day once the window fills (from ~2027-01-11;
+    # the data only starts at 2026-06-19). Watch index maintenance on this table.
     volume_history_retention_days: int = Field(
-        default=90, alias="VOLUME_HISTORY_RETENTION_DAYS"
+        default=180, alias="VOLUME_HISTORY_RETENTION_DAYS"
     )
 
 
