@@ -19,7 +19,7 @@ SCHEMA = settings.db_schema
 
 # ── Schema context for the LLM ─────────────────────────────────────────────
 
-_SCHEMA_CONTEXT = f"""
+_SCHEMA_CORE = f"""
 DATABASE: SQL Server — database StorMart, schema {SCHEMA}
 
 TABLE {SCHEMA}.metrics_current — Latest metrics snapshot per storage array (one row per array, updated every 60s)
@@ -86,7 +86,21 @@ TABLE {SCHEMA}.volumes_history — Per-volume time-series, one row per volume pe
   size BIGINT (bytes), used BIGINT (bytes), data_reduction FLOAT, total_reduction FLOAT,
   snapshots BIGINT (snapshot SPACE in bytes, NOT a count)
   NOTE: very large table (40M+ rows). ALWAYS filter by collected_at and/or array_name/volume_name.
+""".strip()
 
+
+# ── CMS block: appended ONLY for questions that need it ───────────────────────
+#
+# Measured on the live host: adding this block took the system prompt from ~7.2k
+# to ~14.6k chars and _generate_sql on the CPU-hosted qwen2.5:3b from usable to
+# 78.7s — with the full pipeline (generate -> execute -> format, plus a _fix_sql
+# retry) blowing past the 120s nginx/UI timeout. The model also began
+# hallucinating ACROSS tables (selecting the CMS column app_acronym FROM
+# volumes_cache), i.e. more schema made it less correct, not more capable.
+#
+# So the CMS schema is opt-in per question. Storage questions keep the small,
+# fast prompt; app/server/database questions pay for the bigger one.
+_SCHEMA_CMS = f"""
 -- ── CMS / CMDB asset model (read-only views over dbo.CMS*) ──────────────────
 -- These answer "what runs on this storage?". Join key to USM: array_name.
 -- Filters (In Use / Production) and all joins are ALREADY applied inside the
@@ -134,10 +148,51 @@ VIEW {SCHEMA}.vw_cms_switch_to_host_app_db — SAN switch/port → host → arra
   filter by switch_name or host_name.
 """.strip()
 
-_SYSTEM_PROMPT = f"""You are a storage infrastructure analyst assistant for the Unified Storage Monitoring (USM) platform.
+# Full schema — kept for callers/tests that want the complete picture.
+_SCHEMA_CONTEXT = _SCHEMA_CORE + "\n\n" + _SCHEMA_CMS
+
+# Words that mean "this question needs the CMS/CMDB tables".
+#
+# Deliberately NOT including "host" or "hosts": USM has its OWN hosts_cache
+# (storage initiators), so "how many hosts on array X" is a core question. Adding
+# "host" here would drag the CMS block into most storage questions and reintroduce
+# the very slowdown this selector exists to avoid.
+_CMS_KEYWORDS = (
+    "app", "application", "server", "database", "db", "oracle", "sql server",
+    "cluster", "vm", "virtual machine", "esx", "switch", "fabric", "wwpn",
+    "backup", "sox", "bia", "critical", "cmdb", "cms", "owner", "business",
+)
+
+
+def _needs_cms(question: str) -> bool:
+    """True if the question looks like it needs the CMS/CMDB schema block."""
+    q = (question or "").lower()
+    return any(k in q for k in _CMS_KEYWORDS)
+
+
+def build_system_prompt(question: str) -> str:
+    """System prompt with only as much schema as the question requires.
+
+    Returns the ~7.2k-char core prompt for storage questions, or the ~14.6k-char
+    full prompt when the question mentions apps/servers/databases. On the
+    CPU-hosted 3b model that difference is roughly 78.7s vs a usable response.
+    """
+    schema = _SCHEMA_CONTEXT if _needs_cms(question) else _SCHEMA_CORE
+    # NB: _SYSTEM_PROMPT_TMPL is an f-string, so the `{{SCHEMA_BLOCK}}` written in
+    # the source has ALREADY collapsed to a literal `{SCHEMA_BLOCK}` by the time
+    # we see it. Matching the double-brace form silently replaces nothing and
+    # ships a prompt with NO schema at all — which is exactly what happened, and
+    # only surfaced because the test asserted the CMS block was present rather
+    # than trusting that replace() had done something.
+    out = _SYSTEM_PROMPT_TMPL.replace("{SCHEMA_BLOCK}", schema)
+    if "{SCHEMA_BLOCK}" in out:  # placeholder survived => substitution failed
+        raise RuntimeError("system prompt placeholder was not substituted")
+    return out
+
+_SYSTEM_PROMPT_TMPL = f"""You are a storage infrastructure analyst assistant for the Unified Storage Monitoring (USM) platform.
 You help answer questions about storage arrays, volumes, hosts, alerts, and capacity by writing SQL Server (T-SQL) queries.
 
-{_SCHEMA_CONTEXT}
+{{SCHEMA_BLOCK}}
 
 IMPORTANT RULES:
 1. Write ONLY a single SELECT query — never write INSERT, UPDATE, DELETE, DROP, or any mutation.
@@ -368,7 +423,11 @@ class ChatService:
 
     def _generate_sql(self, question: str, context: List[Dict] = None) -> str:
         """Send question to Ollama, get SQL back."""
-        messages = [{"role": "system", "content": _SYSTEM_PROMPT}]
+        # Only send the CMS schema when the question needs it — see
+        # build_system_prompt(). Storage questions keep the ~7.2k prompt; CMS
+        # questions get ~14.6k, which on the CPU 3b is the difference between a
+        # usable answer and 78.7s for this call alone.
+        messages = [{"role": "system", "content": build_system_prompt(question)}]
 
         # Add conversation context if provided (for multi-turn)
         if context:
@@ -418,7 +477,7 @@ class ChatService:
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
-                    "prompt": _SYSTEM_PROMPT + "\n\n" + fix_prompt,
+                    "prompt": build_system_prompt(question) + "\n\n" + fix_prompt,
                     "stream": False,
                     "options": {"temperature": 0.1, "num_predict": 500},
                 },
