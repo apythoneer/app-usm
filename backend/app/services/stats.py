@@ -143,21 +143,28 @@ def cleanup_old_history(days: int = None) -> int:
     except Exception as e:
         logger.error(f"metrics_history cleanup failed: {e}")
 
+    # volumes_history uses its OWN, shorter window. It holds ~44k rows per
+    # collection (one per volume) vs metrics_history's ~90 (one per array), so
+    # reusing the 365d metrics window would mean ~700M rows. See
+    # settings.volume_history_retention_days for the arithmetic.
+    vol_days = settings.volume_history_retention_days
     vol_deleted = 0
     try:
-        # Batched: keeps each transaction short so collectors are not blocked.
+        # Batched: keeps each transaction short so collectors are not blocked and
+        # the log can be reused between batches. The first run after enabling this
+        # may delete tens of millions of rows.
         while True:
             with get_db_cursor() as cursor:
                 cursor.execute(
                     f"DELETE TOP (50000) FROM {SCHEMA}.volumes_history "
                     f"WHERE collected_at < DATEADD(DAY, -?, GETDATE())",
-                    (days,),
+                    (vol_days,),
                 )
                 n = cursor.rowcount or 0
             vol_deleted += n
             if n < 50000:
                 break
-        logger.info(f"Cleanup: removed {vol_deleted} volumes_history rows older than {days} days")
+        logger.info(f"Cleanup: removed {vol_deleted} volumes_history rows older than {vol_days} days")
     except Exception as e:
         logger.error(f"volumes_history cleanup failed: {e}")
 

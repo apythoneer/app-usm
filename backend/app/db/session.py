@@ -241,20 +241,25 @@ def snapshot_volume_history(cursor, array_name: str) -> int:
     column defaults to GETDATE() so every volume in this batch shares the same
     timestamp, which keeps per-collection grouping clean for trend queries.
 
-    AT MOST ONE SNAPSHOT PER ARRAY PER DAY. The volumes collector runs every 30
-    minutes, so writing unconditionally appended ~48 identical-granularity samples
-    per volume per day: volumes_history reached 41.8M rows / 5.5 GB within 26 days
-    of shipping, growing ~1.9M rows/day with no retention (~700M rows/year).
+    Writes one row per volume PER COLLECTION (every 30 min), not per day.
 
-    Daily is the right granularity because it is all the readers can use:
-      - /analytics/volume-growth plots one point per sample; at 48/day a 90-day
-        chart was 4,320 points for 90 days of signal.
-      - /analytics/top-volume-growers takes ROW_NUMBER() ... rn=1, i.e. only the
-        EARLIEST sample in the window, and compares it against volumes_cache.
-    Neither reads sub-daily detail, so the other ~47 samples/day were pure cost.
+    This granularity is deliberate and load-bearing: the intra-day signal is the
+    input for the planned volume anomaly detection (alerting when a volume's
+    growth deviates from its own baseline). Daily samples cannot support that —
+    they would show only the shape, never the deviation.
 
-    Returns the number of history rows written, or 0 if today's snapshot already
-    exists for this array (i.e. this was a no-op).
+    An earlier revision throttled this to one snapshot per array per day, on the
+    reasoning that the two current readers (/analytics/volume-growth and
+    /top-volume-growers) only consume daily granularity. That reasoning surveyed
+    what exists today rather than what the data is FOR, and would have quietly
+    destroyed the feature before it was built. Do not re-add that guard without
+    checking who consumes volumes_history first.
+
+    The cost is real and must be paid on the retention side instead: ~1.9M
+    rows/day at current fleet size (see cleanup_old_history and
+    volume_history_retention_days), NOT by throwing away resolution.
+
+    Returns the number of history rows written (== current volume count).
     """
     cursor.execute(
         f"""
@@ -266,13 +271,8 @@ def snapshot_volume_history(cursor, array_name: str) -> int:
             data_reduction, total_reduction, snapshots, GETDATE()
         FROM {SCHEMA}.volumes_cache
         WHERE array_name = ?
-          AND NOT EXISTS (
-              SELECT 1 FROM {SCHEMA}.volumes_history
-              WHERE array_name = ?
-                AND collected_at >= CAST(GETDATE() AS DATE)
-          )
         """,
-        (array_name, array_name),
+        (array_name,),
     )
     try:
         return cursor.rowcount if cursor.rowcount is not None else 0
@@ -592,15 +592,55 @@ def init_database() -> None:
         #
         # The IF EXISTS check makes it fire exactly once, then cost nothing.
         # system_type_id 56 = int; 127 = bigint.
-        cursor.execute(f"""
-            IF EXISTS (
-                SELECT 1 FROM sys.columns
-                WHERE object_id = OBJECT_ID('{SCHEMA}.volumes_history')
-                  AND name = 'snapshots'
-                  AND system_type_id = 56
+        #
+        # The DROP/re-ADD of the DEFAULT is REQUIRED, not tidiness. `snapshots INT
+        # DEFAULT 0` created an auto-named default constraint, and SQL Server
+        # refuses to alter a column a default depends on:
+        #     5074: The object 'DF__volumes_h__snaps__599D9929' is dependent on
+        #           column 'snapshots'
+        # The generated name differs per database, so it must be looked up, never
+        # hardcoded. The default is re-added under a deterministic name.
+        #
+        # Wrapped in try/except because init_database() is called UNGUARDED from
+        # main.py's lifespan: any exception here does not just skip a migration, it
+        # aborts application startup and the container crash-loops — taking every
+        # collector down with it. A migration that cannot complete must degrade to
+        # a loud log line, not an outage. (The bare ALTER, without the default
+        # handling above, did exactly this in testing.)
+        try:
+            cursor.execute(f"""
+                IF EXISTS (
+                    SELECT 1 FROM sys.columns
+                    WHERE object_id = OBJECT_ID('{SCHEMA}.volumes_history')
+                      AND name = 'snapshots'
+                      AND system_type_id = 56
+                )
+                BEGIN
+                    DECLARE @df sysname;
+                    SELECT @df = dc.name
+                    FROM sys.default_constraints dc
+                    JOIN sys.columns c
+                      ON dc.parent_object_id = c.object_id
+                     AND dc.parent_column_id = c.column_id
+                    WHERE dc.parent_object_id = OBJECT_ID('{SCHEMA}.volumes_history')
+                      AND c.name = 'snapshots';
+
+                    IF @df IS NOT NULL
+                        EXEC('ALTER TABLE {SCHEMA}.volumes_history DROP CONSTRAINT [' + @df + ']');
+
+                    ALTER TABLE {SCHEMA}.volumes_history ALTER COLUMN snapshots BIGINT;
+
+                    ALTER TABLE {SCHEMA}.volumes_history
+                        ADD CONSTRAINT DF_volumes_history_snapshots DEFAULT 0 FOR snapshots;
+                END
+            """)
+        except Exception as e:
+            logger.error(
+                "volumes_history.snapshots INT->BIGINT migration failed: %s. "
+                "Pure volume saves will keep failing with 22003 arithmetic overflow "
+                "until this is applied by hand. Startup continues deliberately — a "
+                "failed migration must not crash the app.", e
             )
-            ALTER TABLE {SCHEMA}.volumes_history ALTER COLUMN snapshots BIGINT
-        """)
 
         # ------------------------------------------------------------------
         # hosts_cache — host inventory
