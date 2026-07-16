@@ -26,10 +26,26 @@ _BLOCKED_PATTERNS = [
 _ALLOWED_SCHEMA = "USM"
 
 _ALLOWED_TABLES = {
+    # USM core
     "metrics_current", "metrics_history", "messages",
     "volumes_cache", "hosts_cache", "host_groups_cache",
     "protection_groups_cache", "managed_arrays",
     "daily_stats", "app_settings",
+    # Per-volume time-series (described in the chat schema; without this entry
+    # every volume-growth question is rejected by validate_sql).
+    "volumes_history",
+    # CMS/CMDB bridge views (USM.vw_cms_*). Read-only views over dbo.CMS*, with
+    # the ASSIGNMENT filters and joins baked in — see backend/sql/cms_views.sql.
+    # They expose no credential columns.
+    "vw_cms_array_to_app_db",
+    "vw_cms_app_to_server",
+    "vw_cms_app_to_database",
+    "vw_cms_database_to_server",
+    "vw_cms_app_to_database_to_server",
+    "vw_cms_server_to_cluster",
+    "vw_cms_vm_to_host",
+    "vw_cms_server_to_backups",
+    "vw_cms_switch_to_host_app_db",
 }
 
 

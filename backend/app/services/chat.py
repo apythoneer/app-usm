@@ -58,9 +58,16 @@ TABLE {SCHEMA}.messages — Alert/event history
   opened NVARCHAR(50), closed NVARCHAR(50), teams_notified DATETIME2,
   snow_ticket NVARCHAR(100), suppressed BIT, resolved BIT
 
-TABLE {SCHEMA}.managed_arrays — Array inventory managed via UI
-  Columns: array_name NVARCHAR(255) [unique], vendor, group_label NVARCHAR(100),
-  enabled BIT, cred_key NVARCHAR(255)
+TABLE {SCHEMA}.managed_arrays — Array inventory + lifecycle, synced nightly from the CMS/DimStorageFinance source of record. USE THIS for model/site/support/EOSL questions ("which arrays are past EOSL", "arrays by site", "what goes out of support this year").
+  Columns: array_name NVARCHAR(255) [unique], vendor, group_label NVARCHAR(100) [cloud/site tag],
+  enabled BIT [0 = excluded from collection], monitoring_status NVARCHAR(50),
+  model NVARCHAR, site NVARCHAR, technology NVARCHAR, category NVARCHAR, usage_label NVARCHAR,
+  disposition NVARCHAR ['Current' = active asset], oem NVARCHAR, support_provider NVARCHAR,
+  array_serial NVARCHAR, array_fqdn NVARCHAR, mgmt_ip NVARCHAR,
+  install_date DATE, eosl_date DATE [end of service life], maint_end_date DATE,
+  dim_sync_at DATETIME2
+  NOTE: cred_key exists on this table but is a credential-vault reference — never
+  select it, never mention it.
 
 TABLE {SCHEMA}.daily_stats — Aggregated daily fleet summary
   Columns: stat_date DATE [unique], total_arrays INT, total_volumes INT, total_hosts INT,
@@ -73,6 +80,58 @@ TABLE {SCHEMA}.metrics_history — Time-series performance data (USE THIS for an
   write_latency_us FLOAT, read_iops FLOAT, write_iops FLOAT, capacity_total BIGINT,
   capacity_used BIGINT, capacity_used_pct FLOAT, data_reduction FLOAT
   NOTE: metrics_current.collected_at is NVARCHAR — do NOT use DATEADD on it. For time filters, always use metrics_history.
+
+TABLE {SCHEMA}.volumes_history — Per-volume time-series, one row per volume per collection (every 30 min). USE THIS for volume growth/shrink over time, "which volumes grew", per-volume trends.
+  Columns: array_name, vendor, volume_name, collected_at DATETIME2,
+  size BIGINT (bytes), used BIGINT (bytes), data_reduction FLOAT, total_reduction FLOAT,
+  snapshots BIGINT (snapshot SPACE in bytes, NOT a count)
+  NOTE: very large table (40M+ rows). ALWAYS filter by collected_at and/or array_name/volume_name.
+
+-- ── CMS / CMDB asset model (read-only views over dbo.CMS*) ──────────────────
+-- These answer "what runs on this storage?". Join key to USM: array_name.
+-- Filters (In Use / Production) and all joins are ALREADY applied inside the
+-- views — do NOT add ASSIGNMENT filters or join CMS base tables yourself.
+
+VIEW {SCHEMA}.vw_cms_array_to_app_db — THE bridge from storage to applications. array_name matches {SCHEMA}.metrics_current.array_name and {SCHEMA}.volumes_cache.array_name. Use this to answer "which apps/databases are on array X".
+  Columns: array_name, vendor, datacenter, host_group, host_name, cms_host_name, host_ip,
+  allocated_gb FLOAT, used_gb FLOAT, app_id, app_acronym, app_name,
+  app_sox_critical ['Yes'|'No'|NULL], app_bia_critical ['Yes'|'No'|NULL],
+  database_name, database_type, database_status
+  VALUES: the criticality flags are the strings 'Yes'/'No' — NOT 'Y'/'N', NOT 1/0.
+  NULL means no application is mapped to that host (~9k rows).
+
+VIEW {SCHEMA}.vw_cms_app_to_server — which servers an application runs on
+  Columns: app_id, app_acronym, app_name, app_sox_critical ['Yes'|'No'],
+  app_bia_critical ['Yes'|'No'], app_criticality ['Critical'|'Non-Critical'],
+  server_name, server_os, server_os_family, server_status, server_model, server_physical_virtual, server_ip
+
+VIEW {SCHEMA}.vw_cms_app_to_database — which databases an application owns
+  Columns: app_id, app_acronym, app_name, app_sox_critical, database_assettag,
+  database_name, database_type, database_version, database_instance, database_status
+
+VIEW {SCHEMA}.vw_cms_database_to_server — which server hosts a database
+  Columns: database_assettag, database_name, database_type, database_status,
+  server_name, server_os, server_status, server_ip
+
+VIEW {SCHEMA}.vw_cms_app_to_database_to_server — full app → database → server chain
+  Columns: app_id, app_acronym, app_name, app_sox_critical, database_assettag,
+  database_name, database_type, server_name, server_os, server_status
+
+VIEW {SCHEMA}.vw_cms_server_to_cluster — server → cluster membership
+  Columns: server_name, server_status, cluster_name, cluster_status, cluster_model, cluster_brand
+
+VIEW {SCHEMA}.vw_cms_vm_to_host — virtual machine → physical ESX host
+  Columns: vm_name, esx_host_name, cluster_name
+
+VIEW {SCHEMA}.vw_cms_server_to_backups — server → backup records
+  Columns: server_name, server_status, backup_node, backup_name, backup_date DATETIME, backup_exemption
+
+VIEW {SCHEMA}.vw_cms_switch_to_host_app_db — SAN switch/port → host → array → app/db
+  Columns: switch_name, fabric, slot, port, hba_wwpn, port_wwpn, host_name,
+  array_name, vendor, app_acronym, app_name, database_name
+  NOTE: one row per switch-port x app/db combination, so it fans out (a host with
+  8 ports and 120 apps yields 960 rows). Use DISTINCT or aggregate, and always
+  filter by switch_name or host_name.
 """.strip()
 
 _SYSTEM_PROMPT = f"""You are a storage infrastructure analyst assistant for the Unified Storage Monitoring (USM) platform.
@@ -175,11 +234,53 @@ Answer:"""
 
 
 class ChatService:
-    """Orchestrates the question → SQL → answer pipeline."""
+    """Orchestrates the question → SQL → answer pipeline.
 
-    def __init__(self):
-        self.base_url = settings.ollama_base_url
-        self.model = settings.ollama_model
+    The LLM backend is injectable so the same pipeline can be pointed at more
+    than one model — used to benchmark the CPU-hosted qwen2.5:3b against the DGX
+    Spark's qwen3:30b-a3b on identical questions. Defaults to the local backend,
+    so existing callers (ChatService()) are unchanged.
+    """
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        headers: Optional[Dict[str, str]] = None,
+        name: str = "local",
+    ):
+        self.base_url = (base_url or settings.ollama_base_url).rstrip("/")
+        self.model = model or settings.ollama_model
+        # Extra headers per backend — the DGX sits behind Cloudflare Access and
+        # needs a service token on EVERY request (an Access app with only
+        # Service Auth policies issues no reusable cookie).
+        self.headers = headers or {}
+        self.name = name
+
+    @classmethod
+    def for_backend(cls, backend: str = "local") -> "ChatService":
+        """Build a ChatService for a named backend: 'local' or 'dgx'."""
+        if backend == "local":
+            return cls(name="local")
+        if backend == "dgx":
+            if not settings.chat_dgx_base_url:
+                raise ValueError(
+                    "CHAT_DGX_BASE_URL is not set — the DGX backend is opt-in "
+                    "because it sends data off-network."
+                )
+            headers = {}
+            if settings.cf_access_client_id and settings.cf_access_client_secret:
+                headers = {
+                    "CF-Access-Client-Id": settings.cf_access_client_id,
+                    "CF-Access-Client-Secret": settings.cf_access_client_secret,
+                }
+            return cls(
+                base_url=settings.chat_dgx_base_url,
+                model=settings.chat_dgx_model,
+                headers=headers,
+                name="dgx",
+            )
+        raise ValueError(f"Unknown chat backend '{backend}' (expected 'local' or 'dgx')")
 
     def ask(self, question: str, context: List[Dict] = None) -> Dict[str, Any]:
         """
