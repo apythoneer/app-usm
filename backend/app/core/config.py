@@ -133,6 +133,21 @@ class Settings(BaseSettings):
     cf_access_client_id: str = Field(default="", alias="CF_ACCESS_CLIENT_ID")
     cf_access_client_secret: str = Field(default="", alias="CF_ACCESS_CLIENT_SECRET")
 
+    # Partial-collection data-loss guard.
+    #
+    # Delete-then-insert collectors (hitachi/hpe/dell/oracle) DELETE an array's
+    # cached rows then INSERT what was just collected. A collection that returns a
+    # PARTIAL set — e.g. a Hitachi LDEV query that times out mid-pagination and
+    # yields 50 of 3,000 volumes — is non-empty, so the existing "is it empty?"
+    # guard passes and the array's real inventory is replaced with the fragment.
+    #
+    # This refuses the destructive replace when the incoming row count is below
+    # this fraction of what is already stored for the array (which is far more
+    # likely a failed/partial collect than a real >50% shrink). Set to 0 to
+    # disable. A genuine large shrink (decommission) just needs one retry or a
+    # manual clear; silent data loss does not get a second chance.
+    collect_shrink_min_ratio: float = Field(default=0.5, alias="COLLECT_SHRINK_MIN_RATIO")
+
     # Arrays config file
     arrays_config_file: str = Field(default="/app/config/arrays.txt", alias="ARRAYS_CONFIG_FILE")
 

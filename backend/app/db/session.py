@@ -127,6 +127,39 @@ def get_fast_cursor() -> Generator:
                 pass
 
 
+def would_shrink_below(
+    cursor,
+    table: str,
+    array_name: str,
+    incoming_count: int,
+    min_ratio: float = 0.5,
+    extra_where: str = "",
+    extra_params: tuple = (),
+) -> tuple:
+    """
+    Decide whether a delete-then-insert replace looks like a PARTIAL collection.
+
+    Returns (blocked, existing_count). `blocked` is True when replacing this
+    array's rows would drop the count below `min_ratio` of what is already stored
+    — the signature of a failed/partial collect (e.g. an LDEV query that timed out
+    mid-pagination), not a real inventory change.
+
+    Never blocks when there is nothing to protect (existing == 0) or when the
+    incoming set is empty (that's the caller's separate empty-collect guard).
+    A blocked replace should PRESERVE existing data, not delete it.
+    """
+    if min_ratio <= 0 or incoming_count <= 0:
+        return False, incoming_count and -1 or 0
+    cursor.execute(
+        f"SELECT COUNT(*) FROM {table} WHERE array_name=?{extra_where}",
+        (array_name, *extra_params),
+    )
+    existing = cursor.fetchone()[0]
+    if existing == 0:
+        return False, 0
+    return (incoming_count < existing * min_ratio), existing
+
+
 def batch_upsert(
     cursor,
     table: str,

@@ -11,7 +11,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.hitachi.client import HitachiVSPClient
-from app.db.session import get_fast_cursor, snapshot_volume_history
+from app.db.session import get_fast_cursor, snapshot_volume_history, would_shrink_below
 
 from app.core.config import get_settings
 
@@ -176,7 +176,28 @@ class HitachiVolumesCollector(BaseCollector):
                      json.dumps(h.get("volumes", [])))
                 )
 
+            min_ratio = settings.collect_shrink_min_ratio
             with get_fast_cursor() as cursor:
+                # Partial-collection guard: an LDEV query that times out
+                # mid-pagination returns a FRAGMENT, not empty, so the earlier
+                # "is it empty?" check passes and the DELETE below would wipe the
+                # real inventory. Refuse the replace if the incoming set collapses
+                # relative to what's stored, and preserve the existing rows.
+                blocked, existing = would_shrink_below(
+                    cursor, f"{SCHEMA}.volumes_cache", self.array_name,
+                    len(vol_params), min_ratio,
+                )
+                if blocked:
+                    logger.error(
+                        f"[{self.array_name}] Refusing to replace {existing} volumes "
+                        f"with only {len(vol_params)} — looks like a partial/failed "
+                        f"collection (LDEV timeout?). Keeping existing data."
+                    )
+                    result.errors.append(
+                        f"partial collect: {len(vol_params)} of ~{existing} volumes"
+                    )
+                    return False  # visible failure in scheduler stats; data preserved
+
                 if volumes:
                     cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?",
                                    (self.array_name,))
@@ -189,6 +210,20 @@ class HitachiVolumesCollector(BaseCollector):
                     )
 
                 if hosts:
+                    h_blocked, h_existing = would_shrink_below(
+                        cursor, f"{SCHEMA}.hosts_cache", self.array_name,
+                        len(host_params), min_ratio,
+                    )
+                    if h_blocked:
+                        logger.error(
+                            f"[{self.array_name}] Refusing to replace {h_existing} hosts "
+                            f"with only {len(host_params)} — partial collection. "
+                            f"Keeping existing hosts."
+                        )
+                        result.errors.append(
+                            f"partial collect: {len(host_params)} of ~{h_existing} hosts"
+                        )
+                        return False
                     cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?",
                                    (self.array_name,))
                     cursor.executemany(
