@@ -13,7 +13,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.hpe.client import HPEClient
-from app.db.session import get_fast_cursor, snapshot_volume_history
+from app.db.session import get_fast_cursor, snapshot_volume_history, would_shrink_below
 
 from app.core.config import get_settings
 
@@ -163,8 +163,24 @@ class HPEVolumesCollector(BaseCollector):
             return True
 
         try:
+            min_ratio = settings.collect_shrink_min_ratio
             # Batched delete-then-insert via fast_executemany (was per-row INSERT loop)
             with get_fast_cursor() as cursor:
+                # Partial-collection guard: refuse to replace the array's inventory
+                # with a collapsed set (a partial/failed collect), preserving data.
+                if volumes:
+                    blocked, existing = would_shrink_below(
+                        cursor, f"{SCHEMA}.volumes_cache", self.array_name,
+                        len(volumes), min_ratio,
+                    )
+                    if blocked:
+                        logger.error(
+                            f"[{self.array_name}] Refusing to replace {existing} volumes "
+                            f"with only {len(volumes)} — partial/failed collection. "
+                            f"Keeping existing data."
+                        )
+                        result.errors.append(f"partial collect: {len(volumes)} of ~{existing} volumes")
+                        return False
                 if volumes:
                     cursor.execute(f"DELETE FROM {SCHEMA}.volumes_cache WHERE array_name=?", (self.array_name,))
                     vol_params = [
@@ -183,6 +199,17 @@ class HPEVolumesCollector(BaseCollector):
                     )
 
                 if hosts:
+                    h_blocked, h_existing = would_shrink_below(
+                        cursor, f"{SCHEMA}.hosts_cache", self.array_name,
+                        len(hosts), min_ratio,
+                    )
+                    if h_blocked:
+                        logger.error(
+                            f"[{self.array_name}] Refusing to replace {h_existing} hosts "
+                            f"with only {len(hosts)} — partial collection. Keeping existing hosts."
+                        )
+                        result.errors.append(f"partial collect: {len(hosts)} of ~{h_existing} hosts")
+                        return False
                     cursor.execute(f"DELETE FROM {SCHEMA}.hosts_cache WHERE array_name=?", (self.array_name,))
                     host_params = [
                         (h["array_name"], "hpe", h["host_name"],
