@@ -288,6 +288,31 @@ Results ({row_count} rows):
 Answer:"""
 
 
+def _raise_if_not_json(resp, backend: str) -> None:
+    """
+    Turn a non-JSON LLM response into an actionable error instead of the cryptic
+    "Expecting value: line 1 column 1 (char 0)" from resp.json().
+
+    The DGX sits behind Cloudflare Access, which answers an UNauthenticated
+    request with a 302 to an HTML login page — not JSON. With allow_redirects
+    disabled that surfaces here as a 3xx or an HTML 200. Either way the token
+    isn't authenticating: the app is not sending the CF-Access headers, or the
+    Access app lacks a Service Auth policy covering this path/method.
+    """
+    ctype = resp.headers.get("content-type", "")
+    if resp.is_redirect or (resp.status_code == 200 and "application/json" not in ctype):
+        loc = resp.headers.get("location", "")
+        hint = ""
+        if "cloudflareaccess.com" in loc or "cf-access" in " ".join(resp.headers).lower():
+            hint = (" — Cloudflare Access rejected the request. Check that the "
+                    "service token is sent (CF-Access-Client-Id/Secret) and that "
+                    "the Access app has a Service Auth policy for this path.")
+        raise RuntimeError(
+            f"{backend} backend returned non-JSON (HTTP {resp.status_code}, "
+            f"content-type '{ctype or 'none'}'){hint}"
+        )
+
+
 class ChatService:
     """Orchestrates the question → SQL → answer pipeline.
 
@@ -450,7 +475,10 @@ class ChatService:
                 },
             },
             timeout=180,
+            headers=self.headers,        # CF-Access token for the DGX backend
+            allow_redirects=False,       # a CF 302 is an auth failure, not JSON
         )
+        _raise_if_not_json(resp, self.name)
         resp.raise_for_status()
         data = resp.json()
 
@@ -482,7 +510,10 @@ class ChatService:
                     "options": {"temperature": 0.1, "num_predict": 500},
                 },
                 timeout=180,
+                headers=self.headers,
+                allow_redirects=False,
             )
+            _raise_if_not_json(resp, self.name)
             resp.raise_for_status()
             raw = resp.json().get("response", "")
             fixed = extract_sql_from_response(raw)
@@ -531,7 +562,10 @@ class ChatService:
                     "options": {"temperature": 0.3, "num_predict": 200},
                 },
                 timeout=180,
+                headers=self.headers,
+                allow_redirects=False,
             )
+            _raise_if_not_json(resp, self.name)
             resp.raise_for_status()
             answer = resp.json().get("response", "").strip()
             if answer:
@@ -547,8 +581,11 @@ class ChatService:
     def check_ollama(self) -> Dict[str, Any]:
         """Health check — is Ollama running and model loaded?"""
         try:
-            resp = requests.get(f"{self.base_url}/api/tags", timeout=5)
-            if resp.status_code == 200:
+            resp = requests.get(
+                f"{self.base_url}/api/tags", timeout=5,
+                headers=self.headers, allow_redirects=False,
+            )
+            if resp.status_code == 200 and "application/json" in resp.headers.get("content-type", ""):
                 models = [m.get("name", "") for m in resp.json().get("models", [])]
                 has_model = any(self.model in m for m in models)
                 return {
