@@ -25,13 +25,24 @@ class StorageGridClient:
                  mgmt_ip: Optional[str] = None):
         self.array_name = array_name
         self.cred_key = cred_key
-        self.host = fqdn or mgmt_ip or array_name
+        # Candidate hosts in preference order. The FQDN is tried first, but some
+        # StorageGrid FQDNs (e.g. nalw1an01/namr1an01.corp.intranet) do NOT
+        # resolve from the monitoring host while the mgmt_ip does — the old
+        # `fqdn or mgmt_ip` picked the dead FQDN and never fell back, leaving
+        # those nodes permanently stale. Try each in turn until auth succeeds.
+        self._hosts = [h for h in (
+            (fqdn or "").strip(), (mgmt_ip or "").strip(), array_name,
+        ) if h]
+        # de-dup while preserving order
+        seen = set()
+        self._hosts = [h for h in self._hosts if not (h in seen or seen.add(h))]
+        self.host = self._hosts[0]
         self.base_url = f"https://{self.host}:443/api/v3"
         self.session: Optional[requests.Session] = None
         self.token: Optional[str] = None
 
     def authenticate(self) -> bool:
-        """Authenticate via bearer token."""
+        """Authenticate via bearer token, trying each candidate host in turn."""
         try:
             creds = get_credentials(self.cred_key)
             username = creds.get("username") or ""
@@ -43,28 +54,70 @@ class StorageGridClient:
             logger.error(f"[{self.array_name}] KeePass error: {e}")
             return False
 
-        try:
-            resp = requests.post(
-                f"{self.base_url}/authorize",
-                json={"username": username, "password": password, "cookie": False, "csrfToken": False},
-                verify=False,
-                timeout=15,
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-            )
-            if resp.status_code == 200:
-                self.token = resp.json().get("data", "")
-                if self.token:
-                    self.session = requests.Session()
-                    self.session.verify = False
-                    self.session.headers.update({
-                        "Authorization": f"Bearer {self.token}",
-                        "Accept": "application/json",
-                    })
-                    return True
-            logger.error(f"[{self.array_name}] Auth HTTP {resp.status_code}")
-        except Exception as e:
-            logger.error(f"[{self.array_name}] Auth error: {e}")
+        last_err = None
+        for host in self._hosts:
+            base_url = f"https://{host}:443/api/v3"
+            try:
+                resp = requests.post(
+                    f"{base_url}/authorize",
+                    json={"username": username, "password": password, "cookie": False, "csrfToken": False},
+                    verify=False,
+                    timeout=15,
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                )
+                if resp.status_code == 200:
+                    self.token = resp.json().get("data", "")
+                    if self.token:
+                        self.host = host
+                        self.base_url = base_url
+                        self.session = requests.Session()
+                        self.session.verify = False
+                        self.session.headers.update({
+                            "Authorization": f"Bearer {self.token}",
+                            "Accept": "application/json",
+                        })
+                        if host != self._hosts[0]:
+                            logger.info(f"[{self.array_name}] Reached via fallback host {host}")
+                        return True
+                # Credentials rejected — no point trying other hosts with the
+                # same creds, and the box is clearly reachable.
+                if resp.status_code in (401, 403):
+                    logger.error(f"[{self.array_name}] Credentials rejected (HTTP {resp.status_code})")
+                    return False
+                last_err = f"HTTP {resp.status_code}"
+            except requests.exceptions.ConnectionError as e:
+                last_err = "unreachable" if "gaierror" not in repr(e) else "DNS did not resolve"
+                continue  # try the next candidate host
+            except Exception as e:
+                last_err = str(e)[:60]
+                continue
+        logger.error(
+            f"[{self.array_name}] Cannot reach any host {self._hosts} ({last_err}) — "
+            f"connectivity/inventory issue, not credentials."
+        )
         return False
+
+    def metric_query(self, promql: str) -> Optional[float]:
+        """Sum a StorageGrid Prometheus instant query via grid/metric-query.
+
+        Capacity is NOT in grid/health/topology (that returns empty attributes on
+        this StorageGrid version). It lives in the metrics API, and the endpoint
+        is grid/metric-query (singular) — grid/metrics/query returns a plaintext
+        '404 page not found', which is what made the old json() parse choke.
+        """
+        r = self.get("grid/metric-query", params={"query": promql})
+        if not r or r.get("status") != "success":
+            return None
+        result = (r.get("data") or {}).get("result") or []
+        total = 0.0
+        for item in result:
+            val = item.get("value", [None, None])[1]
+            if val is not None:
+                try:
+                    total += float(val)
+                except (TypeError, ValueError):
+                    pass
+        return total
 
     def get(self, endpoint: str, params: Dict = None, timeout: int = 30) -> Optional[Any]:
         """GET request to the grid API. Returns parsed JSON or None."""

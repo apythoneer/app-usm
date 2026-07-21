@@ -73,38 +73,20 @@ class StorageGridMetricsCollector(BaseCollector):
         if config and config.get("data"):
             metrics["purity_version"] = config["data"].get("productVersion", "")
 
-        # Capacity from grid topology (traverse to find storage nodes)
-        topology = self.client.get("grid/health/topology")
-        if topology and topology.get("data"):
-            total_cap, used_cap = self._extract_capacity_from_topology(topology["data"])
+        # Capacity from the Prometheus metrics API. grid/health/topology does NOT
+        # carry capacity on this StorageGrid version (empty attributes at every
+        # depth), which is why the dashboard showed 0%. Confirmed live on
+        # naom1an01: used 1,211 TB / usable 1,587 TB => 43.3%.
+        used_cap = self.client.metric_query("sum(storagegrid_storage_utilization_data_bytes)")
+        usable_cap = self.client.metric_query("sum(storagegrid_storage_utilization_usable_space_bytes)")
+        if used_cap is not None and usable_cap is not None:
+            total_cap = used_cap + usable_cap   # usable = free; total = used + free
             if total_cap > 0:
-                metrics["capacity_total"] = total_cap
-                metrics["capacity_used"] = used_cap
+                metrics["capacity_total"] = int(total_cap)
+                metrics["capacity_used"] = int(used_cap)
                 metrics["capacity_used_pct"] = round(used_cap / total_cap * 100, 2)
 
         return metrics
-
-    def _extract_capacity_from_topology(self, topo: dict) -> tuple:
-        """Walk the topology tree to find storage capacity in attributes."""
-        total = 0
-        used = 0
-
-        # The topology is a nested tree: Grid → Site → Node → Component → Attribute
-        # Look for storageBytesInstalled and storageBytesUsed at the grid level
-        attrs = topo.get("attributes", {})
-        if "installedStorageCapacity" in attrs:
-            total = attrs.get("installedStorageCapacity", {}).get("value", 0)
-        if "dataObjectsBytesUsed" in attrs:
-            used = attrs.get("dataObjectsBytesUsed", {}).get("value", 0)
-
-        # If not at top level, walk children
-        if total == 0:
-            for child in topo.get("children", []):
-                ct, cu = self._extract_capacity_from_topology(child)
-                total += ct
-                used += cu
-
-        return total, used
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
         array_name = data["array_name"]
