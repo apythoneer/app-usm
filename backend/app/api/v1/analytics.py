@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 
 from app.db.session import get_db_cursor, rows_to_dicts
 from app.core.config import get_settings
-from app.services.capacity_projection import compute_daily_trend
+from app.services.capacity_projection import compute_daily_trend, forecast_capacity
 
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
@@ -340,6 +340,18 @@ async def get_array_growth(
     Depends on metrics_history retention (default extended to 365 days).
     """
     return await run_in_threadpool(_fetch_array_growth, array_name, months)
+
+
+@router.get("/forecast")
+async def get_forecast(
+    array: Optional[str] = Query(default=None, description="array_name; omit for fleet-wide"),
+    target_date: Optional[str] = Query(default=None, description="YYYY-MM-DD"),
+    window: int = Query(default=90, ge=7, le=365, description="trailing days to fit the trend"),
+):
+    """Project used capacity forward for an array (or the whole fleet) to an
+    optional target date, using its historical trend. Deterministic; the chat
+    narrates this result rather than inventing numbers."""
+    return await run_in_threadpool(forecast_capacity, array, target_date, window)
 
 
 def _fetch_top_growers(days: int, limit: int) -> List[dict]:

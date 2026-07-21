@@ -239,6 +239,28 @@ export interface ArrayGrowth {
   trend: GrowthTrendPoint[]
 }
 
+// ── Capacity forecast ("how full will X be by <date>") ────────────────────────
+
+export interface CapacityForecast {
+  scope: string
+  array_name: string | null
+  window_days: number
+  data_points: number
+  current_used_tb: number
+  usable_tb: number
+  current_pct: number | null
+  rate_tb_per_day: number
+  trend: 'growing' | 'declining' | 'stable'
+  days_to_full: number | null
+  projected_full_date: string | null
+  target_date: string | null
+  projected_used_tb: number | null
+  projected_pct: number | null
+  projected_change_tb: number | null
+  caveat: string | null
+  error: string | null
+}
+
 // ── Fleet capacity daily trend (backed by daily_stats) ────────────────────────
 
 export interface DailyTrendPoint {

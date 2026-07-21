@@ -2,7 +2,7 @@ import { apiClient } from './client'
 import type {
   ArraySummary, ArrayMetrics, ArrayTableRow, FleetStats, FleetHistoryResponse,
   CapacityBreakdown, ArrayGrowth, DailyTrendResponse, TopGrowersResponse,
-  VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse,
+  VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse, CapacityForecast,
 } from './types'
 
 
@@ -20,6 +20,18 @@ export const arraysApi = {
   // Enriched per-array rows (metrics + alert/volume/host counts) for the Arrays table.
   table: () =>
     apiClient.get<ArrayTableRow[]>('/arrays/table').then((r) => r.data),
+
+  // Project used capacity forward for an array (or fleet if array omitted).
+  forecast: (array?: string, targetDate?: string, window = 90) =>
+    apiClient
+      .get<CapacityForecast>('/analytics/forecast', {
+        params: {
+          ...(array ? { array } : {}),
+          ...(targetDate ? { target_date: targetDate } : {}),
+          window,
+        },
+      })
+      .then((r) => r.data),
 
   history: (arrayName: string, hours = 24) =>
     apiClient

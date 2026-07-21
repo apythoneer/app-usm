@@ -5,13 +5,16 @@ Uses a local Ollama LLM (no data leaves the host).
 
 import json
 import logging
+import re
 import time
 import requests
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from app.core.config import get_settings
 from app.db.session import get_db_cursor, rows_to_dicts
 from app.services.sql_safety import validate_sql, extract_sql_from_response, add_safety_limits
+from app.services.capacity_projection import forecast_capacity
 
 logger = logging.getLogger("usm.chat")
 settings = get_settings()
@@ -380,6 +383,121 @@ def _raise_if_not_json(resp, backend: str) -> None:
         )
 
 
+# ── Capacity-forecast intent (answered by the projection engine, not SQL) ─────
+#
+# "How full will array X be by December?" / "when will the fleet run out of
+# space?" are extrapolation questions. The LLM can write SQL to read history but
+# can't reliably project it forward, so we detect the intent, resolve the array +
+# target date deterministically, compute the forecast with capacity_projection,
+# and let the LLM only NARRATE the exact numbers.
+
+_FORECAST_KEYWORDS = (
+    "forecast", "project", "projection", "predict", "how full will",
+    "when will", "run out", "out of space", "fill up", "fills up", "will fill",
+    "reach capacity", "days to full", "when full", "consume by", "consumed by",
+    "use by", "grow to", "on track to", "at this rate", "extrapolate",
+)
+
+_MONTHS = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10,
+    "oct": 10, "november": 11, "nov": 11, "december": 12, "dec": 12,
+}
+
+
+def _forecast_intent(question: str) -> bool:
+    q = (question or "").lower()
+    return any(k in q for k in _FORECAST_KEYWORDS)
+
+
+def _parse_target_date(question: str, now: Optional[datetime] = None) -> Optional[str]:
+    """Best-effort target-date extraction → 'YYYY-MM-DD', or None if none found."""
+    q = (question or "").lower()
+    now = now or datetime.now()
+
+    # Explicit ISO date: 2026-12-01 or 2026-12-1
+    m = re.search(r"\b(20\d{2})-(\d{1,2})-(\d{1,2})\b", q)
+    if m:
+        y, mo, d = (int(x) for x in m.groups())
+        try:
+            return datetime(y, mo, d).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+
+    # "in 6 months" / "6 months from now" / "in 90 days" / "in 2 years"
+    m = re.search(r"(?:in\s+)?(\d+)\s*(day|week|month|year)s?(?:\s+from now)?", q)
+    if m:
+        n, unit = int(m.group(1)), m.group(2)
+        factor = {"day": 1, "week": 7, "month": 30, "year": 365}[unit]
+        return (now + timedelta(days=n * factor)).strftime("%Y-%m-%d")
+
+    # "end of year" / "eoy" / "year end"
+    if any(p in q for p in ("end of year", "eoy", "year end", "year-end")):
+        return datetime(now.year, 12, 31).strftime("%Y-%m-%d")
+
+    # "next year"
+    if "next year" in q:
+        return (now + timedelta(days=365)).strftime("%Y-%m-%d")
+
+    # Month name, optionally with a year: "by december", "december 2026"
+    for name, mo in _MONTHS.items():
+        if re.search(rf"\b{name}\b", q):
+            ym = re.search(rf"\b{name}\b\s+(20\d{{2}})", q)
+            if ym:
+                year = int(ym.group(1))
+            else:
+                # nearest future occurrence of that month, on the 1st
+                year = now.year if mo >= now.month else now.year + 1
+            return datetime(year, mo, 1).strftime("%Y-%m-%d")
+
+    return None
+
+
+def _known_array_names() -> List[str]:
+    try:
+        with get_db_cursor() as cursor:
+            cursor.execute(f"SELECT array_name FROM {SCHEMA}.metrics_current WITH (NOLOCK)")
+            return [r[0] for r in cursor.fetchall() if r and r[0]]
+    except Exception:
+        return []
+
+
+def _resolve_forecast_array(question: str, names: List[str]) -> Optional[str]:
+    """Longest known array_name that appears in the question (case-insensitive)."""
+    q = (question or "").lower()
+    hits = [n for n in names if len(n) >= 3 and n.lower() in q]
+    return max(hits, key=len) if hits else None
+
+
+def _forecast_sentence(fc: Dict[str, Any], target: Optional[str]) -> str:
+    """Deterministic natural-language forecast — the narration fallback and the
+    ground truth the LLM must not deviate from."""
+    scope = fc.get("array_name") or "The fleet"
+    cur = f"{fc['current_used_tb']:,} TB ({fc['current_pct']}% of {fc['usable_tb']:,} TB usable)"
+    parts = []
+    if target and fc.get("projected_used_tb") is not None:
+        pct = fc["projected_pct"]
+        chg = fc["projected_change_tb"]
+        over = pct is not None and pct >= 100
+        pct_txt = "over 100% (full before then)" if over else f"{pct}%"
+        parts.append(
+            f"{scope} is projected to reach {fc['projected_used_tb']:,} TB ({pct_txt}) by "
+            f"{target} — a change of {'+' if chg >= 0 else ''}{chg:,} TB from today's {cur}."
+        )
+    else:
+        parts.append(f"{scope} is currently at {cur}, {fc['trend']} at "
+                     f"{fc['rate_tb_per_day']:+,} TB/day.")
+    if fc.get("days_to_full") is not None:
+        parts.append(f"At the current rate it fills around {fc['projected_full_date']} "
+                     f"(~{fc['days_to_full']} days).")
+    elif fc.get("trend") != "growing":
+        parts.append("It is not currently trending toward full.")
+    basis = f"Basis: {fc['window_days']}-day trend ({fc['data_points']} daily points)."
+    caveat = f" {fc['caveat']}." if fc.get("caveat") else ""
+    return " ".join(parts) + " " + basis + caveat
+
+
 class ChatService:
     """Orchestrates the question → SQL → answer pipeline.
 
@@ -456,6 +574,14 @@ class ChatService:
         }
 
         try:
+            # Forecast questions are answered by the deterministic projection
+            # engine, not SQL — the LLM only narrates the computed numbers.
+            if _forecast_intent(question):
+                fc_result = self._answer_forecast(question)
+                fc_result["duration_ms"] = int((time.time() - start) * 1000)
+                fc_result["model"] = self.model
+                return fc_result
+
             # Step 1: Generate SQL from the question
             sql = self._generate_sql(question, context)
             if not sql:
@@ -522,6 +648,60 @@ class ChatService:
 
         result["duration_ms"] = int((time.time() - start) * 1000)
         return result
+
+    def _answer_forecast(self, question: str) -> Dict[str, Any]:
+        """Resolve array + target date, compute the projection, narrate it."""
+        result = {"answer": "", "sql": "", "rows": 0, "duration_ms": 0,
+                  "model": self.model, "error": None}
+        array = _resolve_forecast_array(question, _known_array_names())
+        target = _parse_target_date(question)
+        fc = forecast_capacity(array, target)
+        scope = array or "fleet"
+        result["sql"] = f"-- capacity forecast · scope={scope} · target={target or 'when-full'}"
+        result["rows"] = fc.get("data_points", 0)
+
+        if fc.get("error"):
+            result["answer"] = fc["error"]
+            return result
+
+        deterministic = _forecast_sentence(fc, target)
+        # Let the LLM phrase it, but ONLY from the computed facts (it cannot invent
+        # numbers). Fall back to the deterministic sentence if narration fails.
+        result["answer"] = self._narrate_forecast(question, fc, deterministic)
+        return result
+
+    def _narrate_forecast(self, question: str, fc: Dict[str, Any], fallback: str) -> str:
+        facts = json.dumps({
+            k: fc.get(k) for k in (
+                "scope", "array_name", "current_used_tb", "current_pct", "usable_tb",
+                "rate_tb_per_day", "trend", "days_to_full", "projected_full_date",
+                "target_date", "projected_used_tb", "projected_pct",
+                "projected_change_tb", "window_days", "data_points", "caveat",
+            )
+        }, default=str)
+        prompt = (
+            "You are a storage capacity analyst. Answer the user's question in 2-3 "
+            "sentences using ONLY the numbers in FACTS — do not invent or recompute "
+            "anything. Units are TB. Mention the projected value and date if present, "
+            "the fill date if the trend is growing, and end with the basis "
+            "(window_days-day trend) and the caveat. Be direct.\n\n"
+            f"Question: {question}\nFACTS: {facts}\n\nAnswer:"
+        )
+        try:
+            resp = requests.post(
+                f"{self.base_url}/api/generate",
+                json={"model": self.model, "prompt": self._no_think(prompt),
+                      "stream": False, "options": {"temperature": 0.2, "num_predict": 512}},
+                timeout=180, headers=self.headers, allow_redirects=False,
+            )
+            _raise_if_not_json(resp, self.name)
+            resp.raise_for_status()
+            answer = _strip_think(resp.json().get("response", "")).strip()
+            if answer:
+                return answer
+        except Exception as e:
+            logger.warning(f"Forecast narration failed, using deterministic text: {e}")
+        return fallback
 
     def _generate_sql(self, question: str, context: List[Dict] = None) -> str:
         """Send question to Ollama, get SQL back."""
