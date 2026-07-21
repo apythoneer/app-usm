@@ -42,6 +42,10 @@ function trendDate(v: string) {
 
 const tooltipStyle = {
   contentStyle: { background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 },
+  // Force light text — recharts otherwise colors each item by its series color
+  // (e.g. the dark-gray "Free" series), which is unreadable on the dark tooltip.
+  itemStyle: { color: '#e5e7eb' },
+  labelStyle: { color: '#9ca3af' },
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -161,19 +165,24 @@ function FleetGrowthSummary() {
 
   const points = data?.data ?? []
 
-  // Prefer the server-authoritative projection so the growth summary and the
-  // "Projected Full" stat are consistent everywhere. Fall back to a local
-  // derivation only if the API hasn't been upgraded yet.
   const proj = data?.projection
   const used = points.map((p) => p.total_used_tb)
   const first = used.length ? used[0] : 0
   const last = used.length ? used[used.length - 1] : 0
-  const deltaTb = proj ? proj.net_change_tb : last - first
-  const deltaPct = proj ? proj.net_change_pct : first > 0 ? (deltaTb / first) * 100 : null
-  const spanDays = proj ? proj.span_days : points.length > 1 ? points.length - 1 : 0
+
+  // Net Change reflects the SELECTED chart window (first vs last visible point),
+  // so it responds to the range buttons as expected.
+  const deltaTb = +(last - first).toFixed(2)
+  const deltaPct = first > 0 ? (deltaTb / first) * 100 : null
+  const spanDays = points.length > 1 ? points.length - 1 : 0
+  const growing = deltaTb > 0.01
+
+  // Forward-looking projection comes from the server's fixed-window fit, NOT the
+  // selected range — so Avg Rate / Projected Full stay stable when you switch
+  // ranges (previously a 7d vs 14d window swung "days to full" wildly).
   const perDay = proj ? proj.avg_rate_tb_per_day : spanDays > 0 ? linregSlope(used) : 0
   const trend = proj ? proj.trend : deltaTb > 0.01 ? 'growing' : deltaTb < -0.01 ? 'declining' : 'stable'
-  const growing = trend === 'growing'
+  const projWindow = proj?.window_days ?? 0
 
   const lastUsable = proj ? proj.usable_tb : points.length ? points[points.length - 1].total_capacity_tb : 0
   const headroomTb = proj ? proj.headroom_tb : Math.max(lastUsable - last, 0)
@@ -238,7 +247,7 @@ function FleetGrowthSummary() {
             <GrowthStat
               label="Avg Rate"
               value={`${perDay >= 0 ? '+' : ''}${tb(Math.abs(perDay))}/day`}
-              sub={perDay >= 0 ? 'consuming' : 'reclaiming'}
+              sub={projWindow > 0 ? `${projWindow}d trend · ${perDay >= 0 ? 'consuming' : 'reclaiming'}` : (perDay >= 0 ? 'consuming' : 'reclaiming')}
               tone={perDay >= 0 ? 'up' : 'down'}
             />
             <GrowthStat label="Free Headroom" value={tb(headroomTb)} sub={`of ${tb(lastUsable)} usable`} />
@@ -247,22 +256,20 @@ function FleetGrowthSummary() {
               value={
                 daysToFull != null
                   ? `~${daysToFull}d`
-                  : trend === 'declining'
-                  ? 'N/A'
-                  : trend === 'stable'
+                  : trend === 'declining' || trend === 'stable'
                   ? 'N/A'
                   : '—'
               }
               sub={
                 daysToFull != null
                   ? projectedFullDate
-                    ? `by ${trendDate(projectedFullDate)}`
-                    : 'at current rate'
+                    ? `by ${trendDate(projectedFullDate)} · ${projWindow}d basis`
+                    : `at current rate · ${projWindow}d basis`
                   : trend === 'declining'
                   ? 'reclaiming — not filling'
                   : 'stable — not filling'
               }
-              tone={daysToFull != null && daysToFull < 90 ? 'down' : daysToFull != null && daysToFull < 180 ? 'neutral' : 'neutral'}
+              tone={daysToFull != null && daysToFull < 90 ? 'down' : 'neutral'}
             />
           </div>
 
@@ -425,9 +432,9 @@ function ArrayGrowthDetail({ arrays }: { arrays: ArraySummary[] }) {
       </div>
 
       {!selected && (
-        <div className="text-center py-10 text-gray-600 text-sm">
-          Pick an array to see its YTD growth and monthly capacity trend.
-        </div>
+        <p className="text-gray-600 text-xs">
+          Pick an array above to see its YTD growth and monthly capacity trend.
+        </p>
       )}
 
       {selected && isLoading && <p className="text-gray-500 text-sm">Loading growth…</p>}
@@ -832,9 +839,10 @@ export default function Capacity() {
           {/* Fleet summary */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <StatCard label="Usable (Allocated)" value={tb(fleet.usable_tb)} sub={`${fleet.arrays} arrays`} />
-            <StatCard label="Used" value={tb(fleet.used_tb)} sub={`${fleet.utilization_pct.toFixed(1)}% utilized`} />
+            <StatCard label="Used" value={tb(fleet.used_tb)} />
             <StatCard label="Free" value={tb(fleet.free_tb)} />
-            <StatCard label="Utilization" value={`${fleet.utilization_pct.toFixed(1)}%`} />
+            <StatCard label="Utilization" value={`${fleet.utilization_pct.toFixed(1)}%`}
+              sub={fleet.utilization_pct >= 85 ? 'running high' : undefined} />
           </div>
 
           {/* ── Capacity Trends ─────────────────────────────────────────── */}
@@ -842,10 +850,8 @@ export default function Capacity() {
           <FleetTrendChart />
 
 
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
-            <ArrayGrowthDetail arrays={arrayList} />
-            <TopMoversTable />
-          </div>
+          <TopMoversTable />
+          <ArrayGrowthDetail arrays={arrayList} />
 
           {/* ── Per-volume consumption growth (volumes_history) ──────────── */}
           <VolumeGrowthSection arrays={arrayList} />

@@ -252,6 +252,7 @@ export interface DailyTrendPoint {
 
 export interface DailyTrendProjection {
   span_days: number
+  window_days?: number   // trailing window the forward projection is fit over
   net_change_tb: number
   net_change_pct: number | null
   avg_rate_tb_per_day: number
