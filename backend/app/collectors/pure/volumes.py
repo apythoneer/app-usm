@@ -12,7 +12,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
-from app.db.session import get_fast_cursor, batch_upsert, snapshot_volume_history
+from app.db.session import get_fast_cursor, batch_upsert, snapshot_volume_history, would_shrink_below
 
 from app.core.config import get_settings
 
@@ -231,6 +231,23 @@ class PureVolumesCollector(BaseCollector):
             } for name, pg in pgroups.items()]
 
             with get_fast_cursor() as cursor:
+                # Partial-collect guard: batch_upsert(delete_missing=True) deletes
+                # every stored volume not in `rows`, so a truncated collect would
+                # wipe the difference. The empty-collect guard above only catches a
+                # FULLY empty result. Same protection the delete-then-insert vendors
+                # get via would_shrink_below.
+                blocked, existing = would_shrink_below(
+                    cursor, f"{SCHEMA}.volumes_cache", self.array_name,
+                    len(vol_rows), settings.collect_shrink_min_ratio,
+                )
+                if blocked:
+                    logger.error(
+                        f"[{self.array_name}] Refusing to replace {existing} volumes "
+                        f"with only {len(vol_rows)} — partial/failed collection. "
+                        f"Keeping existing data."
+                    )
+                    result.errors.append(f"partial collect: {len(vol_rows)} of ~{existing} volumes")
+                    return False
                 batch_upsert(
                     cursor, f"{SCHEMA}.volumes_cache",
                     key_cols=("volume_name",),

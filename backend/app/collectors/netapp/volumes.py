@@ -13,7 +13,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.netapp.client import NetAppClient
-from app.db.session import get_fast_cursor, batch_upsert, snapshot_volume_history
+from app.db.session import get_fast_cursor, batch_upsert, snapshot_volume_history, would_shrink_below
 
 from app.core.config import get_settings
 
@@ -157,6 +157,25 @@ class NetAppVolumesCollector(BaseCollector):
             } for name, h in hosts.items()]
 
             with get_fast_cursor() as cursor:
+                # Partial-collect guard. Higher risk here than Pure: the ONTAP
+                # client's get_all() returns a PARTIAL list on a mid-pagination
+                # failure (HTTP!=200 or exception -> break, returns what it has),
+                # which is non-empty so the empty-collect guard above misses it.
+                # batch_upsert would then delete every volume on the unfetched
+                # pages. Refuse the replace on a collapse; keep existing data.
+                blocked, existing = would_shrink_below(
+                    cursor, f"{SCHEMA}.volumes_cache", self.array_name,
+                    len(vol_rows), settings.collect_shrink_min_ratio,
+                    extra_where=" AND vendor='netapp'",
+                )
+                if blocked:
+                    logger.error(
+                        f"[{self.array_name}] Refusing to replace {existing} volumes "
+                        f"with only {len(vol_rows)} — partial/failed collection "
+                        f"(pagination truncated?). Keeping existing data."
+                    )
+                    result.errors.append(f"partial collect: {len(vol_rows)} of ~{existing} volumes")
+                    return False
                 batch_upsert(
                     cursor, f"{SCHEMA}.volumes_cache",
                     key_cols=("volume_name",),
