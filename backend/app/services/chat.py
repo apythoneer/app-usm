@@ -532,6 +532,25 @@ class ChatService:
         """Prepend qwen3's /no_think switch for reasoning models; no-op otherwise."""
         return f"/no_think\n{prompt}" if self.reasoning else prompt
 
+    def _think_extras(self) -> Dict[str, Any]:
+        """Top-level request fields per backend.
+
+        We do NOT set `think: false`: on the DGX qwen3 that produced verbose
+        answer+explanation prose that the SQL extractor then choked on ("Incorrect
+        syntax near 'and'/'on'"). Instead we keep the `/no_think` prompt token
+        (which keeps reasoning OUT of the content) and give a large token budget
+        (see _npredict) so the hidden reasoning finishes and the model emits a
+        clean, short SQL statement. Kept as a hook in case a backend needs extras.
+        """
+        return {}
+
+    def _npredict(self, base: int = 1024) -> int:
+        """Token budget. Reasoning models (qwen3) do hidden reasoning that, with a
+        1024 budget, gets truncated before any SQL is emitted -> EMPTY content
+        ("LLM did not return a SQL query"). A large budget lets the reasoning
+        finish and the clean SQL follow. Verified live. No change for local qwen2.5."""
+        return 4096 if self.reasoning else base
+
     @classmethod
     def for_backend(cls, backend: str = "local") -> "ChatService":
         """Build a ChatService for a named backend: 'local' or 'dgx'."""
@@ -685,7 +704,8 @@ class ChatService:
             resp = requests.post(
                 f"{self.base_url}/api/generate",
                 json={"model": self.model, "prompt": self._no_think(prompt),
-                      "stream": False, "options": {"temperature": 0.2, "num_predict": 512}},
+                      "stream": False, "options": {"temperature": 0.2, "num_predict": self._npredict(512)},
+                      **self._think_extras()},
                 timeout=180, headers=self.headers, allow_redirects=False,
             )
             _raise_if_not_json(resp, self.name)
@@ -720,13 +740,9 @@ class ChatService:
                 "model": self.model,
                 "messages": messages,
                 "stream": False,
-                "options": {
-                    "temperature": 0.1,
-                    # Generous headroom: even with /no_think a reasoning model may
-                    # emit a short think block, and truncating it produced EMPTY
-                    # SQL responses live ("did not return a SQL query").
-                    "num_predict": 1024,
-                },
+                "options": {"temperature": 0.1, "num_predict": self._npredict(1024)},
+                # think:false for reasoning models — see _think_extras().
+                **self._think_extras(),
             },
             timeout=180,
             headers=self.headers,        # CF-Access token for the DGX backend
@@ -761,7 +777,8 @@ class ChatService:
                     "model": self.model,
                     "prompt": self._no_think(build_system_prompt(question) + "\n\n" + fix_prompt),
                     "stream": False,
-                    "options": {"temperature": 0.1, "num_predict": 1024},
+                    "options": {"temperature": 0.1, "num_predict": self._npredict(1024)},
+                    **self._think_extras(),
                 },
                 timeout=180,
                 headers=self.headers,
@@ -817,7 +834,8 @@ class ChatService:
                     # generous so a stray think block can't truncate the answer.
                     "prompt": self._no_think(prompt),
                     "stream": False,
-                    "options": {"temperature": 0.3, "num_predict": 1024},
+                    "options": {"temperature": 0.3, "num_predict": self._npredict(1024)},
+                    **self._think_extras(),
                 },
                 timeout=180,
                 headers=self.headers,
