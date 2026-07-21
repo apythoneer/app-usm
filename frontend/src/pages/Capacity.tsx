@@ -11,6 +11,7 @@ import {
 
 import { arraysApi } from '@/api/arrays'
 import { volumesApi } from '@/api/volumes'
+import { formatTB as tb } from '@/utils/formatters'
 import type {
   CapacityBreakdown, CapacityBucket, VendorBucket, CloudBucket, VendorCloudBucket,
   DailyTrendResponse, TopGrowersResponse, ArrayGrowth, ArraySummary,
@@ -41,12 +42,6 @@ function trendDate(v: string) {
 
 const tooltipStyle = {
   contentStyle: { background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 },
-}
-
-function tb(v?: number) {
-  if (v == null) return '—'
-  if (v >= 1000) return `${(v / 1000).toFixed(2)} PB`
-  return `${v.toFixed(1)} TB`
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {

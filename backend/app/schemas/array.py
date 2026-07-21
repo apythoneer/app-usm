@@ -72,6 +72,29 @@ class ArraySummary(BaseModel):
     collected_at: Optional[str] = None
 
 
+class ArrayTableRow(BaseModel):
+    """Enriched per-array row for the dashboard Arrays table.
+
+    Joins metrics_current with per-array counts from the same SQL Server tables the
+    Alerts/Volumes/Hosts pages read (messages, volumes_cache, hosts_cache), so the
+    counts stay consistent with those pages and with /arrays/fleet-stats.
+    """
+    array_name: str
+    vendor: VendorType = "unknown"
+    model: Optional[str] = None
+    group: Optional[str] = None
+    array_status: Optional[str] = None
+    active_alert_count: int = 0
+    capacity_used_bytes: Optional[int] = None
+    capacity_total_bytes: Optional[int] = None   # usable (presented) capacity
+    snapshot_space_bytes: Optional[int] = None
+    capacity_used_pct: Optional[float] = None
+    data_reduction: Optional[float] = None
+    total_volumes: int = 0
+    total_hosts: int = 0
+    collected_at: Optional[str] = None
+
+
 class ArrayConfig(BaseModel):
     """Array connection configuration (from managed_arrays DB or arrays.txt fallback)."""
     name: str

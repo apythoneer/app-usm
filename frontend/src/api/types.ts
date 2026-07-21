@@ -35,6 +35,23 @@ export interface ArrayMetrics extends ArraySummary {
   metadata?: Record<string, unknown>
 }
 
+export interface ArrayTableRow {
+  array_name: string
+  vendor: Vendor
+  model?: string
+  group?: string
+  array_status?: string
+  active_alert_count: number
+  capacity_used_bytes?: number
+  capacity_total_bytes?: number   // usable (presented) capacity
+  snapshot_space_bytes?: number
+  capacity_used_pct?: number
+  data_reduction?: number
+  total_volumes: number
+  total_hosts: number
+  collected_at?: string
+}
+
 export interface FleetStats {
   total_arrays: number
   total_capacity_tb?: number

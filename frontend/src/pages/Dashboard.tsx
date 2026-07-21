@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
   Server, AlertTriangle, Database, Activity, Zap, Clock,
-  BarChart2, Users, ChevronDown, ChevronRight, X, HardDrive,
+  BarChart2, Users, ChevronDown, ChevronRight, ChevronUp, X, HardDrive,
   Cloud, Building2, Search, Filter,
 } from 'lucide-react'
 import ErrorState from '@/components/common/ErrorState'
@@ -12,9 +12,9 @@ import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { volumesApi } from '@/api/volumes'
 import { hostsApi } from '@/api/hosts'
-import type { ArraySummary, ArrayMetrics, Alert, FleetStats } from '@/api/types'
+import type { ArraySummary, ArrayMetrics, ArrayTableRow, Alert, FleetStats } from '@/api/types'
 import {
-  formatBytes, formatIOPS, formatLatency, formatPct,
+  formatBytes, formatTB, formatIOPS, formatLatency, formatPct,
   formatReduction, severityBg, usedPctColor
 } from '@/utils/formatters'
 
@@ -66,7 +66,7 @@ function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400', onC
 }) {
   return (
     <div
-      className={`card flex items-start gap-3 p-4 ${onClick ? 'cursor-pointer hover:border-gray-600 transition-colors' : ''}`}
+      className={`card flex items-start gap-3 p-4 transition-all duration-150 ${onClick ? 'cursor-pointer hover:border-gray-600 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-black/20' : ''}`}
       onClick={onClick}
     >
       <div className={`mt-0.5 ${color}`}><Icon size={20} /></div>
@@ -83,8 +83,10 @@ function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400', onC
 
 type DrilldownTab = 'overview' | 'volumes' | 'hosts'
 
-function ArrayModal({ arrayName, onClose }: { arrayName: string; onClose: () => void }) {
-  const [tab, setTab] = useState<DrilldownTab>('overview')
+function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
+  arrayName: string; initialTab?: DrilldownTab; onClose: () => void
+}) {
+  const [tab, setTab] = useState<DrilldownTab>(initialTab)
 
   const { data, isLoading } = useQuery<ArrayMetrics>({
     queryKey: ['array', arrayName],
@@ -439,15 +441,261 @@ function DeploymentSection({ type, arrays, onDblClick }: {
   )
 }
 
+// ── Arrays table modal ────────────────────────────────────────────────────────
+
+type ArraySortField =
+  | 'array_name' | 'vendor' | 'model' | 'array_status' | 'active_alert_count'
+  | 'capacity_used_bytes' | 'capacity_total_bytes' | 'snapshot_space_bytes'
+  | 'total_volumes' | 'total_hosts'
+
+function SortHeader({ field, label, sortBy, sortDir, onSort, align = 'left' }: {
+  field: ArraySortField; label: string; sortBy: ArraySortField | ''
+  sortDir: 'asc' | 'desc'; onSort: (f: ArraySortField) => void
+  align?: 'left' | 'right'
+}) {
+  const active = sortBy === field
+  return (
+    <th
+      className={`px-3 py-2 text-xs text-gray-500 uppercase tracking-wide cursor-pointer select-none hover:text-gray-300 transition-colors ${align === 'right' ? 'text-right' : 'text-left'}`}
+      onClick={() => onSort(field)}
+    >
+      <span className={`inline-flex items-center gap-1 ${align === 'right' ? 'flex-row-reverse' : ''}`}>
+        {label}
+        {active && (sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />)}
+      </span>
+    </th>
+  )
+}
+
+function statusClasses(status?: string): { dot: string; pill: string } {
+  const ok = status === 'ok' || status === 'normal' || status === 'healthy'
+  if (ok) return { dot: 'bg-green-400', pill: 'bg-green-500/10 text-green-400 border-green-500/20' }
+  if (status) return { dot: 'bg-red-400', pill: 'bg-red-500/10 text-red-400 border-red-500/20' }
+  return { dot: 'bg-gray-600', pill: 'bg-gray-500/10 text-gray-500 border-gray-500/20' }
+}
+
+function ArraysTableModal({ onClose, onSelectArray }: {
+  onClose: () => void
+  onSelectArray: (name: string, tab: DrilldownTab) => void
+}) {
+  const [search, setSearch] = useState('')
+  const [vendorFilter, setVendorFilter] = useState('')
+  const [cloudFilter, setCloudFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')   // '', 'healthy', 'issue'
+  const [sortBy, setSortBy] = useState<ArraySortField | ''>('array_name')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+
+  const { data: rows = [], isLoading, isError, error, refetch } = useQuery<ArrayTableRow[]>({
+    queryKey: ['arrays-table'],
+    queryFn: () => arraysApi.table(),
+    refetchInterval: 60_000,
+  })
+
+  const vendors = useMemo(() => [...new Set(rows.map(r => r.vendor))].sort(), [rows])
+
+  function handleSort(f: ArraySortField) {
+    if (sortBy === f) setSortDir(d => (d === 'asc' ? 'desc' : 'asc'))
+    else { setSortBy(f); setSortDir('asc') }
+  }
+
+  const filtered = useMemo(() => {
+    let result = rows
+    if (vendorFilter) result = result.filter(r => r.vendor === vendorFilter)
+    if (cloudFilter) {
+      if (cloudFilter === 'on-prem') result = result.filter(r => !isCloudGroup(r.group))
+      else if (cloudFilter === 'cloud') result = result.filter(r => isCloudGroup(r.group))
+      else result = result.filter(r => isCloudGroup(r.group) && getCloudProvider(r.group) === cloudFilter)
+    }
+    if (statusFilter) {
+      const isOk = (s?: string) => s === 'ok' || s === 'normal' || s === 'healthy'
+      result = result.filter(r => statusFilter === 'healthy' ? isOk(r.array_status) : !isOk(r.array_status))
+    }
+    if (search) {
+      const q = search.toLowerCase()
+      result = result.filter(r =>
+        r.array_name.toLowerCase().includes(q) || (r.model || '').toLowerCase().includes(q))
+    }
+    if (sortBy) {
+      const dir = sortDir === 'asc' ? 1 : -1
+      result = [...result].sort((a, b) => {
+        const av = a[sortBy], bv = b[sortBy]
+        if (av == null && bv == null) return 0
+        if (av == null) return 1          // nulls last regardless of direction
+        if (bv == null) return -1
+        if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir
+        return String(av).localeCompare(String(bv)) * dir
+      })
+    }
+    return result
+  }, [rows, vendorFilter, cloudFilter, statusFilter, search, sortBy, sortDir])
+
+  return (
+    <div
+      className="fixed inset-0 z-40 flex items-start justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in overflow-y-auto"
+      onClick={onClose}
+    >
+      <div
+        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-6xl my-6 shadow-2xl animate-scale-in"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-700">
+          <div className="flex items-center gap-2">
+            <HardDrive size={18} className="text-brand-400" />
+            <h2 className="text-white font-semibold text-lg">Storage Arrays</h2>
+            <span className="text-xs text-gray-500">
+              {filtered.length}{filtered.length !== rows.length ? ` of ${rows.length}` : ''}
+            </span>
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white p-1"><X size={18} /></button>
+        </div>
+
+        {/* Filters */}
+        <div className="flex items-center gap-2 flex-wrap px-4 py-3 border-b border-gray-800">
+          <div className="relative">
+            <Search size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+            <input
+              type="text" placeholder="Search name / model…"
+              value={search} onChange={(e) => setSearch(e.target.value)}
+              className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 w-48"
+            />
+          </div>
+          {vendors.length > 1 && (
+            <div className="relative">
+              <Filter size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+              <select
+                value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)}
+                className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+              >
+                <option value="">All vendors</option>
+                {vendors.map(v => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </div>
+          )}
+          <div className="relative">
+            <Cloud size={13} className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500" />
+            <select
+              value={cloudFilter} onChange={(e) => setCloudFilter(e.target.value)}
+              className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg pl-7 pr-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+            >
+              <option value="">All deployments</option>
+              <option value="on-prem">On-Premises</option>
+              <option value="cloud">All Cloud</option>
+              <option value="aws">AWS</option>
+              <option value="azure">Azure</option>
+              <option value="gcp">GCP</option>
+              <option value="other">Other Cloud</option>
+            </select>
+          </div>
+          <select
+            value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
+            className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:border-brand-500 appearance-none cursor-pointer"
+          >
+            <option value="">Any status</option>
+            <option value="healthy">Healthy</option>
+            <option value="issue">Needs attention</option>
+          </select>
+        </div>
+
+        {/* Body */}
+        <div className="p-4">
+          {isError ? (
+            <ErrorState what="arrays" error={error} onRetry={() => refetch()} />
+          ) : isLoading ? (
+            <p className="text-gray-500 text-sm py-6 text-center">Loading arrays…</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-gray-500 text-sm py-6 text-center">No arrays match your filters.</p>
+          ) : (
+            <div className="overflow-x-auto border border-gray-700/50 rounded-lg">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                    <SortHeader field="array_name" label="Array" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader field="vendor" label="Vendor" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader field="model" label="Model" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader field="array_status" label="Status" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader field="active_alert_count" label="Alerts" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                    <SortHeader field="capacity_used_bytes" label="Used" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                    <SortHeader field="capacity_total_bytes" label="Usable" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                    <SortHeader field="snapshot_space_bytes" label="Snapshot" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                    <SortHeader field="total_volumes" label="Volumes" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                    <SortHeader field="total_hosts" label="Hosts" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-800/50">
+                  {filtered.map((r) => {
+                    const sc = statusClasses(r.array_status)
+                    return (
+                      <tr
+                        key={r.array_name}
+                        className="hover:bg-gray-800/40 cursor-pointer transition-colors"
+                        onClick={() => onSelectArray(r.array_name, 'overview')}
+                      >
+                        <td className="px-3 py-2">
+                          <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full flex-shrink-0 ${sc.dot}`} />
+                            <span className="font-mono text-xs text-white truncate max-w-[200px]">{r.array_name}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-2"><VendorBadge vendor={r.vendor} /></td>
+                        <td className="px-3 py-2 text-xs text-gray-400">{r.model || '—'}</td>
+                        <td className="px-3 py-2">
+                          <span className={`capitalize text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}>
+                            {r.array_status || 'unknown'}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          {r.active_alert_count > 0 ? (
+                            <span className="text-xs font-medium text-red-400">{r.active_alert_count}</span>
+                          ) : (
+                            <span className="text-xs text-gray-600">0</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-xs text-gray-300 text-right font-mono">{formatBytes(r.capacity_used_bytes)}</td>
+                        <td className="px-3 py-2 text-xs text-gray-300 text-right font-mono">{formatBytes(r.capacity_total_bytes)}</td>
+                        <td className="px-3 py-2 text-xs text-gray-400 text-right font-mono">{formatBytes(r.snapshot_space_bytes)}</td>
+                        <td
+                          className="px-3 py-2 text-xs text-right font-mono text-brand-400 hover:text-brand-300"
+                          onClick={(e) => { e.stopPropagation(); onSelectArray(r.array_name, 'volumes') }}
+                        >
+                          {r.total_volumes}
+                        </td>
+                        <td
+                          className="px-3 py-2 text-xs text-right font-mono text-brand-400 hover:text-brand-300"
+                          onClick={(e) => { e.stopPropagation(); onSelectArray(r.array_name, 'hosts') }}
+                        >
+                          {r.total_hosts}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p className="text-xs text-gray-600 mt-2">Click a row for details · click a Volumes/Hosts count to jump to that tab</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Dashboard page ────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const navigate = useNavigate()
   const [selectedArray, setSelectedArray] = useState<string | null>(null)
+  const [drilldownTab, setDrilldownTab] = useState<DrilldownTab>('overview')
+  const [showArraysTable, setShowArraysTable] = useState(false)
   const [vendorFilter, setVendorFilter] = useState('')
   const [cloudFilter, setCloudFilter] = useState('')   // '', 'on-prem', 'aws', 'azure', 'gcp', 'other'
   const [searchFilter, setSearchFilter] = useState('')
   const arraysRef = useRef<HTMLDivElement>(null)
+
+  function openDrilldown(name: string, tab: DrilldownTab = 'overview') {
+    setDrilldownTab(tab)
+    setSelectedArray(name)
+  }
 
 
   const {
@@ -520,10 +768,6 @@ export default function Dashboard() {
   const criticalCount = alerts.filter((a) => a.severity === 'critical').length
   const warningCount  = alerts.filter((a) => a.severity === 'warning').length
 
-  function scrollToArrays() {
-    arraysRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }
-
   return (
     <div className="space-y-6">
       <div>
@@ -535,14 +779,16 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <StatCard icon={Server} label="Arrays"
           value={String(fleet?.total_arrays ?? arrays.length)}
-          onClick={scrollToArrays} />
+          sub="view all →"
+          onClick={() => setShowArraysTable(true)} />
         <StatCard icon={Database} label="Total Capacity"
-          value={fleet?.total_capacity_tb != null ? `${fleet.total_capacity_tb.toFixed(1)} TB` : '—'}
-          onClick={scrollToArrays} />
+          value={formatTB(fleet?.total_capacity_tb)}
+          sub="capacity →"
+          onClick={() => navigate('/capacity')} />
         <StatCard icon={HardDrive} label="Used"
-          value={fleet?.total_used_tb != null ? `${fleet.total_used_tb.toFixed(1)} TB` : '—'}
+          value={formatTB(fleet?.total_used_tb)}
           sub={fleet?.avg_utilization_pct != null ? `${fleet.avg_utilization_pct.toFixed(1)}% avg` : undefined}
-          onClick={scrollToArrays} />
+          onClick={() => navigate('/capacity')} />
         <StatCard icon={BarChart2} label="Data Reduction"
           value={fleet?.avg_data_reduction != null ? formatReduction(fleet.avg_data_reduction) : '—'}
           onClick={() => navigate('/analytics')} />
@@ -638,10 +884,10 @@ export default function Dashboard() {
         ) : (
           <>
             {onPremArrays.length > 0 && (
-              <DeploymentSection type="on-prem" arrays={onPremArrays} onDblClick={setSelectedArray} />
+              <DeploymentSection type="on-prem" arrays={onPremArrays} onDblClick={(n) => openDrilldown(n)} />
             )}
             {cloudArrays.length > 0 && (
-              <DeploymentSection type="cloud" arrays={cloudArrays} onDblClick={setSelectedArray} />
+              <DeploymentSection type="cloud" arrays={cloudArrays} onDblClick={(n) => openDrilldown(n)} />
             )}
           </>
         )}
@@ -690,9 +936,21 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Drilldown modal */}
+      {/* Arrays table modal */}
+      {showArraysTable && (
+        <ArraysTableModal
+          onClose={() => setShowArraysTable(false)}
+          onSelectArray={(name, tab) => openDrilldown(name, tab)}
+        />
+      )}
+
+      {/* Drilldown modal — rendered last (z-50) so it stacks above the table modal (z-40) */}
       {selectedArray && (
-        <ArrayModal arrayName={selectedArray} onClose={() => setSelectedArray(null)} />
+        <ArrayModal
+          arrayName={selectedArray}
+          initialTab={drilldownTab}
+          onClose={() => setSelectedArray(null)}
+        />
       )}
     </div>
   )
