@@ -59,7 +59,8 @@ class ArraySummary(BaseModel):
     """Lightweight array summary for list views."""
     array_name: str
     vendor: VendorType = "unknown"
-    model: Optional[str] = None
+    model: Optional[str] = None          # hardware model from managed_arrays (NOT firmware)
+    firmware_version: Optional[str] = None  # purity_version / ONTAP version etc.
     group: Optional[str] = None          # cloud/site group from arrays.txt column 3
     capacity_total_bytes: Optional[int] = None
     capacity_used_pct: Optional[float] = None

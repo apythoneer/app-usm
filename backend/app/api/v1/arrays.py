@@ -24,18 +24,35 @@ SCHEMA = settings.db_schema
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _load_group_map() -> dict:
-    """Return {array_name: group}. Primary: managed_arrays DB. Fallback: arrays.txt."""
+def _load_array_meta() -> dict:
+    """Return {array_name: {"group","model","enabled"}} from managed_arrays.
+
+    Supersedes the old group-only map so the dashboard can show the real hardware
+    MODEL (not the firmware version) and exclude arrays that are disabled
+    (enabled=0) — a disabled/decommissioned array otherwise lingers in
+    metrics_current and renders with stale data as if live.
+    """
     try:
         with get_db_cursor() as cursor:
-            cursor.execute(f"SELECT array_name, group_label FROM {SCHEMA}.managed_arrays")
+            cursor.execute(
+                f"SELECT array_name, group_label, model, enabled FROM {SCHEMA}.managed_arrays"
+            )
             rows = rows_to_dicts(cursor, cursor.fetchall())
         if rows:
-            return {r["array_name"]: r["group_label"] for r in rows if r.get("group_label")}
+            return {
+                r["array_name"]: {
+                    "group": r.get("group_label"),
+                    "model": r.get("model"),
+                    # bit column -> bool; default True so an array missing from
+                    # managed_arrays is shown rather than hidden.
+                    "enabled": bool(r.get("enabled", 1)),
+                }
+                for r in rows
+            }
     except Exception:
         pass
 
-    # Fallback to arrays.txt
+    # Fallback to arrays.txt (group only; everything enabled)
     path = settings.arrays_config_file
     result = {}
     if not os.path.exists(path):
@@ -47,7 +64,7 @@ def _load_group_map() -> dict:
                 continue
             parts = line.split()
             if len(parts) >= 3:
-                result[parts[0]] = parts[2]
+                result[parts[0]] = {"group": parts[2], "model": None, "enabled": True}
     return result
 
 
@@ -90,18 +107,23 @@ def _fetch_fleet_stats() -> dict:
     # serving it live is cheap. SQLite remains a write-through mirror and backs
     # /health; it is not a read path until it can mirror alert state correctly.
     with get_db_cursor() as cursor:
+        # Exclude arrays disabled in managed_arrays (e.g. decommissioned ones that
+        # still have a stale metrics_current row) so fleet totals match the
+        # dashboard array list, which now filters the same way.
+        DIS = (f"WHERE array_name NOT IN "
+               f"(SELECT array_name FROM {SCHEMA}.managed_arrays WITH (NOLOCK) WHERE enabled=0)")
         # Combine all stats into a single query using NOLOCK to avoid blocking
         # during concurrent collector writes. This prevents query timeouts.
         cursor.execute(f"""
             SELECT
-                (SELECT COUNT(*) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_arrays,
-                (SELECT ISNULL(SUM(CAST(capacity_total AS FLOAT)) / 1099511627776.0, 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_capacity_tb,
-                (SELECT ISNULL(SUM(CAST(capacity_used  AS FLOAT)) / 1099511627776.0, 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_used_tb,
-                (SELECT ISNULL(AVG(capacity_used_pct), 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_utilization_pct,
-                (SELECT ISNULL(SUM(read_iops + write_iops), 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS total_iops,
-                (SELECT AVG(read_latency_us) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_read_latency_us,
-                (SELECT AVG(write_latency_us) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_write_latency_us,
-                (SELECT ISNULL(AVG(data_reduction), 1) FROM {SCHEMA}.metrics_current WITH (NOLOCK)) AS avg_data_reduction,
+                (SELECT COUNT(*) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS total_arrays,
+                (SELECT ISNULL(SUM(CAST(capacity_total AS FLOAT)) / 1099511627776.0, 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS total_capacity_tb,
+                (SELECT ISNULL(SUM(CAST(capacity_used  AS FLOAT)) / 1099511627776.0, 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS total_used_tb,
+                (SELECT ISNULL(AVG(capacity_used_pct), 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS avg_utilization_pct,
+                (SELECT ISNULL(SUM(read_iops + write_iops), 0) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS total_iops,
+                (SELECT AVG(CAST(read_latency_us AS FLOAT)) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS avg_read_latency_us,
+                (SELECT AVG(CAST(write_latency_us AS FLOAT)) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS avg_write_latency_us,
+                (SELECT ISNULL(AVG(data_reduction), 1) FROM {SCHEMA}.metrics_current WITH (NOLOCK) {DIS}) AS avg_data_reduction,
                 (SELECT COUNT(*) FROM {SCHEMA}.messages WITH (NOLOCK) WHERE resolved=0 AND suppressed=0) AS active_alerts,
                 (SELECT COUNT(*) FROM {SCHEMA}.volumes_cache WITH (NOLOCK)) AS total_volumes,
                 (SELECT COUNT(*) FROM {SCHEMA}.hosts_cache WITH (NOLOCK)) AS total_hosts
@@ -111,13 +133,15 @@ def _fetch_fleet_stats() -> dict:
     return row
 
 
-def _row_to_summary(row: dict, group_map: dict) -> ArraySummary:
+def _row_to_summary(row: dict, meta: dict) -> ArraySummary:
     name = row.get("array_name", "")
+    m = meta.get(name, {})
     return ArraySummary(
         array_name=name,
         vendor=row.get("vendor", "pure"),
-        model=row.get("purity_version"),
-        group=group_map.get(name),
+        model=m.get("model"),                       # real hardware model
+        firmware_version=row.get("purity_version"), # was mislabeled as "model"
+        group=m.get("group"),
         capacity_total_bytes=row.get("capacity_total"),
         capacity_used_pct=row.get("capacity_used_pct"),
         data_reduction=row.get("data_reduction"),
@@ -129,13 +153,15 @@ def _row_to_summary(row: dict, group_map: dict) -> ArraySummary:
     )
 
 
-def _row_to_metrics(row: dict, group_map: dict) -> ArrayMetrics:
+def _row_to_metrics(row: dict, meta: dict) -> ArrayMetrics:
     read_iops = row.get("read_iops") or 0
     write_iops = row.get("write_iops") or 0
     name = row.get("array_name", "")
+    m = meta.get(name, {})
     return ArrayMetrics(
         array_name=name,
         vendor=row.get("vendor", "pure"),
+        model=m.get("model"),                       # was never set -> blank drilldown
         firmware_version=row.get("purity_version"),
         read_iops=read_iops,
         write_iops=write_iops,
@@ -159,7 +185,7 @@ def _row_to_metrics(row: dict, group_map: dict) -> ArrayMetrics:
         collected_at=row.get("collected_at"),
         metadata={
             "purity_version": row.get("purity_version", ""),
-            "group": group_map.get(name),
+            "group": m.get("group"),
         },
     )
 
@@ -451,8 +477,15 @@ async def get_fleet_stats():
 async def list_arrays(vendor: Optional[str] = Query(default=None)):
     """List all arrays with summary metrics. Filter by ?vendor=pure|netapp|..."""
     rows = await run_in_threadpool(_fetch_arrays, vendor)
-    group_map = _load_group_map()
-    return [_row_to_summary(r, group_map) for r in rows]
+    meta = _load_array_meta()
+    # Exclude arrays explicitly disabled in managed_arrays. A disabled array can
+    # linger in metrics_current with stale data (e.g. ODCSWING, last collected
+    # 2 months ago) and would otherwise render on the dashboard as if live.
+    return [
+        _row_to_summary(r, meta)
+        for r in rows
+        if meta.get(r.get("array_name", ""), {}).get("enabled", True)
+    ]
 
 
 @router.get("/{array_name}", response_model=ArrayMetrics)
@@ -461,5 +494,5 @@ async def get_array(array_name: str):
     row = await run_in_threadpool(_fetch_array, array_name)
     if not row:
         raise HTTPException(status_code=404, detail=f"Array '{array_name}' not found")
-    group_map = _load_group_map()
-    return _row_to_metrics(row, group_map)
+    meta = _load_array_meta()
+    return _row_to_metrics(row, meta)
