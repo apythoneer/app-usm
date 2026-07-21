@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Download, TrendingUp, TrendingDown } from 'lucide-react'
+import { Download, TrendingUp, TrendingDown, Sparkles } from 'lucide-react'
 
 import {
   BarChart, Bar, LineChart, Line, ReferenceLine,
@@ -16,7 +16,7 @@ import type {
   CapacityBreakdown, CapacityBucket, VendorBucket, CloudBucket, VendorCloudBucket,
   DailyTrendResponse, TopGrowersResponse, ArrayGrowth, ArraySummary,
   VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse, Volume,
-  PaginatedResponse,
+  PaginatedResponse, CapacityForecast,
 } from '@/api/types'
 
 
@@ -772,6 +772,128 @@ function VolumeGrowthSection({ arrays }: { arrays: ArraySummary[] }) {
   )
 }
 
+// ── Capacity forecast ("how full will X be by <date>") ────────────────────────
+
+function ForecastPanel({ arrays }: { arrays: ArraySummary[] }) {
+  const [selected, setSelected] = useState('')   // '' = whole fleet
+  // Default target ~90 days out.
+  const defaultTarget = new Date(Date.now() + 90 * 86_400_000).toISOString().slice(0, 10)
+  const [target, setTarget] = useState(defaultTarget)
+
+  const { data: fc, isLoading, isError } = useQuery<CapacityForecast>({
+    queryKey: ['forecast', selected, target],
+    queryFn: () => arraysApi.forecast(selected || undefined, target || undefined, 90),
+    refetchInterval: 300_000,
+  })
+
+  const projPct = fc?.projected_pct ?? null
+  const curPct = fc?.current_pct ?? null
+  const overfull = projPct != null && projPct >= 100
+  const growing = fc?.trend === 'growing'
+  const changePos = (fc?.projected_change_tb ?? 0) >= 0
+
+  return (
+    <div className="card">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <Sparkles size={16} className="text-brand-400" />
+          <h3 className="text-sm font-semibold text-gray-300">Capacity Forecast</h3>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <select
+            value={selected}
+            onChange={(e) => setSelected(e.target.value)}
+            className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-brand-500"
+          >
+            <option value="">Whole fleet</option>
+            {[...arrays]
+              .sort((a, b) => a.array_name.localeCompare(b.array_name))
+              .map((a) => <option key={a.array_name} value={a.array_name}>{a.array_name}</option>)}
+          </select>
+          <input
+            type="date"
+            value={target}
+            onChange={(e) => setTarget(e.target.value)}
+            className="bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-brand-500"
+          />
+        </div>
+      </div>
+
+      {isLoading && <p className="text-gray-500 text-sm py-4">Computing forecast…</p>}
+      {isError && <p className="text-gray-500 text-sm py-4">Forecast unavailable right now.</p>}
+
+      {fc && !isLoading && (
+        fc.error ? (
+          <p className="text-gray-500 text-sm py-4">{fc.error}</p>
+        ) : (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <div className="card">
+                <p className="text-xs text-gray-500">Current Used</p>
+                <p className="text-2xl font-semibold text-white mt-1">{tb(fc.current_used_tb)}</p>
+                <p className="text-xs text-gray-500 mt-0.5">{curPct != null ? `${curPct}% of ${tb(fc.usable_tb)}` : '—'}</p>
+              </div>
+              <div className="card">
+                <p className="text-xs text-gray-500">Projected by {trendDate(target)}</p>
+                <p className={`text-2xl font-semibold mt-1 ${overfull ? 'text-red-400' : 'text-white'}`}>
+                  {fc.projected_used_tb != null ? tb(fc.projected_used_tb) : '—'}
+                </p>
+                <p className={`text-xs mt-0.5 ${overfull ? 'text-red-400' : 'text-gray-500'}`}>
+                  {projPct != null ? (overfull ? `≥100% — full before then` : `${projPct}% projected`) : '—'}
+                </p>
+              </div>
+              <div className="card">
+                <p className="text-xs text-gray-500">Change</p>
+                <p className={`text-2xl font-semibold mt-1 flex items-center gap-1 ${changePos ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {changePos ? <TrendingUp size={18} /> : <TrendingDown size={18} />}
+                  {fc.projected_change_tb != null ? `${changePos ? '+' : ''}${tb(fc.projected_change_tb)}` : '—'}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">{fc.rate_tb_per_day >= 0 ? '+' : ''}{tb(Math.abs(fc.rate_tb_per_day))}/day</p>
+              </div>
+              <div className="card">
+                <p className="text-xs text-gray-500">Projected Full</p>
+                <p className={`text-2xl font-semibold mt-1 ${fc.days_to_full != null && fc.days_to_full < 90 ? 'text-red-400' : 'text-white'}`}>
+                  {fc.days_to_full != null ? `~${fc.days_to_full}d` : 'N/A'}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {fc.projected_full_date ? `by ${trendDate(fc.projected_full_date)}` : growing ? 'at current rate' : 'not filling'}
+                </p>
+              </div>
+            </div>
+
+            {/* current vs projected against usable */}
+            {curPct != null && (
+              <div className="mt-4">
+                <div className="relative h-2.5 bg-gray-800 rounded-full overflow-hidden">
+                  {projPct != null && (
+                    <div
+                      className={`absolute inset-y-0 left-0 ${overfull ? 'bg-red-500/40' : 'bg-brand-500/30'}`}
+                      style={{ width: `${Math.min(projPct, 100)}%` }}
+                    />
+                  )}
+                  <div
+                    className={`absolute inset-y-0 left-0 ${curPct >= 90 ? 'bg-red-500' : curPct >= 75 ? 'bg-amber-500' : 'bg-brand-500'}`}
+                    style={{ width: `${Math.min(curPct, 100)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between text-[10px] text-gray-600 mt-1">
+                  <span>now {curPct}%</span>
+                  <span>{projPct != null ? `projected ${overfull ? '≥100' : projPct}%` : ''}</span>
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-gray-600 mt-3">
+              Basis: {fc.window_days}-day trend ({fc.data_points} daily points){fc.caveat ? ` · ${fc.caveat}` : ''}.
+              {' '}Ask the <a href="/chat" className="text-brand-400 hover:text-brand-300">Storage AI</a> for details.
+            </p>
+          </>
+        )
+      )}
+    </div>
+  )
+}
+
 export default function Capacity() {
 
   const [view, setView] = useState<'vendor' | 'cloud'>('vendor')
@@ -849,6 +971,7 @@ export default function Capacity() {
           <FleetGrowthSummary />
           <FleetTrendChart />
 
+          <ForecastPanel arrays={arrayList} />
 
           <TopMoversTable />
           <ArrayGrowthDetail arrays={arrayList} />

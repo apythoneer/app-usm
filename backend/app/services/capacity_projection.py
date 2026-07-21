@@ -7,7 +7,7 @@ the exact same projection — one source of truth for "trend" / "days_to_full".
 """
 
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 
 from app.db.session import get_db_cursor, rows_to_dicts
 from app.core.config import get_settings
@@ -136,3 +136,117 @@ def compute_daily_trend(days: int) -> dict:
         "last_collected": str(last_collected) if last_collected else None,
         "projection": projection,
     }
+
+
+# ── Forward forecasting ("how full will X be by <date>") ──────────────────────
+
+_TIB = 1_099_511_627_776  # bytes per TB (as used across the app)
+
+
+def _daily_used_series_for_array(array_name: str, window_days: int) -> List[dict]:
+    """Daily-resampled (used_tb, usable_tb) for one array over the trailing window,
+    ascending by date. One point per day (day-average) smooths the ~5-min samples."""
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            f"""SELECT CAST(collected_at AS DATE) AS d,
+                       AVG(CAST(capacity_used  AS FLOAT)) AS used,
+                       AVG(CAST(capacity_total AS FLOAT)) AS total
+                FROM {SCHEMA}.metrics_history WITH (NOLOCK)
+                WHERE array_name = ?
+                  AND collected_at >= DATEADD(DAY, -?, GETDATE())
+                GROUP BY CAST(collected_at AS DATE)
+                ORDER BY d ASC""",
+            (array_name, window_days),
+        )
+        rows = rows_to_dicts(cursor, cursor.fetchall())
+    return [
+        {"date": str(r["d"]),
+         "used_tb": round((r["used"] or 0) / _TIB, 3),
+         "usable_tb": round((r["total"] or 0) / _TIB, 3)}
+        for r in rows
+    ]
+
+
+def _caveat(data_points: int, span_days: int) -> Optional[str]:
+    """Short confidence note. History began mid-2026 and includes fleet onboarding,
+    so short/steep windows should be read as rough."""
+    if data_points < 2:
+        return "not enough history to project"
+    if data_points < 14 or span_days < 14:
+        return "limited history — treat as a rough estimate"
+    return "linear trend; early history may include onboarding"
+
+
+def forecast_capacity(array_name: Optional[str] = None,
+                      target_date: Optional[str] = None,
+                      window_days: int = PROJECTION_WINDOW_DAYS) -> dict:
+    """Project used capacity forward for one array (from metrics_history) or the
+    whole fleet (array_name=None, from daily_stats).
+
+    Returns current + projected used/pct at target_date (if given), the fitted
+    rate, days-to-full, the basis window, and a plain-language caveat. Deterministic
+    — the LLM only narrates this, it does not invent numbers.
+    """
+    # Build the daily series + current usable capacity.
+    if array_name:
+        series = _daily_used_series_for_array(array_name, window_days)
+        used = [p["used_tb"] for p in series]
+        usable = series[-1]["usable_tb"] if series else 0.0
+        scope = array_name
+    else:
+        trend = compute_daily_trend(window_days)
+        series = [{"date": p["date"], "used_tb": p["total_used_tb"],
+                   "usable_tb": p["total_capacity_tb"]} for p in trend["data"]]
+        used = [p["used_tb"] for p in series]
+        usable = trend["projection"]["usable_tb"]
+        scope = "fleet"
+
+    result = {
+        "scope": scope,
+        "array_name": array_name,
+        "window_days": max(len(series) - 1, 0),
+        "data_points": len(series),
+        "current_used_tb": round(used[-1], 2) if used else 0.0,
+        "usable_tb": round(usable, 2),
+        "current_pct": round(used[-1] / usable * 100, 1) if used and usable > 0 else None,
+        "rate_tb_per_day": 0.0,
+        "trend": "stable",
+        "days_to_full": None,
+        "projected_full_date": None,
+        "target_date": target_date,
+        "projected_used_tb": None,
+        "projected_pct": None,
+        "projected_change_tb": None,
+        "caveat": _caveat(len(series), max(len(series) - 1, 0)),
+        "error": None,
+    }
+    if len(used) < 2:
+        result["error"] = f"No usable history for {scope} yet to project from."
+        return result
+
+    slope = linreg_slope(used)  # TB/day
+    cur_used = used[-1]
+    headroom = max(usable - cur_used, 0.0)
+    result["rate_tb_per_day"] = round(slope, 3)
+    result["trend"] = ("growing" if slope > STABLE_SLOPE_TB_PER_DAY
+                       else "declining" if slope < -STABLE_SLOPE_TB_PER_DAY else "stable")
+
+    if slope > STABLE_SLOPE_TB_PER_DAY:
+        d2f = int(round(headroom / slope))
+        result["days_to_full"] = d2f
+        result["projected_full_date"] = (datetime.now() + timedelta(days=d2f)).strftime("%Y-%m-%d")
+
+    if target_date:
+        try:
+            tgt = datetime.strptime(target_date[:10], "%Y-%m-%d")
+        except ValueError:
+            result["error"] = f"Could not parse target_date '{target_date}' (use YYYY-MM-DD)."
+            return result
+        days_ahead = (tgt - datetime.now()).days
+        proj_used = cur_used + slope * days_ahead
+        proj_used = max(proj_used, 0.0)
+        result["projected_used_tb"] = round(proj_used, 2)
+        result["projected_change_tb"] = round(proj_used - cur_used, 2)
+        result["projected_pct"] = round(min(proj_used / usable * 100, 999), 1) if usable > 0 else None
+
+    return result
