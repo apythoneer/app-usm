@@ -23,9 +23,12 @@ from app.core.config import get_settings
 logger = logging.getLogger("usm.scheduler")
 settings = get_settings()
 
-# Thread pool for blocking collector I/O — limit to 10 concurrent to avoid
-# saturating SQL Server connections (each collector uses 1-2 DB connections).
-_executor = ThreadPoolExecutor(max_workers=5, thread_name_prefix="collector")
+# Thread pool for blocking collector I/O. With ~90 arrays across 7 vendors, a
+# pool of 5 let every 5-minute storm (metrics+volumes+alerts for all vendors)
+# pile up faster than it drained, hammering SQL Server and starving maintenance
+# jobs. 16 drains a storm in a couple of waves while staying well under SQL
+# Server's connection limit (each collector holds 1-2 connections briefly).
+_executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix="collector")
 
 # In-memory job status store
 _job_status: Dict[str, Dict[str, Any]] = {}
@@ -131,7 +134,14 @@ def _run_collector_sync(vendor: str, collector_type: str, array: ArrayConfig) ->
 async def run_collector_job(vendor: str, collector_type: str):
     """Async job wrapper — runs all arrays for a given vendor/type in parallel."""
     job_key = f"{vendor}_{collector_type}"
-    arrays = [a for a in load_arrays() if a.vendor == vendor and a.enabled]
+    loop = asyncio.get_event_loop()
+
+    # load_arrays() opens a pyodbc connection on a cache miss. Running it directly
+    # in this coroutine blocks the single-worker event loop — under DB contention
+    # from a collection storm that connect can take tens of seconds, freezing
+    # /ping and every API request until it returns. Offload it to a thread.
+    all_arrays = await loop.run_in_executor(None, load_arrays)
+    arrays = [a for a in all_arrays if a.vendor == vendor and a.enabled]
 
     if not arrays:
         logger.debug(f"No {vendor} arrays enabled for {collector_type}")
@@ -140,7 +150,6 @@ async def run_collector_job(vendor: str, collector_type: str):
     logger.info(f"[{job_key}] Starting collection for {len(arrays)} arrays")
     start = datetime.now()
 
-    loop = asyncio.get_event_loop()
     tasks = [
         loop.run_in_executor(_executor, _run_collector_sync, vendor, collector_type, arr)
         for arr in arrays
