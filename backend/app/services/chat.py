@@ -671,21 +671,15 @@ class ChatService:
         return result
 
     def _narrate_forecast(self, question: str, fc: Dict[str, Any], fallback: str) -> str:
-        facts = json.dumps({
-            k: fc.get(k) for k in (
-                "scope", "array_name", "current_used_tb", "current_pct", "usable_tb",
-                "rate_tb_per_day", "trend", "days_to_full", "projected_full_date",
-                "target_date", "projected_used_tb", "projected_pct",
-                "projected_change_tb", "window_days", "data_points", "caveat",
-            )
-        }, default=str)
+        # Rephrase the deterministic summary conversationally — do NOT hand the LLM
+        # raw field names (an earlier version passed a JSON dict and the model
+        # parroted "window_days-day"). Numbers/dates must survive verbatim.
         prompt = (
-            "You are a storage capacity analyst. Answer the user's question in 2-3 "
-            "sentences using ONLY the numbers in FACTS — do not invent or recompute "
-            "anything. Units are TB. Mention the projected value and date if present, "
-            "the fill date if the trend is growing, and end with the basis "
-            "(window_days-day trend) and the caveat. Be direct.\n\n"
-            f"Question: {question}\nFACTS: {facts}\n\nAnswer:"
+            "Rephrase the following storage-capacity summary as a direct, natural "
+            "2-3 sentence answer to the user's question. Keep every number, "
+            "percentage, and date EXACTLY as written — do not recompute or round. "
+            "Do not add facts that aren't in the summary.\n\n"
+            f"Question: {question}\nSummary: {fallback}\n\nAnswer:"
         )
         try:
             resp = requests.post(
