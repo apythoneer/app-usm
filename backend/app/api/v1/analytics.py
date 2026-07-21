@@ -103,15 +103,26 @@ async def get_fleet_history(
 
 def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
     with get_db_cursor() as cursor:
+        # Take the TOP N by collected_at DESC (the MOST RECENT rows), then re-sort
+        # ASC for charting. The old `TOP N ... ORDER BY ASC` returned the OLDEST N
+        # and silently dropped "now": ~90 arrays over 24h is ~26k rows > the 5000
+        # cap, so the charts showed only the oldest few hours.
         cursor.execute(
-            f"""SELECT TOP {limit}
-                array_name, collected_at,
-                read_iops, write_iops,
-                read_latency_us, write_latency_us,
-                capacity_used_pct
-            FROM {SCHEMA}.metrics_history
-            WHERE collected_at >= DATEADD(HOUR, -?, GETDATE())
-            ORDER BY collected_at ASC""",
+            f"""SELECT array_name, collected_at,
+                       read_iops, write_iops,
+                       read_latency_us, write_latency_us,
+                       capacity_used_pct
+                FROM (
+                    SELECT TOP {limit}
+                        array_name, collected_at,
+                        read_iops, write_iops,
+                        read_latency_us, write_latency_us,
+                        capacity_used_pct
+                    FROM {SCHEMA}.metrics_history
+                    WHERE collected_at >= DATEADD(HOUR, -?, GETDATE())
+                    ORDER BY collected_at DESC
+                ) t
+                ORDER BY collected_at ASC""",
             (hours,),
         )
         return rows_to_dicts(cursor, cursor.fetchall())
