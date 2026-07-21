@@ -30,17 +30,25 @@ class NetAppClient:
     ):
         self.array_name = array_name
         self.cred_key = cred_key
-        # Prefer a resolvable FQDN, then management IP, then fall back to the
-        # array name. Short array names (e.g. cloud CVO instances) are often not
-        # DNS-resolvable from the monitoring host, which caused connection
-        # failures — using array_fqdn / mgmt_ip from inventory avoids that.
-        self.host = (fqdn or "").strip() or (mgmt_ip or "").strip() or array_name
+        # Candidate hosts in preference order: FQDN, then management IP, then the
+        # array name. Many cloud CVO instances have an FQDN that does NOT resolve
+        # from the monitoring host (and DimStorageFinance sometimes maps a wrong or
+        # duplicate FQDN), while the mgmt_ip is reachable. The old
+        # `fqdn or mgmt_ip or name` bound a SINGLE host at construction and never
+        # fell back, so those arrays stayed permanently unreachable. authenticate()
+        # now tries each until one works (same approach as the StorageGrid client).
+        seen = set()
+        self._hosts = [
+            h for h in ((fqdn or "").strip(), (mgmt_ip or "").strip(), array_name)
+            if h and not (h in seen or seen.add(h))
+        ]
+        self.host = self._hosts[0] if self._hosts else array_name
         self.base_url = f"https://{self.host}/api"
         self.session: Optional[requests.Session] = None
 
 
     def authenticate(self) -> bool:
-        """Authenticate using Basic Auth from KeePass credentials."""
+        """Authenticate using Basic Auth, trying each candidate host in turn."""
         try:
             creds = get_credentials(self.cred_key)
             username = creds.get("username") or ""
@@ -52,52 +60,45 @@ class NetAppClient:
             logger.error(f"[{self.array_name}] KeePass error for '{self.cred_key}': {e}")
             return False
 
-        session = requests.Session()
-        session.auth = (username, password)
-        session.verify = False
-        session.headers["Accept"] = "application/hal+json"
-
-        # Test connectivity with a lightweight call.
-        #
-        # Distinguish "cannot reach the box" from "the box rejected us". Both used
-        # to log "Auth error: ..." and surface as base.py's generic
-        # RuntimeError("Authentication failed"), so a DNS typo and a bad password
-        # were indistinguishable in the logs. That cost real time: the June 2026
-        # perf review attributed ~3k failures/day to "stale KeePass entries /
-        # cred_key mapping" and proposed auditing the vault, when the actual cause
-        # for every failing array was that array_fqdn does not resolve.
-        try:
-            resp = session.get(f"{self.base_url}/cluster", timeout=15)
-            if resp.status_code == 200:
-                self.session = session
-                return True
-            if resp.status_code in (401, 403):
-                logger.error(
-                    f"[{self.array_name}] Credentials rejected (HTTP {resp.status_code}) "
-                    f"by {self.host} — check KeePass entry '{self.cred_key}'"
-                )
-            else:
-                logger.error(
-                    f"[{self.array_name}] Unexpected HTTP {resp.status_code} from {self.host} "
-                    f"(reachable, but /cluster did not return 200)"
-                )
-        except requests.exceptions.ConnectionError as e:
-            # Covers DNS resolution failures (socket.gaierror) and refused/unroutable
-            # TCP. NOT a credentials problem — do not send the reader to the vault.
-            reason = "name does not resolve" if "gaierror" in repr(e) or "Name or service" in str(e) \
-                else "host unreachable"
-            logger.error(
-                f"[{self.array_name}] Cannot reach '{self.host}' ({reason}) — this is a "
-                f"connectivity/inventory problem, not credentials. Check array_fqdn / "
-                f"mgmt_ip in managed_arrays, or disable the array if decommissioned."
-            )
-        except requests.exceptions.Timeout:
-            logger.error(
-                f"[{self.array_name}] Timed out after 15s connecting to '{self.host}' — "
-                f"reachable-but-slow or filtered; not a credentials problem."
-            )
-        except Exception as e:
-            logger.error(f"[{self.array_name}] Unexpected error contacting '{self.host}': {e}")
+        last_reason = None
+        for host in self._hosts:
+            base_url = f"https://{host}/api"
+            session = requests.Session()
+            session.auth = (username, password)
+            session.verify = False
+            session.headers["Accept"] = "application/hal+json"
+            try:
+                resp = session.get(f"{base_url}/cluster", timeout=15)
+                if resp.status_code == 200:
+                    self.host = host
+                    self.base_url = base_url
+                    self.session = session
+                    if host != self._hosts[0]:
+                        logger.info(f"[{self.array_name}] Reached via fallback host {host}")
+                    return True
+                if resp.status_code in (401, 403):
+                    # Credentials rejected — the box is reachable, so trying other
+                    # hosts with the same creds is pointless. Stop here.
+                    logger.error(
+                        f"[{self.array_name}] Credentials rejected (HTTP {resp.status_code}) "
+                        f"by {host} — check KeePass entry '{self.cred_key}'"
+                    )
+                    return False
+                last_reason = f"HTTP {resp.status_code} from {host}"
+            except requests.exceptions.ConnectionError as e:
+                last_reason = ("DNS did not resolve" if "gaierror" in repr(e)
+                               or "Name or service" in str(e) else "host unreachable") + f" ({host})"
+                continue  # try the next candidate host
+            except requests.exceptions.Timeout:
+                last_reason = f"timeout ({host})"
+                continue
+            except Exception as e:
+                last_reason = f"{str(e)[:50]} ({host})"
+                continue
+        logger.error(
+            f"[{self.array_name}] Cannot reach any host {self._hosts} ({last_reason}) — "
+            f"connectivity/inventory problem, not credentials. Check array_fqdn / mgmt_ip."
+        )
         return False
 
     def get(self, endpoint: str, params: Dict = None) -> Optional[Any]:
