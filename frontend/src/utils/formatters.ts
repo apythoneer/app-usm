@@ -1,9 +1,19 @@
 export function formatBytes(bytes?: number | null, decimals = 1): string {
   if (bytes == null || bytes === 0) return '0 B'
   const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB']
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1)
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`
+}
+
+// Format a value already expressed in TB, wrapping into PB / EB so fleet-scale
+// numbers stay readable (e.g. 12480 TB -> "12.48 PB"). Base-1000 to match the
+// TB figures the backend reports.
+export function formatTB(tb?: number | null): string {
+  if (tb == null) return '—'
+  if (tb >= 1_000_000) return `${(tb / 1_000_000).toFixed(2)} EB`
+  if (tb >= 1_000) return `${(tb / 1_000).toFixed(2)} PB`
+  return `${tb.toFixed(1)} TB`
 }
 
 export function formatIOPS(iops?: number | null): string {
