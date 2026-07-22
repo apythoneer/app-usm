@@ -494,10 +494,11 @@ async def verify_array(array_name: str):
                     client = HPEClient(array_name, cred_key, fqdn=fqdn, model=model, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
+                        # HPE get("system") returns the system object directly
+                        # (not wrapped in members) — mirror hpe/metrics.py.
                         info = client.get("system")
-                        if info and info.get("members"):
-                            sys_info = info["members"][0] if isinstance(info["members"], list) else info["members"]
-                            result.version = sys_info.get("systemVersion", sys_info.get("softwareVersion", ""))
+                        if info:
+                            result.version = info.get("systemVersion") or info.get("softwareVersion")
                         client.disconnect()
                     else:
                         result.error = _CONN_ERR
@@ -507,9 +508,18 @@ async def verify_array(array_name: str):
                     client = HitachiVSPClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
-                        info = client.get("configuration/version")
-                        if info:
-                            result.version = info.get("productName", "") + " " + info.get("controllerVersion", "")
+                        # Version is on the storage object itself. client.get() scopes
+                        # every path under /storages/{id}/, so fetch the object with a
+                        # raw call — exactly as hitachi/metrics.py does.
+                        if client.storage_device_id:
+                            try:
+                                r = client.session.get(
+                                    f"{client.base_url}/storages/{client.storage_device_id}", timeout=15)
+                                if r.status_code == 200:
+                                    d = r.json()
+                                    result.version = d.get("firmwareVersion") or d.get("dkcMicroVersion")
+                            except Exception:
+                                pass
                         client.disconnect()
                     else:
                         result.error = _CONN_ERR
@@ -519,10 +529,11 @@ async def verify_array(array_name: str):
                     client = DellUnityClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
-                        info = client.get("types/basicSystemInfo/instances")
+                        # Mirror dell/metrics.py: /system with fields -> entries[].content.
+                        info = client.get("system", fields="name,model,softwareVersion")
                         if info and info.get("entries"):
                             content = info["entries"][0].get("content", {})
-                            result.version = content.get("softwareVersion", "")
+                            result.version = content.get("softwareVersion")
                         client.disconnect()
                     else:
                         result.error = _CONN_ERR
@@ -532,10 +543,10 @@ async def verify_array(array_name: str):
                     client = OracleZFSClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
-                        info = client.get("hardware/v1/chassis")
-                        if info and info.get("chassis"):
-                            ch = info["chassis"][0] if isinstance(info["chassis"], list) else info["chassis"]
-                            result.version = ch.get("product", "")
+                        # Mirror oracle/metrics.py: system/v1/version -> version.version.
+                        info = client.get("system/v1/version")
+                        if info and info.get("version"):
+                            result.version = info["version"].get("version")
                         client.disconnect()
                     else:
                         result.error = _CONN_ERR
