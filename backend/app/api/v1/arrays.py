@@ -21,6 +21,12 @@ router = APIRouter(prefix="/arrays", tags=["arrays"])
 settings = get_settings()
 SCHEMA = settings.db_schema
 
+# authenticate() returns only a bool, so a failure can be bad credentials OR an
+# unreachable host — don't assert it's the password (it usually wasn't; the host
+# info just wasn't passed). The client logs the specific reason.
+_CONN_ERR = ("Could not authenticate or connect — check the KeePass credentials and "
+             "that the array's FQDN/mgmt_ip is set and reachable from the host.")
+
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -398,21 +404,32 @@ async def verify_array(array_name: str):
         from app.services.keepass import get_credentials
         result = ArrayVerifyResult(array_name=array_name)
 
-        # Look up vendor + cred_key from managed_arrays
+        # Look up vendor + cred_key + host info from managed_arrays. The host info
+        # (array_fqdn / mgmt_ip) is REQUIRED: without it every client falls back to
+        # the bare array_name as its host, which often does not resolve (all the
+        # GCP CVOs, and others), so authenticate() fails to CONNECT and this
+        # endpoint used to mislabel that as "Authentication failed".
         vendor = "pure"
-        cred_key = None
+        cred_key = fqdn = mgmt_ip = model = None
         try:
             with get_db_cursor() as cursor:
                 cursor.execute(
-                    f"SELECT vendor, cred_key FROM {SCHEMA}.managed_arrays WHERE array_name=?",
+                    f"SELECT vendor, cred_key, array_fqdn, mgmt_ip, model "
+                    f"FROM {SCHEMA}.managed_arrays WHERE array_name=?",
                     (array_name,),
                 )
                 row = cursor.fetchone()
                 if row:
                     vendor = row[0] or "pure"
-                    cred_key = row[1]
+                    cred_key, fqdn, mgmt_ip, model = row[1], row[2], row[3], row[4]
         except Exception:
             pass
+
+        # NetApp StorageGrid speaks a different API than ONTAP and uses its own
+        # client — mirror the collector's remap (scheduler.load_arrays) so verify
+        # tests the right endpoint instead of pointing the ONTAP client at it.
+        if vendor == "netapp" and model and "storagegrid" in model.lower():
+            vendor = "storagegrid"
 
         # Derive cred_key if not explicitly set
         if not cred_key:
@@ -448,7 +465,7 @@ async def verify_array(array_name: str):
 
                 elif vendor == "netapp":
                     from app.collectors.netapp.client import NetAppClient
-                    client = NetAppClient(array_name, cred_key)
+                    client = NetAppClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
                         info = client.get("cluster")
@@ -457,11 +474,24 @@ async def verify_array(array_name: str):
                             result.version = ver.get("full", ver.get("generation", ""))
                         client.disconnect()
                     else:
-                        result.error = "Authentication failed — check username/password"
+                        result.error = _CONN_ERR
+
+                elif vendor == "storagegrid":
+                    from app.collectors.netapp.storagegrid_client import StorageGridClient
+                    client = StorageGridClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
+                    if client.authenticate():
+                        result.connectivity_ok = True
+                        info = client.get("grid/config/product-version")
+                        if info:
+                            pv = info.get("data", info)
+                            result.version = pv.get("productVersion") if isinstance(pv, dict) else None
+                        client.disconnect()
+                    else:
+                        result.error = _CONN_ERR
 
                 elif vendor == "hpe":
                     from app.collectors.hpe.client import HPEClient
-                    client = HPEClient(array_name, cred_key)
+                    client = HPEClient(array_name, cred_key, fqdn=fqdn, model=model, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
                         info = client.get("system")
@@ -470,11 +500,11 @@ async def verify_array(array_name: str):
                             result.version = sys_info.get("systemVersion", sys_info.get("softwareVersion", ""))
                         client.disconnect()
                     else:
-                        result.error = "Authentication failed — check username/password"
+                        result.error = _CONN_ERR
 
                 elif vendor == "hitachi":
-                    from app.collectors.hitachi.client import HitachiClient
-                    client = HitachiClient(array_name, cred_key)
+                    from app.collectors.hitachi.client import HitachiVSPClient
+                    client = HitachiVSPClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
                         info = client.get("configuration/version")
@@ -482,11 +512,11 @@ async def verify_array(array_name: str):
                             result.version = info.get("productName", "") + " " + info.get("controllerVersion", "")
                         client.disconnect()
                     else:
-                        result.error = "Authentication failed — check username/password"
+                        result.error = _CONN_ERR
 
                 elif vendor == "dell":
                     from app.collectors.dell.client import DellUnityClient
-                    client = DellUnityClient(array_name, cred_key)
+                    client = DellUnityClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
                         info = client.get("types/basicSystemInfo/instances")
@@ -495,11 +525,11 @@ async def verify_array(array_name: str):
                             result.version = content.get("softwareVersion", "")
                         client.disconnect()
                     else:
-                        result.error = "Authentication failed — check username/password"
+                        result.error = _CONN_ERR
 
                 elif vendor == "oracle":
                     from app.collectors.oracle.client import OracleZFSClient
-                    client = OracleZFSClient(array_name, cred_key)
+                    client = OracleZFSClient(array_name, cred_key, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
                         info = client.get("hardware/v1/chassis")
@@ -508,7 +538,7 @@ async def verify_array(array_name: str):
                             result.version = ch.get("product", "")
                         client.disconnect()
                     else:
-                        result.error = "Authentication failed — check username/password"
+                        result.error = _CONN_ERR
 
                 else:
                     result.error = f"Verify not implemented for vendor '{vendor}'"
