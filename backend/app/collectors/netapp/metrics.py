@@ -165,6 +165,17 @@ class NetAppMetricsCollector(BaseCollector):
         return metrics
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
+        # Fail-safe: collect() only sets capacity_total when the capacity fetch
+        # succeeded, so a missing value means this cycle's capacity call failed.
+        # Writing it would default to 0 — zeroing metrics_current AND appending a
+        # 0 cliff to metrics_history that corrupts capacity/projection data. Keep
+        # last-known values instead (mirrors the volumes empty-collect guard).
+        if data.get("capacity_total") is None:
+            self.logger.warning(
+                f"[{data.get('array_name')}] capacity unavailable this cycle — "
+                f"keeping last-known metrics (skipped write to avoid a zero cliff)"
+            )
+            return True
         array_name = data["array_name"]
         try:
             with get_db_cursor() as cursor:
