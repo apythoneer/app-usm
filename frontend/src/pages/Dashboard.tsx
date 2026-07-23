@@ -710,13 +710,13 @@ export default function Dashboard() {
     refetchInterval: 60_000,
   })
 
-  const { data: fleet } = useQuery<FleetStats>({
+  const { data: fleet, isError: fleetError } = useQuery<FleetStats>({
     queryKey: ['fleet-stats'],
     queryFn: () => arraysApi.fleetStats(),
     refetchInterval: 60_000,
   })
 
-  const { data: alertsResult } = useQuery({
+  const { data: alertsResult, isError: alertsError } = useQuery({
     queryKey: ['alerts', 'active'],
     queryFn: () => alertsApi.list({ resolved: false, limit: 50 }),
     refetchInterval: 30_000,
@@ -775,6 +775,20 @@ export default function Dashboard() {
         <p className="text-gray-400 mt-0.5 text-sm">Storage Intelligence Platform — fleet overview</p>
       </div>
 
+      {/* A backend/fleet-stats or alerts outage must NOT silently render as an
+          empty, all-clear fleet — surface it. */}
+      {(fleetError || alertsError) && (
+        <div className="flex items-center gap-2 text-xs px-3 py-2 rounded-lg border border-red-500/30 bg-red-500/10 text-red-400">
+          <AlertTriangle size={14} className="flex-shrink-0" />
+          <span>
+            {fleetError && alertsError ? 'Fleet stats and alerts are unavailable'
+              : fleetError ? 'Fleet stats are unavailable'
+              : 'Active alerts are unavailable'}
+            {' '}— the numbers below may be stale or incomplete, not a healthy/empty fleet.
+          </span>
+        </div>
+      )}
+
       {/* Fleet stat cards — clickable */}
       <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         <StatCard icon={Server} label="Arrays"
@@ -803,9 +817,15 @@ export default function Dashboard() {
           sub={fleet?.total_volumes != null ? `${fleet.total_volumes} volumes` : undefined}
           onClick={() => navigate('/hosts')} />
         <StatCard icon={AlertTriangle} label="Active Alerts"
-          value={String(fleet?.active_alerts ?? alerts.length)}
-          sub={criticalCount > 0 ? `${criticalCount} critical` : warningCount > 0 ? `${warningCount} warning` : 'all clear'}
-          color={criticalCount > 0 ? 'text-red-400' : warningCount > 0 ? 'text-yellow-400' : 'text-green-400'}
+          value={(fleetError && alertsError) ? '—' : String(fleet?.active_alerts ?? alerts.length)}
+          sub={alertsError ? 'unavailable'
+            : criticalCount > 0 ? `${criticalCount} critical`
+            : warningCount > 0 ? `${warningCount} warning`
+            : 'all clear'}
+          color={alertsError ? 'text-gray-400'
+            : criticalCount > 0 ? 'text-red-400'
+            : warningCount > 0 ? 'text-yellow-400'
+            : 'text-green-400'}
           onClick={() => navigate('/alerts')} />
       </div>
 

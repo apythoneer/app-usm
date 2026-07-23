@@ -796,6 +796,13 @@ class ChatService:
     def _execute_sql(self, sql: str) -> List[Dict]:
         """Execute validated SQL and return results."""
         with get_db_cursor() as cursor:
+            # Bound LLM-generated SQL to CHAT_QUERY_TIMEOUT (was defined but never
+            # applied, so a bad query ran to the 60s connection timeout and pinned
+            # a chat slot). pyodbc query timeout is per-connection.
+            try:
+                cursor.connection.timeout = settings.chat_query_timeout
+            except Exception:
+                pass
             cursor.execute(sql)
             return rows_to_dicts(cursor, cursor.fetchall())
 

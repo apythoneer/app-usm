@@ -51,7 +51,7 @@ def _fetch_daily_stats(days: int) -> List[dict]:
 async def get_array_history(
     array_name: str,
     hours: int = Query(default=24, ge=1, le=720),
-    limit: int = Query(default=1440, le=10000),
+    limit: int = Query(default=1440, ge=1, le=10000),
 ):
     """Time-series metrics for a single array (default last 24h)."""
     rows = await run_in_threadpool(_fetch_history, array_name, hours, limit)
@@ -93,7 +93,7 @@ async def get_daily_trend(days: int = Query(default=90, ge=1, le=365)):
 @router.get("/fleet-history")
 async def get_fleet_history(
     hours: int = Query(default=24, ge=1, le=720),
-    limit: int = Query(default=5000, le=20000),
+    limit: int = Query(default=5000, ge=1, le=20000),
 ):
     """Time-series metrics for ALL arrays in a single query."""
     rows = await run_in_threadpool(_fetch_fleet_history, hours, limit)
@@ -153,6 +153,10 @@ def _fetch_capacity_breakdown() -> dict:
         FROM {SCHEMA}.metrics_current mc WITH (NOLOCK)
         LEFT JOIN {SCHEMA}.managed_arrays ma WITH (NOLOCK)
             ON ma.array_name = mc.array_name
+        -- Exclude arrays explicitly disabled in managed_arrays so the Capacity
+        -- page fleet totals match fleet-stats (which already excludes them);
+        -- arrays absent from managed_arrays (enabled IS NULL) still count.
+        WHERE ISNULL(ma.enabled, 1) = 1
     """
 
     with get_db_cursor() as cursor:
@@ -403,6 +407,7 @@ def _fetch_top_growers(days: int, limit: int) -> List[dict]:
             FROM {SCHEMA}.metrics_current mc WITH (NOLOCK)
             LEFT JOIN {SCHEMA}.managed_arrays ma WITH (NOLOCK)
                 ON ma.array_name = mc.array_name
+            WHERE ISNULL(ma.enabled, 1) = 1
             """,
         )
         current_rows = rows_to_dicts(cursor, cursor.fetchall())
@@ -706,6 +711,7 @@ def _fetch_array_capacity_rows() -> List[dict]:
         FROM {SCHEMA}.metrics_current mc WITH (NOLOCK)
         LEFT JOIN {SCHEMA}.managed_arrays ma WITH (NOLOCK)
             ON ma.array_name = mc.array_name
+        WHERE ISNULL(ma.enabled, 1) = 1
         ORDER BY mc.array_name
     """
     with get_db_cursor() as cursor:
