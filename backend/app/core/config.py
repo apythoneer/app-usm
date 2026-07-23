@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     # this many days of the log and keep category==ALERT entries. The log only
     # retains ~2 weeks, so a value past that just returns everything available.
     hpe_alert_lookback_days: int = Field(default=30, alias="HPE_ALERT_LOOKBACK_DAYS")
+    # Hitachi VSP SIM alerts accumulate (up to 10240) and never drop off, so we keep
+    # only alerts within this recent window as "active"; older ones age out (and the
+    # absence-based resolver clears them). Same idea as the HPE event log.
+    hitachi_alert_lookback_days: int = Field(default=30, alias="HITACHI_ALERT_LOOKBACK_DAYS")
 
     # Metrics history retention (days). Extended to 365 to support YTD
     # capacity-growth analytics. Set lower to reclaim space.
