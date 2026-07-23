@@ -91,6 +91,10 @@ class Settings(BaseSettings):
     # recorded and shown, just not re-paged. Genuinely new alerts appear within a
     # poll cycle of opening, well inside this window.
     alert_notify_max_age_hours: int = Field(default=24, alias="ALERT_NOTIFY_MAX_AGE_HOURS")
+    # HPE alerts live in the WSAPI event log (there is no /alerts resource); we pull
+    # this many days of the log and keep category==ALERT entries. The log only
+    # retains ~2 weeks, so a value past that just returns everything available.
+    hpe_alert_lookback_days: int = Field(default=30, alias="HPE_ALERT_LOOKBACK_DAYS")
 
     # Metrics history retention (days). Extended to 365 to support YTD
     # capacity-growth analytics. Set lower to reclaim space.
