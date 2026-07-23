@@ -94,8 +94,10 @@ class HitachiAlertsCollector(BaseCollector):
                     "array_name": self.array_name,
                     "vendor": "hitachi",
                     # Stable id from the globally-unique alertIndex (hashlib, so it
-                    # does not depend on PYTHONHASHSEED like the old hash()).
-                    "message_id": int(hashlib.md5(str(idx).encode()).hexdigest()[:8], 16),
+                    # does not depend on PYTHONHASHSEED like the old hash()). Modulo
+                    # keeps it within the INT message_id column (2^31-1); an 8-hex
+                    # md5 slice can exceed that and overflow on INSERT.
+                    "message_id": int(hashlib.md5(str(idx).encode()).hexdigest()[:8], 16) % 2147483647,
                     "event": (a.get("errorDetail") or a.get("errorSection") or "")[:500],
                     "severity": _SEVERITY_MAP.get(a.get("errorLevel", ""), "info"),
                     "component_type": (a.get("errorSection") or "")[:100],
