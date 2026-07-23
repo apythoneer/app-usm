@@ -6,8 +6,9 @@ Note: The VSP REST API alerts endpoint may return HTTP 400 on some firmware vers
 In that case, we log a warning and return empty alerts (no critical failure).
 """
 
+import hashlib
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List
 
 from app.collectors.base import BaseCollector, CollectorResult
@@ -25,12 +26,18 @@ SCHEMA = settings.db_schema
 
 ALERT_SEVERITIES = {"critical", "warning"}
 
+# VSP errorLevel -> USM severity (per the CM REST alerts doc):
+#   Acute/Serious = failures, Moderate = warning, Service = informational.
 _SEVERITY_MAP = {
     "Acute": "critical",
-    "Serious": "warning",
-    "Moderate": "info",
+    "Serious": "critical",
+    "Moderate": "warning",
     "Service": "info",
 }
+
+# The alerts resource is per-location; query all three. DKC allows count up to
+# 10240, CTL1/CTL2 up to 256. Alerts come back newest-first.
+_ALERT_TYPES = (("DKC", 1024), ("CTL1", 256), ("CTL2", 256))
 
 
 @CollectorRegistry.register("hitachi", "alerts")
@@ -53,34 +60,55 @@ class HitachiAlertsCollector(BaseCollector):
 
     def collect(self) -> Dict[str, Any]:
         messages = []
-
-        # Try alerts endpoint — may not be available on all firmware versions
-        alerts_resp = self.client.get("alerts", timeout=30)
-        if alerts_resp and alerts_resp.get("data"):
-            for alert in alerts_resp["data"]:
-                severity_raw = alert.get("severity", "")
-                severity = _SEVERITY_MAP.get(severity_raw, "info")
-
-                alert_id = alert.get("alertId") or alert.get("alertIndex", 0)
+        any_ok = False
+        # SIM alerts are stored per location; the endpoint REQUIRES ?type= and
+        # defaults to only 10 rows. Query DKC/CTL1/CTL2 with a high count. A 404
+        # means "no alerts of that type" (valid empty), not an error. (The old code
+        # called bare `alerts` -> HTTP 400 and collected nothing.)
+        base = f"{self.client.base_url}/storages/{self.client.storage_device_id}/alerts"
+        cutoff = datetime.now() - timedelta(days=max(settings.hitachi_alert_lookback_days, 1))
+        for typ, count in _ALERT_TYPES:
+            try:
+                resp = self.client.session.get(base, params={"type": typ, "count": count}, timeout=30)
+            except Exception as e:
+                logger.warning(f"[{self.array_name}] alerts type={typ} error: {e}")
+                continue
+            if resp.status_code == 404:
+                any_ok = True
+                continue
+            if resp.status_code != 200:
+                logger.warning(f"[{self.array_name}] alerts type={typ} -> HTTP {resp.status_code}")
+                continue
+            any_ok = True
+            for a in resp.json().get("data", []):
+                opened = a.get("occurenceTime", "") or ""
+                # SIM alerts accumulate for years; keep only the recent window.
+                try:
+                    if opened and datetime.fromisoformat(opened) < cutoff:
+                        continue
+                except ValueError:
+                    pass
+                idx = a.get("alertIndex") or str(a.get("alertId", ""))
+                loc = a.get("location") or ""
                 messages.append({
                     "array_name": self.array_name,
                     "vendor": "hitachi",
-                    "message_id": alert_id if isinstance(alert_id, int) else hash(str(alert_id)) % 2147483647,
-                    "event": (alert.get("description", "") or alert.get("errorDetail", ""))[:500],
-                    "severity": severity,
-                    "component_type": alert.get("errorSection", ""),
-                    "component_name": alert.get("location", "")[:255] if alert.get("location") else "",
-                    "opened": alert.get("occurredTime", "") or alert.get("referenceCode", ""),
+                    # Stable id from the globally-unique alertIndex (hashlib, so it
+                    # does not depend on PYTHONHASHSEED like the old hash()).
+                    "message_id": int(hashlib.md5(str(idx).encode()).hexdigest()[:8], 16),
+                    "event": (a.get("errorDetail") or a.get("errorSection") or "")[:500],
+                    "severity": _SEVERITY_MAP.get(a.get("errorLevel", ""), "info"),
+                    "component_type": (a.get("errorSection") or "")[:100],
+                    "component_name": (f"{typ}:{loc}" if loc and loc != "-" else typ)[:255],
+                    "opened": opened,
                     "closed": "",
                     "expected": "",
-                    "actual": alert.get("actionCode", "") or alert.get("errorCode", ""),
+                    "actual": str(a.get("referenceCode", "")),
                     "collected_at": datetime.now().isoformat(),
                 })
-        else:
-            logger.debug(f"[{self.array_name}] No alerts endpoint or empty response")
 
-        logger.info(f"[{self.array_name}] {len(messages)} alerts collected")
-        return {"messages": messages, "fetch_ok": alerts_resp is not None}
+        logger.info(f"[{self.array_name}] {len(messages)} alerts collected (SIM, last {settings.hitachi_alert_lookback_days}d)")
+        return {"messages": messages, "fetch_ok": any_ok}
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
         messages = data.get("messages", [])

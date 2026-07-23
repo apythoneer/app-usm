@@ -24,16 +24,14 @@ SCHEMA = settings.db_schema
 
 ALERT_SEVERITIES = {"critical", "warning"}
 
-# Map HPE alert severity → USM severity
-_SEVERITY_MAP = {
-    "fatal": "critical",
-    "critical": "critical",
-    "major": "warning",
-    "minor": "info",
-    "degraded": "warning",
-    "informational": "info",
-    "info": "info",
+# WSAPI event log enums (see HPE WSAPI "Logged system events").
+_CATEGORY_ALERT = 2   # category: 1=lifecycle, 2=alert
+_EVENTLOG_SEVERITY = {  # 1=fatal,2=critical,3=major,4=minor,5=degraded,6=info,7=debug,99=unknown
+    1: "critical", 2: "critical",
+    3: "warning", 4: "warning", 5: "warning",
+    6: "info", 7: "info", 99: "info",
 }
+_COMPONENT_MAP = {2: "vlun", 3: "port", 4: "volume", 41: "sfp"}
 
 
 @CollectorRegistry.register("hpe", "alerts")
@@ -60,36 +58,38 @@ class HPEAlertsCollector(BaseCollector):
     def collect(self) -> Dict[str, Any]:
         messages = []
 
-        # Get alerts — WSAPI returns all active alerts
-        data = self.client.get("alerts")
-        if data and data.get("members"):
-            for alert in data["members"]:
-                alert_id = alert.get("id", 0)
-                severity_raw = (alert.get("severity", "") or "").lower()
-                severity = _SEVERITY_MAP.get(severity_raw, "info")
+        # HPE 3PAR/Primera/Alletra WSAPI has NO /alerts resource (returns 501 on
+        # Primera) — alerts are category==ALERT entries in the event log. Pull a
+        # bounded recent window (the server-side ?query= filter hangs the WSAPI, so
+        # window by minutes and filter client-side). The log only retains ~2 weeks.
+        window_min = max(settings.hpe_alert_lookback_days, 1) * 24 * 60
+        data = self.client.get(f"eventlog/minutes:{window_min}")
+        fetch_ok = data is not None
+        for evt in (data or {}).get("members", []):
+            if evt.get("category") != _CATEGORY_ALERT:
+                continue
+            try:
+                mid = int(evt.get("id"))       # numeric event sequence id
+            except (TypeError, ValueError):
+                continue
+            name = evt.get("componentName") or evt.get("resourceName") or ""
+            messages.append({
+                "array_name": self.array_name,
+                "vendor": "hpe",
+                "message_id": mid,
+                "event": (evt.get("description") or evt.get("type") or "").strip(),
+                "severity": _EVENTLOG_SEVERITY.get(evt.get("severity"), "info"),
+                "component_type": _COMPONENT_MAP.get(evt.get("component"), str(evt.get("component") or "")),
+                "component_name": name[:255],
+                "opened": evt.get("time", ""),
+                "closed": "",
+                "expected": "",
+                "actual": "",
+                "collected_at": datetime.now().isoformat(),
+            })
 
-                state = alert.get("state", "")
-                # Skip already-resolved alerts
-                if state in ("resolved", "autofixed"):
-                    continue
-
-                messages.append({
-                    "array_name": self.array_name,
-                    "vendor": "hpe",
-                    "message_id": alert_id,
-                    "event": alert.get("messageCode", ""),
-                    "severity": severity,
-                    "component_type": alert.get("component", ""),
-                    "component_name": (alert.get("description", "") or "")[:255],
-                    "opened": alert.get("timeOccurred", ""),
-                    "closed": alert.get("timeResolved", ""),
-                    "expected": "",
-                    "actual": "",
-                    "collected_at": datetime.now().isoformat(),
-                })
-
-        logger.info(f"[{self.array_name}] {len(messages)} alerts collected")
-        return {"messages": messages, "fetch_ok": data is not None}
+        logger.info(f"[{self.array_name}] {len(messages)} alert events collected (eventlog)")
+        return {"messages": messages, "fetch_ok": fetch_ok}
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
         messages = data.get("messages", [])
