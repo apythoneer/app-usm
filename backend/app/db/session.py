@@ -491,9 +491,14 @@ def init_database() -> None:
             ALTER TABLE {SCHEMA}.messages ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
         """)
 
-        # Migration: add vendor column to volumes_cache if missing
+        # Migration: add vendor column to volumes_cache if missing.
+        # These cache tables are CREATEd later in init_database, so on a FRESH DB
+        # OBJECT_ID(...) is NULL and the column check ("no column") would pass and
+        # run the ALTER against a non-existent table — crash-looping startup and
+        # taking all collectors down. Guard on the table existing first.
         cursor.execute(f"""
-            IF NOT EXISTS (
+            IF OBJECT_ID('{SCHEMA}.volumes_cache') IS NOT NULL
+               AND NOT EXISTS (
                 SELECT * FROM sys.columns
                 WHERE object_id = OBJECT_ID('{SCHEMA}.volumes_cache')
                 AND name = 'vendor'
@@ -501,9 +506,10 @@ def init_database() -> None:
             ALTER TABLE {SCHEMA}.volumes_cache ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
         """)
 
-        # Migration: add vendor column to hosts_cache if missing
+        # Migration: add vendor column to hosts_cache if missing (same fresh-DB guard).
         cursor.execute(f"""
-            IF NOT EXISTS (
+            IF OBJECT_ID('{SCHEMA}.hosts_cache') IS NOT NULL
+               AND NOT EXISTS (
                 SELECT * FROM sys.columns
                 WHERE object_id = OBJECT_ID('{SCHEMA}.hosts_cache')
                 AND name = 'vendor'

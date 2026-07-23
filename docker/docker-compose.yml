@@ -29,6 +29,11 @@ services:
     network_mode: host
     environment:
       - TZ=America/Denver
+      # Pin the hash seed so Python's hash() is stable across restarts. Several
+      # alert collectors derive message_id from hash(native_id); without this,
+      # every container restart re-keys open alerts and re-fires them (alert
+      # storm on each deploy). Stopgap until stable content-hash ids land.
+      - PYTHONHASHSEED=0
       # SQL Server
       - SQL_SERVER=usidcvsql0252.ctl.intranet
       - SQL_DATABASE=StorMart

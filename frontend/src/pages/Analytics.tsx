@@ -309,7 +309,6 @@ export default function Analytics() {
                     dot={false}
                     name={name}
                     strokeWidth={1.5}
-                    connectNulls
                   />
                 ))}
               </LineChart>
@@ -340,7 +339,6 @@ export default function Analytics() {
                       dot={false}
                       name={name}
                       strokeWidth={1.5}
-                      connectNulls
                     />
                   ))}
                 </LineChart>
@@ -369,7 +367,6 @@ export default function Analytics() {
                       dot={false}
                       name={name}
                       strokeWidth={1.5}
-                      connectNulls
                     />
                   ))}
                 </LineChart>

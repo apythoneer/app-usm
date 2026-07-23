@@ -104,7 +104,12 @@ def _upsert_alert(
     if existing:
         cursor.execute(
             f"UPDATE {SCHEMA}.messages SET "
-            f"  severity=?, event=?, actual=?, collected_at=?, resolved=0, closed=NULL "
+            f"  severity=?, event=?, actual=?, collected_at=?, resolved=0, closed=NULL, "
+            # On a genuine resolved->open transition, clear teams_notified so the
+            # re-fired alert notifies again (otherwise a flapping capacity alert
+            # goes silent for up to the resend window). CASE reads the pre-update
+            # value, so an already-open row keeps its notified timestamp.
+            f"  teams_notified = CASE WHEN resolved=1 THEN NULL ELSE teams_notified END "
             f"WHERE array_name=? AND message_id=?",
             (severity, event, actual, now, array_name, message_id),
         )

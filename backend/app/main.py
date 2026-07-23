@@ -37,6 +37,16 @@ async def lifespan(app: FastAPI):
     """Start scheduler on startup, shut it down on exit."""
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
 
+    # A placeholder signing secret must never reach production — once auth lands,
+    # forged JWTs would be trivial. Hard-fail on boot unless in debug. (Both the
+    # config default and the compose default start with "CHANGE_ME".)
+    if not settings.debug and settings.secret_key.startswith("CHANGE_ME"):
+        raise RuntimeError(
+            "SECRET_KEY is still the placeholder. Set a real SECRET_KEY "
+            "(e.g. `openssl rand -hex 32`) in the environment before production, "
+            "or set DEBUG=true for local development."
+        )
+
     db_ok = test_connection()
     logger.info(f"Database connection: {'OK' if db_ok else 'FAILED'}")
 
@@ -79,8 +89,11 @@ app = FastAPI(
         "Storage Intelligence Platform — vendor-agnostic monitoring for "
         "Pure Storage, NetApp, Commvault and more."
     ),
-    docs_url="/docs",
-    redoc_url="/redoc",
+    # Swagger/ReDoc are a self-documenting map of every (unauthenticated) mutating
+    # endpoint. Expose them only in debug; hide them in production until auth lands.
+    docs_url="/docs" if settings.debug else None,
+    redoc_url="/redoc" if settings.debug else None,
+    openapi_url="/openapi.json" if settings.debug else None,
     lifespan=lifespan,
 )
 

@@ -17,7 +17,11 @@ _BLOCKED_PATTERNS = [
     r'\b(OPENROWSET|OPENDATASOURCE|OPENQUERY|BULK)\b',
     r'\b(BACKUP|RESTORE|SHUTDOWN|RECONFIGURE)\b',
     r'\b(GRANT|REVOKE|DENY)\b',
-    r'\b(INTO\s+OUTFILE|LOAD_FILE|LOAD\s+DATA)\b',
+    # Block ALL INTO: T-SQL `SELECT ... INTO newtable` creates a table (a write in
+    # a supposedly read-only path), plus INTO OUTFILE. No legitimate read-only
+    # SELECT needs INTO, so blocking the bare keyword closes the bypass.
+    r'\bINTO\b',
+    r'\b(LOAD_FILE|LOAD\s+DATA)\b',
     r'\bWAITFOR\b',
     r';\s*\S',           # Multiple statements (after semicolon)
 ]
