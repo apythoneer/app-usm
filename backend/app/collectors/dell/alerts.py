@@ -12,6 +12,7 @@ from app.collectors.registry import CollectorRegistry
 from app.collectors.dell.client import DellUnityClient
 from app.db.session import get_db_cursor
 from app.services.notification import send_teams_alert
+from app.collectors.alert_utils import opened_recently, resolve_absent_alerts
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -89,7 +90,7 @@ class DellAlertsCollector(BaseCollector):
                 })
 
         logger.info(f"[{self.array_name}] {len(messages)} alerts collected")
-        return {"messages": messages}
+        return {"messages": messages, "fetch_ok": alerts_resp is not None}
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
         messages = data.get("messages", [])
@@ -109,13 +110,13 @@ class DellAlertsCollector(BaseCollector):
                         cursor.execute(
                             f"""UPDATE {SCHEMA}.messages SET
                                 event=?, severity=?, component_type=?, component_name=?,
-                                opened=?, collected_at=?
+                                opened=?, collected_at=?, resolved=0
                             WHERE array_name=? AND message_id=?""",
                             (msg["event"], msg["severity"], msg["component_type"],
                              msg["component_name"], msg["opened"], msg["collected_at"],
                              msg["array_name"], msg["message_id"]),
                         )
-                        if not existing[1] and not existing[2] and msg["severity"] in ALERT_SEVERITIES:
+                        if not existing[1] and not existing[2] and msg["severity"] in ALERT_SEVERITIES and opened_recently(msg["opened"], settings.alert_notify_max_age_hours):
                             new_alerts.append(msg)
                     else:
                         cursor.execute(
@@ -129,10 +130,22 @@ class DellAlertsCollector(BaseCollector):
                              msg["opened"], msg["closed"], msg["expected"], msg["actual"],
                              msg["collected_at"]),
                         )
-                        if msg["severity"] in ALERT_SEVERITIES:
+                        if msg["severity"] in ALERT_SEVERITIES and opened_recently(msg["opened"], settings.alert_notify_max_age_hours):
                             new_alerts.append(msg)
 
             result.records_saved = len(messages)
+
+            # Absence-based closure — mark dell alerts resolved once they drop
+            # out of the array's current open set (own cursor, like netapp's
+            # auto-resolve). Guarded by fetch_ok so a failed fetch can't wrongly
+            # resolve everything.
+            if data.get("fetch_ok"):
+                try:
+                    with get_db_cursor() as cursor:
+                        resolve_absent_alerts(cursor, SCHEMA, self.array_name, "dell",
+                                              [m["message_id"] for m in messages])
+                except Exception as e:
+                    logger.warning(f"[{self.array_name}] absence-resolve failed (non-fatal): {e}")
             if new_alerts:
                 self._send_notifications(new_alerts)
             return True
