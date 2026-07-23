@@ -15,6 +15,7 @@ from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
 from app.db.session import get_db_cursor
 from app.services.notification import send_teams_alert
+from app.collectors.alert_utils import opened_recently, resolve_absent_alerts
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -91,7 +92,7 @@ class PureAlertsCollector(BaseCollector):
                             f"""UPDATE {SCHEMA}.messages SET
                                 event=?, severity=?, component_type=?, component_name=?,
                                 opened=?, closed=?, expected=?, actual=?, collected_at=?,
-                                resolved=CASE WHEN ? IS NOT NULL AND ?!='' THEN 1 ELSE resolved END
+                                resolved=CASE WHEN ? IS NOT NULL AND ?!='' THEN 1 ELSE 0 END
                             WHERE array_name=? AND message_id=?""",
                             (
                                 msg["event"], msg["severity"], msg["component_type"],
@@ -107,7 +108,7 @@ class PureAlertsCollector(BaseCollector):
                         alerted, teams_notified, snow_ticket = existing[1], existing[2], existing[3]
                         if (not alerted and not teams_notified
                                 and msg["severity"] in ALERT_SEVERITIES
-                                and self._recent(msg["opened"])):
+                                and opened_recently(msg["opened"], settings.alert_notify_max_age_hours)):
                             msg["_needs_teams"] = True
                             msg["_needs_snow"] = not snow_ticket and msg["severity"] in SNOW_SEVERITIES
                             new_alerts.append(msg)
@@ -125,7 +126,8 @@ class PureAlertsCollector(BaseCollector):
                                 msg["collected_at"],
                             ),
                         )
-                        if msg["severity"] in ALERT_SEVERITIES and self._recent(msg["opened"]):
+                        if (msg["severity"] in ALERT_SEVERITIES
+                                and opened_recently(msg["opened"], settings.alert_notify_max_age_hours)):
                             msg["_needs_teams"] = True
                             msg["_needs_snow"] = msg["severity"] in SNOW_SEVERITIES
                             new_alerts.append(msg)
@@ -135,8 +137,8 @@ class PureAlertsCollector(BaseCollector):
                 # mark it resolved. Guarded by fetch_ok so a failed/empty API call
                 # can't wrongly resolve everything.
                 if data.get("fetch_ok"):
-                    current_ids = [m["message_id"] for m in messages if m.get("message_id") is not None]
-                    self._resolve_absent(cursor, current_ids)
+                    current_ids = [m["message_id"] for m in messages]
+                    resolve_absent_alerts(cursor, SCHEMA, self.array_name, "pure", current_ids)
 
             result.records_saved = len(messages)
 
@@ -148,47 +150,6 @@ class PureAlertsCollector(BaseCollector):
             result.errors.append(str(e))
             logger.error(f"[{self.array_name}] save failed: {e}")
             return False
-
-    def _recent(self, opened: str) -> bool:
-        """True if the alert opened within the notify window. Prevents a backfill
-        of long-open alerts from re-paging; genuinely new alerts always pass.
-        Unknown/unparseable open times default to True (notify, don't silently drop)."""
-        if not opened:
-            return True
-        try:
-            from datetime import timezone
-            dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
-            return age_hours <= settings.alert_notify_max_age_hours
-        except Exception:
-            return True
-
-    def _resolve_absent(self, cursor, current_ids: List) -> None:
-        """Mark Pure alerts resolved when they're no longer in the array's open set."""
-        now = datetime.now().isoformat()
-        closed_expr = "CASE WHEN closed IS NULL OR closed='' THEN ? ELSE closed END"
-        if current_ids:
-            placeholders = ",".join("?" * len(current_ids))
-            cursor.execute(
-                f"""UPDATE {SCHEMA}.messages
-                    SET resolved=1, closed={closed_expr}
-                    WHERE array_name=? AND vendor='pure' AND resolved=0
-                      AND message_id NOT IN ({placeholders})""",
-                (now, self.array_name, *current_ids),
-            )
-        else:
-            # Array reports zero open alerts -> resolve all our open Pure rows for it.
-            cursor.execute(
-                f"""UPDATE {SCHEMA}.messages
-                    SET resolved=1, closed={closed_expr}
-                    WHERE array_name=? AND vendor='pure' AND resolved=0""",
-                (now, self.array_name),
-            )
-        n = cursor.rowcount
-        if n and n > 0:
-            logger.info(f"[{self.array_name}] Resolved {n} Pure alerts no longer open on the array")
 
     def _send_notifications(self, alerts: List[Dict]):
         for alert in alerts:
