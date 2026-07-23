@@ -42,29 +42,35 @@ class PureAlertsCollector(BaseCollector):
 
     def collect(self) -> Dict[str, Any]:
         messages = []
-        data = self.client.get("message", params={"open": "true"})
+        # Fetch UNFILTERED, not ?open=true. On the FA REST v1.19 API the
+        # `open=true` filter returns 0 rows even when the array has open alerts,
+        # so USM was collecting NO Pure alerts at all. The bare `message` endpoint
+        # returns the current open-alert set (each has closed=None); a closed alert
+        # simply drops off this list (it never reappears with a closed timestamp),
+        # which is why closure is handled by absence-based resolve in save().
+        data = self.client.get("message")
+        fetch_ok = data is not None
         if data:
             for msg in data:
+                sev = (msg.get("current_severity") or msg.get("severity") or "").lower()
                 messages.append(
                     {
                         "array_name": self.array_name,
                         "vendor": "pure",
                         "message_id": msg.get("id"),
                         "event": msg.get("event", ""),
-                        "severity": (
-                            msg.get("current_severity") or msg.get("severity", "")
-                        ).lower(),
+                        "severity": sev,
                         "component_type": msg.get("component_type", ""),
                         "component_name": msg.get("component_name", ""),
                         "opened": msg.get("opened", ""),
-                        "closed": msg.get("closed", ""),
+                        "closed": msg.get("closed") or "",
                         "expected": msg.get("expected", ""),
                         "actual": msg.get("actual", ""),
                         "collected_at": datetime.now().isoformat(),
                     }
                 )
         logger.info(f"[{self.array_name}] {len(messages)} open alerts collected")
-        return {"messages": messages}
+        return {"messages": messages, "fetch_ok": fetch_ok}
 
     def save(self, data: Dict[str, Any], result: CollectorResult) -> bool:
         messages = data.get("messages", [])
@@ -95,9 +101,13 @@ class PureAlertsCollector(BaseCollector):
                                 msg["array_name"], msg["message_id"],
                             ),
                         )
-                        # Notify if not yet notified
+                        # Notify if not yet notified AND recently opened (the
+                        # recency gate stops a backfill of long-open alerts from
+                        # re-paging everyone; genuinely new alerts still pass).
                         alerted, teams_notified, snow_ticket = existing[1], existing[2], existing[3]
-                        if not alerted and not teams_notified and msg["severity"] in ALERT_SEVERITIES:
+                        if (not alerted and not teams_notified
+                                and msg["severity"] in ALERT_SEVERITIES
+                                and self._recent(msg["opened"])):
                             msg["_needs_teams"] = True
                             msg["_needs_snow"] = not snow_ticket and msg["severity"] in SNOW_SEVERITIES
                             new_alerts.append(msg)
@@ -115,10 +125,18 @@ class PureAlertsCollector(BaseCollector):
                                 msg["collected_at"],
                             ),
                         )
-                        if msg["severity"] in ALERT_SEVERITIES:
+                        if msg["severity"] in ALERT_SEVERITIES and self._recent(msg["opened"]):
                             msg["_needs_teams"] = True
                             msg["_needs_snow"] = msg["severity"] in SNOW_SEVERITIES
                             new_alerts.append(msg)
+
+                # Absence-based resolution: any Pure alert we had open that is no
+                # longer in the array's current open set has closed on the array —
+                # mark it resolved. Guarded by fetch_ok so a failed/empty API call
+                # can't wrongly resolve everything.
+                if data.get("fetch_ok"):
+                    current_ids = [m["message_id"] for m in messages if m.get("message_id") is not None]
+                    self._resolve_absent(cursor, current_ids)
 
             result.records_saved = len(messages)
 
@@ -130,6 +148,47 @@ class PureAlertsCollector(BaseCollector):
             result.errors.append(str(e))
             logger.error(f"[{self.array_name}] save failed: {e}")
             return False
+
+    def _recent(self, opened: str) -> bool:
+        """True if the alert opened within the notify window. Prevents a backfill
+        of long-open alerts from re-paging; genuinely new alerts always pass.
+        Unknown/unparseable open times default to True (notify, don't silently drop)."""
+        if not opened:
+            return True
+        try:
+            from datetime import timezone
+            dt = datetime.fromisoformat(opened.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600.0
+            return age_hours <= settings.alert_notify_max_age_hours
+        except Exception:
+            return True
+
+    def _resolve_absent(self, cursor, current_ids: List) -> None:
+        """Mark Pure alerts resolved when they're no longer in the array's open set."""
+        now = datetime.now().isoformat()
+        closed_expr = "CASE WHEN closed IS NULL OR closed='' THEN ? ELSE closed END"
+        if current_ids:
+            placeholders = ",".join("?" * len(current_ids))
+            cursor.execute(
+                f"""UPDATE {SCHEMA}.messages
+                    SET resolved=1, closed={closed_expr}
+                    WHERE array_name=? AND vendor='pure' AND resolved=0
+                      AND message_id NOT IN ({placeholders})""",
+                (now, self.array_name, *current_ids),
+            )
+        else:
+            # Array reports zero open alerts -> resolve all our open Pure rows for it.
+            cursor.execute(
+                f"""UPDATE {SCHEMA}.messages
+                    SET resolved=1, closed={closed_expr}
+                    WHERE array_name=? AND vendor='pure' AND resolved=0""",
+                (now, self.array_name),
+            )
+        n = cursor.rowcount
+        if n and n > 0:
+            logger.info(f"[{self.array_name}] Resolved {n} Pure alerts no longer open on the array")
 
     def _send_notifications(self, alerts: List[Dict]):
         for alert in alerts:

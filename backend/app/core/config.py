@@ -85,6 +85,12 @@ class Settings(BaseSettings):
     # Alert lifecycle
     alert_resolve_days: int = Field(default=7, alias="ALERT_RESOLVE_DAYS")
     alert_purge_days: int = Field(default=30, alias="ALERT_PURGE_DAYS")
+    # Only Teams-notify alerts opened within this window. Prevents a notification
+    # storm when a backlog of long-open alerts is first ingested (e.g. the Pure
+    # fetch fix that surfaced dozens of alerts opened years ago) — they are still
+    # recorded and shown, just not re-paged. Genuinely new alerts appear within a
+    # poll cycle of opening, well inside this window.
+    alert_notify_max_age_hours: int = Field(default=24, alias="ALERT_NOTIFY_MAX_AGE_HOURS")
 
     # Metrics history retention (days). Extended to 365 to support YTD
     # capacity-growth analytics. Set lower to reclaim space.
