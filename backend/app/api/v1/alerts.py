@@ -16,7 +16,8 @@ SCHEMA = settings.db_schema
 
 ALERT_SORT_COLS = {
     "id", "array_name", "vendor", "severity", "event",
-    "component_name", "opened", "closed",
+    "component_name", "opened", "closed", "occurrence_count", "last_seen",
+    "event_occurrences",
 }
 
 
@@ -61,9 +62,16 @@ def _fetch_alerts(
         cursor.execute(f"SELECT COUNT(*) FROM {SCHEMA}.messages WITH (NOLOCK){where_clause}", params)
         total = cursor.fetchone()[0]
 
-    # Paginated data
+    # Paginated data. event_occurrences = unified "how many times this event
+    # occurred on this array" = SUM(occurrence_count) over the same (array, event)
+    # signature (active + resolved), correct for both stable-id and
+    # insert-per-event vendors.
     sql = (
-        f"SELECT * FROM {SCHEMA}.messages WITH (NOLOCK){where_clause} "
+        f"SELECT m.*, ("
+        f"  SELECT SUM(m2.occurrence_count) FROM {SCHEMA}.messages m2 WITH (NOLOCK) "
+        f"  WHERE m2.array_name=m.array_name AND m2.event=m.event AND m2.suppressed=0"
+        f") AS event_occurrences "
+        f"FROM {SCHEMA}.messages m WITH (NOLOCK){where_clause} "
         f"ORDER BY {order} OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
     )
     with get_db_cursor() as cursor:
@@ -115,6 +123,11 @@ def _row_to_alert(row: dict) -> AlertSchema:
         collected_at=row.get("collected_at"),
         teams_notified=str(row["teams_notified"]) if row.get("teams_notified") else None,
         snow_ticket=row.get("snow_ticket"),
+        datadog_notified=str(row["datadog_notified"]) if row.get("datadog_notified") else None,
+        occurrence_count=row.get("occurrence_count") or 1,
+        event_occurrences=row.get("event_occurrences"),
+        first_seen=str(row["first_seen"]) if row.get("first_seen") else None,
+        last_seen=str(row["last_seen"]) if row.get("last_seen") else None,
         suppressed=bool(row.get("suppressed", 0)),
         resolved=bool(row.get("resolved", 0)),
     )

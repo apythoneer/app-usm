@@ -1,16 +1,28 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, Fragment } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Filter, Search, ChevronUp, ChevronDown } from 'lucide-react'
+import { Filter, ChevronUp, ChevronDown, ChevronRight, Repeat } from 'lucide-react'
 import ErrorState from '@/components/common/ErrorState'
 import Pagination from '@/components/common/Pagination'
 import VendorBadge from '@/components/common/VendorBadge'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { severityBg } from '@/utils/formatters'
-import type { ArraySummary, Severity } from '@/api/types'
+import type { Alert, ArraySummary, Severity } from '@/api/types'
 
 const PAGE_SIZE = 50
 const SEVERITIES: Severity[] = ['critical', 'warning', 'info']
+
+// Compact timestamp: "Jun 25, 21:35" with the raw value on hover. Storage APIs
+// hand back a mix of ISO ("...Z"), space-separated, and already-local strings;
+// anything unparseable falls back to the raw text so nothing renders blank.
+function fmtTs(v?: string | null): string {
+  if (!v) return '—'
+  const d = new Date(v.includes('T') || v.includes('Z') ? v : v.replace(' ', 'T'))
+  if (isNaN(d.getTime())) return v
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
 
 // ── Sort header ───────────────────────────────────────────────────────────────
 
@@ -38,6 +50,72 @@ function SortHeader({ label, field, sortBy, sortDir, onSort, align = 'left' }: {
   )
 }
 
+// ── Expanded detail row ─────────────────────────────────────────────────────────
+
+function DetailField({ label, value, mono }: { label: string; value?: React.ReactNode; mono?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
+      <div className={`text-xs text-gray-200 break-words ${mono ? 'font-mono' : ''}`}>
+        {value === undefined || value === null || value === '' ? <span className="text-gray-600">—</span> : value}
+      </div>
+    </div>
+  )
+}
+
+function AlertDetail({ alert, colSpan }: { alert: Alert; colSpan: number }) {
+  const occ = alert.event_occurrences ?? alert.occurrence_count ?? 1
+  return (
+    <tr className="bg-gray-900/60">
+      <td colSpan={colSpan} className="px-6 py-4 border-b border-gray-800">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-x-6 gap-y-3">
+          <DetailField label="Event" value={alert.event} />
+          <DetailField label="Component" value={
+            [alert.component_type, alert.component_name].filter(Boolean).join(': ') || undefined
+          } />
+          <DetailField label="Message ID" value={alert.message_id} mono />
+          <DetailField label="Severity" value={
+            <span className={`text-xs font-medium px-2 py-0.5 rounded border ${severityBg(alert.severity)}`}>{alert.severity}</span>
+          } />
+
+          <DetailField label="Reported by array" value={fmtTs(alert.opened)} />
+          <DetailField label="Seen by platform (crawl)" value={fmtTs(alert.collected_at)} />
+          <DetailField label="First seen" value={fmtTs(alert.first_seen)} />
+          <DetailField label="Last seen" value={fmtTs(alert.last_seen)} />
+
+          <DetailField label="Occurrences (this event / array)" value={
+            <span className="inline-flex items-center gap-1">
+              <Repeat size={11} className="text-amber-400" /> {occ}
+              {alert.occurrence_count && alert.occurrence_count > 1
+                ? <span className="text-gray-500">({alert.occurrence_count} reopens on this alert)</span> : null}
+            </span>
+          } />
+          <DetailField label="Expected" value={alert.expected} />
+          <DetailField label="Actual" value={alert.actual} />
+          <DetailField label="Status" value={
+            alert.resolved
+              ? <span className="text-green-400">Resolved{alert.closed ? ` · ${fmtTs(alert.closed)}` : ''}</span>
+              : <span className="text-amber-400">Active</span>
+          } />
+
+          <DetailField label="Datadog" value={
+            alert.datadog_notified
+              ? <span className="text-green-400" title={alert.datadog_notified}>Paged ✓</span>
+              : <span className="text-gray-500">not paged</span>
+          } />
+          <DetailField label="Teams" value={
+            alert.teams_notified
+              ? <span className="text-green-400" title={alert.teams_notified}>Sent ✓</span>
+              : <span className="text-gray-500">—</span>
+          } />
+          <DetailField label="Vendor" value={<VendorBadge vendor={alert.vendor} />} />
+          <DetailField label="Array" value={alert.array_name} mono />
+        </div>
+      </td>
+    </tr>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function Alerts() {
@@ -48,9 +126,10 @@ export default function Alerts() {
   const [offset, setOffset] = useState(0)
   const [sortBy, setSortBy] = useState('')
   const [sortDir, setSortDir] = useState('desc')
+  const [expanded, setExpanded] = useState<number | null>(null)
 
   // Reset offset on filter change
-  useEffect(() => { setOffset(0) }, [severity, vendorFilter, arrayFilter, showResolved])
+  useEffect(() => { setOffset(0); setExpanded(null) }, [severity, vendorFilter, arrayFilter, showResolved])
 
   // Array list for filters
   const { data: arrays = [] } = useQuery<ArraySummary[]>({
@@ -80,9 +159,6 @@ export default function Alerts() {
       array_name: arrayFilter || undefined,
       // Unchecked -> resolved:false (active only). Checked -> omit the filter so
       // resolved alerts are included alongside active ones.
-      // NB: `showResolved || undefined` sent `undefined` when unchecked, which the
-      // backend reads as "no filter" (`if resolved is not None`), leaking resolved
-      // alerts into the active view and disagreeing with the Dashboard count.
       resolved: showResolved ? undefined : false,
       limit: PAGE_SIZE,
       offset,
@@ -93,6 +169,12 @@ export default function Alerts() {
 
   const alerts = result?.data ?? []
   const total = result?.total ?? 0
+  const COLS = 10  // expand + severity + array + vendor + event + component + occ + reported + seen + datadog
+
+  function toggle(id?: number) {
+    if (id == null) return
+    setExpanded((cur) => (cur === id ? null : id))
+  }
 
   return (
     <div className="space-y-4">
@@ -101,11 +183,11 @@ export default function Alerts() {
         <h2 className="text-xl font-semibold text-white">
           Alerts <span className="text-gray-500 text-sm ml-2">({total.toLocaleString()})</span>
         </h2>
+        <span className="text-xs text-gray-500">Double-click a row (or ▸) to expand</span>
       </div>
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
-        {/* Severity pills */}
         <button
           onClick={() => setSeverity(undefined)}
           className={`text-xs px-3 py-1.5 rounded border ${!severity ? 'bg-brand-600/20 text-brand-400 border-brand-500/30' : 'text-gray-400 border-gray-700 hover:border-gray-500'}`}
@@ -158,9 +240,6 @@ export default function Alerts() {
       {/* Table */}
       <div className="card">
         {isError ? (
-          // Checked before the empty branch — a failed request leaves `alerts`
-          // empty, which would otherwise render as "No alerts found" and report
-          // an outage as a healthy, quiet fleet.
           <ErrorState what="alerts" error={error} onRetry={() => refetch()} />
         ) : isLoading ? (
           <p className="text-gray-500 text-sm">Loading...</p>
@@ -172,41 +251,59 @@ export default function Alerts() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-700/50 bg-gray-800/40">
+                    <th className="w-8" />
                     <SortHeader label="Severity" field="severity" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader label="Array" field="array_name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader label="Vendor" field="vendor" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader label="Event" field="event" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader label="Component" field="component_name" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
-                    <SortHeader label="Opened" field="opened" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
-                    <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Teams</th>
-                    <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">SNOW</th>
+                    <SortHeader label="Occurrences" field="event_occurrences" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
+                    <SortHeader label="Reported (array)" field="opened" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader label="Seen (platform)" field="last_seen" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <th className="px-4 py-2 text-left text-xs text-gray-500 uppercase tracking-wide">Datadog</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800/50">
-                  {alerts.map((alert) => (
-                    <tr key={alert.id} className="hover:bg-gray-800/30">
-                      <td className="px-4 py-2">
-                        <span className={`text-xs font-medium px-2 py-0.5 rounded border ${severityBg(alert.severity)}`}>
-                          {alert.severity}
-                        </span>
-                      </td>
-                      <td className="px-4 py-2 font-mono text-xs text-gray-200">{alert.array_name}</td>
-                      <td className="px-4 py-2 text-xs">
-                        <VendorBadge vendor={alert.vendor} />
-                      </td>
-                      <td className="px-4 py-2 text-xs text-gray-300 max-w-xs truncate">{alert.event || '—'}</td>
-                      <td className="px-4 py-2 text-xs text-gray-400">{alert.component_name || '—'}</td>
-                      <td className="px-4 py-2 text-xs text-gray-500">{alert.opened || '—'}</td>
-                      <td className="px-4 py-2 text-xs">
-                        {alert.teams_notified
-                          ? <span className="text-green-400" title={alert.teams_notified}>&#10003;</span>
-                          : <span className="text-gray-600">—</span>}
-                      </td>
-                      <td className="px-4 py-2 text-xs font-mono text-gray-400">
-                        {alert.snow_ticket || <span className="text-gray-600">—</span>}
-                      </td>
-                    </tr>
-                  ))}
+                  {alerts.map((alert) => {
+                    const occ = alert.event_occurrences ?? alert.occurrence_count ?? 1
+                    const isOpen = expanded === alert.id
+                    return (
+                      <Fragment key={alert.id}>
+                        <tr
+                          className="hover:bg-gray-800/30 cursor-pointer"
+                          onDoubleClick={() => toggle(alert.id)}
+                        >
+                          <td className="px-2 py-2 text-gray-500" onClick={(e) => { e.stopPropagation(); toggle(alert.id) }}>
+                            {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                          </td>
+                          <td className="px-4 py-2">
+                            <span className={`text-xs font-medium px-2 py-0.5 rounded border ${severityBg(alert.severity)}`}>
+                              {alert.severity}
+                            </span>
+                          </td>
+                          <td className="px-4 py-2 font-mono text-xs text-gray-200">{alert.array_name}</td>
+                          <td className="px-4 py-2 text-xs"><VendorBadge vendor={alert.vendor} /></td>
+                          <td className="px-4 py-2 text-xs text-gray-300 max-w-xs truncate" title={alert.event || ''}>{alert.event || '—'}</td>
+                          <td className="px-4 py-2 text-xs text-gray-400">{alert.component_name || '—'}</td>
+                          <td className="px-4 py-2 text-xs text-right">
+                            {occ > 1
+                              ? <span className="inline-flex items-center gap-1 text-amber-400 font-medium" title="Times this event occurred on this array">
+                                  <Repeat size={11} />{occ}×
+                                </span>
+                              : <span className="text-gray-500">1×</span>}
+                          </td>
+                          <td className="px-4 py-2 text-xs text-gray-400 whitespace-nowrap" title={alert.opened || ''}>{fmtTs(alert.opened)}</td>
+                          <td className="px-4 py-2 text-xs text-gray-500 whitespace-nowrap" title={alert.collected_at || alert.last_seen || ''}>{fmtTs(alert.last_seen || alert.collected_at)}</td>
+                          <td className="px-4 py-2 text-xs">
+                            {alert.datadog_notified
+                              ? <span className="text-green-400" title={`Paged to Datadog · ${alert.datadog_notified}`}>&#10003;</span>
+                              : <span className="text-gray-600">—</span>}
+                          </td>
+                        </tr>
+                        {isOpen && <AlertDetail alert={alert} colSpan={COLS} />}
+                      </Fragment>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>

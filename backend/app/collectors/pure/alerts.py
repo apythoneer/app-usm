@@ -94,7 +94,9 @@ class PureAlertsCollector(BaseCollector):
                             f"""UPDATE {SCHEMA}.messages SET
                                 event=?, severity=?, component_type=?, component_name=?,
                                 opened=?, closed=?, expected=?, actual=?, collected_at=?,
-                                resolved=CASE WHEN ? IS NOT NULL AND ?!='' THEN 1 ELSE 0 END
+                                resolved=CASE WHEN ? IS NOT NULL AND ?!='' THEN 1 ELSE 0 END,
+                                occurrence_count = occurrence_count + CASE WHEN resolved=1 THEN 1 ELSE 0 END,
+                                last_seen = GETDATE()
                             WHERE array_name=? AND message_id=?""",
                             (
                                 msg["event"], msg["severity"], msg["component_type"],

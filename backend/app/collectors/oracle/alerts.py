@@ -100,7 +100,9 @@ class OracleAlertsCollector(BaseCollector):
                         cursor.execute(
                             f"""UPDATE {SCHEMA}.messages SET
                                 event=?, severity=?, component_type=?, component_name=?,
-                                opened=?, collected_at=?, resolved=0
+                                opened=?, collected_at=?, resolved=0,
+                                occurrence_count = occurrence_count + CASE WHEN resolved=1 THEN 1 ELSE 0 END,
+                                last_seen = GETDATE()
                             WHERE array_name=? AND message_id=?""",
                             (msg["event"], msg["severity"], msg["component_type"],
                              msg["component_name"], msg["opened"], msg["collected_at"],

@@ -108,8 +108,15 @@ export interface Alert {
   component_name?: string
   opened?: string
   closed?: string
+  expected?: string
+  actual?: string
   teams_notified?: string
   snow_ticket?: string
+  datadog_notified?: string
+  occurrence_count?: number
+  event_occurrences?: number
+  first_seen?: string
+  last_seen?: string
   suppressed: boolean
   resolved: boolean
   collected_at?: string
