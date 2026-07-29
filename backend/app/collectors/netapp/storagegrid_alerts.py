@@ -103,14 +103,19 @@ class StorageGridAlertsCollector(BaseCollector):
             for a in (alarms.get("data") or []):
                 code = a.get("attributeCode") or "ALARM"
                 sev = _SEVERITY_MAP.get((a.get("severity") or "").lower(), "info")
-                src = str(a.get("sourceId") or f"{code}:{a.get('attributeIndex','')}")
+                # sourceId identifies the NODE/source, not the alarm — one node emits
+                # many attribute alarms that share a sourceId. Key the message_id on
+                # source + attributeCode + attributeIndex so distinct alarms don't
+                # collapse onto one row (which silently dropped ~half of them).
+                src = str(a.get("sourceId") or "")
+                idx = str(a.get("attributeIndex", ""))
                 label = _ATTR_LABELS.get(code)
                 val = a.get("triggerValue", "")
                 detail = f"{label} [{code}]" if label else f"{code} alarm"
                 messages.append({
                     "array_name": self.array_name,
                     "vendor": "netapp",
-                    "message_id": self._mid(f"alarm:{src}"),
+                    "message_id": self._mid(f"alarm:{src}:{code}:{idx}"),
                     "event": f"{detail} (value={val})"[:500],
                     "severity": sev,
                     "component_type": "alarm",
