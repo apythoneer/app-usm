@@ -56,6 +56,14 @@ class Settings(BaseSettings):
     sql_cred_key: str = Field(default="SQLServerDB", alias="SQL_CRED_KEY")
     pure_cred_key: str = Field(default="PureStorage", alias="PURE_CRED_KEY")
 
+    # DB connection health. pyodbc's built-in pool can hand back a connection that
+    # died while SQL Server was down/restarting; the first real query on it then
+    # hangs, which is what turned a brief DB blip into app-wide thrash needing a
+    # manual restart. Pre-ping (cheap SELECT 1) detects a dead pooled connection
+    # and replaces it with a fresh one, so a DB bounce self-heals.
+    db_preping: bool = Field(default=True, alias="DB_PREPING")
+    db_conn_max_retries: int = Field(default=3, alias="DB_CONN_MAX_RETRIES")
+
     # Notifications
     teams_webhook_url: str = Field(default="", alias="TEAMS_WEBHOOK_URL")
     # Comma-separated severities that trigger a Teams alert (critical,warning,info)

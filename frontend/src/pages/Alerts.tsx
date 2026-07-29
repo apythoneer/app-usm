@@ -11,6 +11,12 @@ import type { Alert, ArraySummary, Severity } from '@/api/types'
 
 const PAGE_SIZE = 50
 const SEVERITIES: Severity[] = ['critical', 'warning', 'info']
+type StatusFilter = 'active' | 'resolved' | 'all'
+const STATUSES: { key: StatusFilter; label: string }[] = [
+  { key: 'active', label: 'Active' },
+  { key: 'resolved', label: 'Resolved' },
+  { key: 'all', label: 'All' },
+]
 
 // Compact timestamp: "Jun 25, 21:35" with the raw value on hover. Storage APIs
 // hand back a mix of ISO ("...Z"), space-separated, and already-local strings;
@@ -122,14 +128,14 @@ export default function Alerts() {
   const [severity, setSeverity] = useState<Severity | undefined>()
   const [vendorFilter, setVendorFilter] = useState('')
   const [arrayFilter, setArrayFilter] = useState('')
-  const [showResolved, setShowResolved] = useState(false)
+  const [status, setStatus] = useState<StatusFilter>('active')
   const [offset, setOffset] = useState(0)
   const [sortBy, setSortBy] = useState('')
   const [sortDir, setSortDir] = useState('desc')
   const [expanded, setExpanded] = useState<number | null>(null)
 
   // Reset offset on filter change
-  useEffect(() => { setOffset(0); setExpanded(null) }, [severity, vendorFilter, arrayFilter, showResolved])
+  useEffect(() => { setOffset(0); setExpanded(null) }, [severity, vendorFilter, arrayFilter, status])
 
   // Array list for filters
   const { data: arrays = [] } = useQuery<ArraySummary[]>({
@@ -152,14 +158,14 @@ export default function Alerts() {
   }
 
   const { data: result, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ['alerts', severity, vendorFilter, arrayFilter, showResolved, offset, sortBy, sortDir],
+    queryKey: ['alerts', severity, vendorFilter, arrayFilter, status, offset, sortBy, sortDir],
     queryFn: () => alertsApi.list({
       severity,
       vendor: vendorFilter || undefined,
       array_name: arrayFilter || undefined,
-      // Unchecked -> resolved:false (active only). Checked -> omit the filter so
-      // resolved alerts are included alongside active ones.
-      resolved: showResolved ? undefined : false,
+      // active -> resolved:false, resolved -> resolved:true, all -> omit the filter
+      // (backend treats absent `resolved` as "both").
+      resolved: status === 'all' ? undefined : status === 'resolved',
       limit: PAGE_SIZE,
       offset,
       sort_by: sortBy || undefined,
@@ -225,16 +231,20 @@ export default function Alerts() {
           {uniqueArrays.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
 
-        {/* Resolved toggle */}
-        <label className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer ml-auto">
-          <input
-            type="checkbox"
-            checked={showResolved}
-            onChange={(e) => setShowResolved(e.target.checked)}
-            className="accent-brand-500"
-          />
-          Show resolved
-        </label>
+        {/* Status filter: Active / Resolved / All */}
+        <div className="ml-auto inline-flex rounded-lg border border-gray-700 overflow-hidden">
+          {STATUSES.map((s) => (
+            <button
+              key={s.key}
+              onClick={() => setStatus(s.key)}
+              className={`text-xs px-3 py-1.5 border-l first:border-l-0 border-gray-700 ${
+                status === s.key
+                  ? 'bg-brand-600/20 text-brand-400'
+                  : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/50'
+              }`}
+            >{s.label}</button>
+          ))}
+        </div>
       </div>
 
       {/* Table */}
