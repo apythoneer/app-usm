@@ -59,11 +59,48 @@ def invalidate_conn_str_cache():
 
 
 def get_connection() -> pyodbc.Connection:
-    """Get a pooled pyodbc connection (credentials cached from KeePass)."""
+    """Get a pooled pyodbc connection (credentials cached from KeePass).
+
+    Pre-ping: pyodbc's built-in pool can return a connection that died while SQL
+    Server was down/restarting. The first real query on such a connection hangs or
+    errors — which is what turned a brief DB outage into app-wide thrash that only
+    a manual container restart cleared. So before handing a connection back, run a
+    cheap ``SELECT 1``; if it fails, close the dead connection (which evicts it from
+    the ODBC pool) and retry with a fresh one. A DB bounce then self-heals within a
+    few requests instead of wedging the single worker. Toggle via DB_PREPING.
+    """
     conn_str = _get_conn_str()
-    conn = pyodbc.connect(conn_str, autocommit=False)
-    conn.timeout = 60  # increased from 30 for heavy queries
-    return conn
+
+    if not settings.db_preping:
+        conn = pyodbc.connect(conn_str, autocommit=False)
+        conn.timeout = 60  # increased from 30 for heavy queries
+        return conn
+
+    attempts = max(1, settings.db_conn_max_retries)
+    last_err: Optional[Exception] = None
+    for i in range(attempts):
+        conn = pyodbc.connect(conn_str, autocommit=False)
+        conn.timeout = 60
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            cur.close()
+            return conn
+        except Exception as e:
+            # Dead pooled connection — discard it (close evicts it from the pool)
+            # and try again with a fresh one.
+            last_err = e
+            try:
+                conn.close()
+            except Exception:
+                pass
+            logger.warning(
+                f"DB pre-ping failed (attempt {i + 1}/{attempts}); "
+                f"discarded a stale pooled connection: {str(e)[:120]}"
+            )
+    # All attempts failed — surface the real error to the caller.
+    raise last_err if last_err else pyodbc.Error("get_connection: pre-ping exhausted")
 
 
 @contextmanager
