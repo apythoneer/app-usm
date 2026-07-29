@@ -47,6 +47,13 @@ services:
       - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_BEFORE_PRODUCTION}
       # Notifications (set TEAMS_WEBHOOK_URL in .env to enable)
       - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      # Datadog Event Management — the alert paging path. API key is resolved from
+      # KeePass (entry named by DATADOG_CRED_KEY); enable via .env.
+      - DATADOG_ENABLED=${DATADOG_ENABLED:-false}
+      - DATADOG_CRED_KEY=${DATADOG_CRED_KEY:-Datadog}
+      - DATADOG_API_KEY=${DATADOG_API_KEY:-}
+      - DATADOG_SEVERITIES=${DATADOG_SEVERITIES:-critical,warning}
+      - DATADOG_EVENTS_URL=${DATADOG_EVENTS_URL:-https://event-management-intake.us5.datadoghq.com/api/v2/events}
       - SNOW_ENABLED=false
       - SNOW_SEVERITIES=critical
       - SNOW_CATEGORY=Alert > Infrastructure
