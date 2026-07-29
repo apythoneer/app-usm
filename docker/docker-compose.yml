@@ -18,7 +18,11 @@ version: '3.8'
 services:
 
   # ============================================================
-  # BACKEND — FastAPI + APScheduler (collectors run inside here)
+  # BACKEND — FastAPI API ONLY (RUN_SCHEDULER=false).
+  # Collectors run in the separate usm-collector container so a misbehaving
+  # collector (e.g. a hung external API call) can never starve the API worker.
+  # NOTE: the environment block below is intentionally duplicated in
+  # usm-collector — keep the two in sync when changing shared vars.
   # ============================================================
   usm-backend:
     build:
@@ -28,6 +32,8 @@ services:
     hostname: usm-backend
     network_mode: host
     environment:
+      # API-only role: do NOT run the scheduler/collectors in this process.
+      - RUN_SCHEDULER=false
       - TZ=America/Denver
       # Pin the hash seed so Python's hash() is stable across restarts. Several
       # alert collectors derive message_id from hash(native_id); without this,
@@ -96,6 +102,73 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # COLLECTOR — scheduler + all collectors (RUN_SCHEDULER=true).
+  # Same image as usm-backend, runs uvicorn on :8001 purely to host the
+  # scheduler lifespan; the frontend nginx routes /api/v1/scheduler/* here so
+  # the Settings page still sees job status/control. All OTHER API traffic goes
+  # to usm-backend (:8000). Run exactly ONE instance (single scheduler).
+  # The environment MUST match usm-backend except RUN_SCHEDULER — keep in sync.
+  # ============================================================
+  usm-collector:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: usm-collector
+    hostname: usm-collector
+    network_mode: host
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--timeout-keep-alive", "30", "--backlog", "100"]
+    environment:
+      # Collector role: this is the ONLY process that runs the scheduler.
+      - RUN_SCHEDULER=true
+      - TZ=America/Denver
+      - PYTHONHASHSEED=0
+      - SQL_SERVER=usidcvsql0252.ctl.intranet
+      - SQL_DATABASE=StorMart
+      - DB_SCHEMA=USM
+      - SQL_DRIVER=ODBC Driver 17 for SQL Server
+      - KEEPASS_URL=http://usodclpsandadm1.corp.intranet:2000/keepass
+      - SQL_CRED_KEY=SQLServerDB
+      - PURE_CRED_KEY=PureStorage
+      - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_BEFORE_PRODUCTION}
+      - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
+      - DATADOG_ENABLED=${DATADOG_ENABLED:-false}
+      - DATADOG_CRED_KEY=${DATADOG_CRED_KEY:-Datadog}
+      - DATADOG_API_KEY=${DATADOG_API_KEY:-}
+      - DATADOG_SEVERITIES=${DATADOG_SEVERITIES:-critical,warning}
+      - DATADOG_EVENTS_URL=${DATADOG_EVENTS_URL:-https://event-management-intake.us5.datadoghq.com/api/v2/events}
+      - SNOW_ENABLED=false
+      - SNOW_SEVERITIES=critical
+      - SNOW_CATEGORY=Alert > Infrastructure
+      - SNOW_CI=Pure Storage CBS
+      - SNOW_LOCATION=Denver
+      - SNOW_GROUP=${SNOW_GROUP:-}
+      - CORS_ORIGINS=["http://localhost:8080","http://usodclpsandadm1.corp.intranet:8080"]
+      - METRICS_INTERVAL=300
+      - VOLUMES_INTERVAL=1800
+      - ALERTS_INTERVAL=600
+      - OLLAMA_BASE_URL=http://127.0.0.1:11434
+      - OLLAMA_MODEL=qwen2.5:3b
+      - CHAT_ENABLED=true
+      - CHAT_DGX_BASE_URL=${CHAT_DGX_BASE_URL:-}
+      - CHAT_DGX_MODEL=${CHAT_DGX_MODEL:-qwen3:30b-a3b}
+      - CF_ACCESS_CLIENT_ID=${CF_ACCESS_CLIENT_ID:-}
+      - CF_ACCESS_CLIENT_SECRET=${CF_ACCESS_CLIENT_SECRET:-}
+      - LOG_DIR=/app/logs
+      - ARRAYS_CONFIG_FILE=/app/config/arrays.txt
+      - USM_CACHE_DB=/app/data/usm_collector_cache.db
+    volumes:
+      - ../logs:/app/logs
+      - ../config:/app/config:ro
+      - ../data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/ping"]
       interval: 30s
       timeout: 10s
       retries: 3
