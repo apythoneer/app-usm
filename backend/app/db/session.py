@@ -386,6 +386,7 @@ def init_database() -> None:
                 alerted           NVARCHAR(50),
                 teams_notified    DATETIME2,
                 snow_ticket       NVARCHAR(100),
+                datadog_notified  DATETIME2,
                 suppressed        BIT DEFAULT 0,
                 resolved          BIT DEFAULT 0,
                 CONSTRAINT UK_messages UNIQUE (array_name, message_id)
@@ -489,6 +490,19 @@ def init_database() -> None:
                 AND name = 'vendor'
             )
             ALTER TABLE {SCHEMA}.messages ADD vendor NVARCHAR(50) NOT NULL DEFAULT 'pure'
+        """)
+
+        # Migration: add datadog_notified column to messages if missing.
+        # Timestamp set when an alert is pushed to Datadog (status=error/warn);
+        # cleared once the resolve (status=ok) event is sent, so the resolver
+        # never double-pushes. Mirrors teams_notified.
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.messages')
+                AND name = 'datadog_notified'
+            )
+            ALTER TABLE {SCHEMA}.messages ADD datadog_notified DATETIME2 NULL
         """)
 
         # Migration: add vendor column to volumes_cache if missing.

@@ -12,7 +12,9 @@ from app.collectors.registry import CollectorRegistry
 from app.collectors.dell.client import DellUnityClient
 from app.db.session import get_db_cursor
 from app.services.notification import send_teams_alert
-from app.collectors.alert_utils import opened_recently, resolve_absent_alerts
+from app.collectors.alert_utils import (
+    opened_recently, resolve_absent_alerts, dispatch_datadog_new, push_datadog_resolutions,
+)
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -146,6 +148,8 @@ class DellAlertsCollector(BaseCollector):
                                               [m["message_id"] for m in messages])
                 except Exception as e:
                     logger.warning(f"[{self.array_name}] absence-resolve failed (non-fatal): {e}")
+            # Resolve in Datadog any alerts that just closed on the array
+            push_datadog_resolutions(SCHEMA, self.array_name, "dell")
             if new_alerts:
                 self._send_notifications(new_alerts)
             return True
@@ -155,6 +159,8 @@ class DellAlertsCollector(BaseCollector):
             return False
 
     def _send_notifications(self, alerts: List[Dict]):
+        # Push to Datadog first (independent of Teams config)
+        dispatch_datadog_new(SCHEMA, "dell", alerts)
         for alert in alerts:
             if not settings.teams_webhook_url:
                 continue

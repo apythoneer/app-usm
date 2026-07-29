@@ -62,6 +62,27 @@ class Settings(BaseSettings):
     teams_severities: str = Field(default="critical,warning", alias="TEAMS_SEVERITIES")
     snow_enabled: bool = Field(default=False, alias="SNOW_ENABLED")
 
+    # ── Datadog Event Management (replaces the legacy ServiceNow/Zabbix path) ──
+    # Storage alerts are pushed to Datadog's Event intake as custom events. Lumen's
+    # monitoring team ingests these and maps them onto ServiceNow (title→short desc,
+    # message→description, host→CMDB). Left disabled by default so it is opt-in.
+    #
+    # The API key comes from KeePass (entry named by DATADOG_CRED_KEY, read from the
+    # Password field) so it never lives in .env / git. DATADOG_API_KEY is an optional
+    # direct override for local testing; if set it wins over KeePass.
+    datadog_enabled: bool = Field(default=False, alias="DATADOG_ENABLED")
+    datadog_events_url: str = Field(
+        default="https://event-management-intake.us5.datadoghq.com/api/v2/events",
+        alias="DATADOG_EVENTS_URL",
+    )
+    datadog_cred_key: str = Field(default="Datadog", alias="DATADOG_CRED_KEY")
+    datadog_api_key: str = Field(default="", alias="DATADOG_API_KEY")
+    # Severities pushed to Datadog (same vocabulary as teams_severities).
+    datadog_severities: str = Field(default="critical,warning", alias="DATADOG_SEVERITIES")
+    # env: tag applied to every event (helps Datadog/CMDB routing).
+    datadog_env: str = Field(default="production", alias="DATADOG_ENV")
+    datadog_source: str = Field(default="usm", alias="DATADOG_SOURCE")
+
     # Capacity alerting — per-array threshold crossings + fleet projected-full
     capacity_alerts_enabled: bool = Field(default=True, alias="CAPACITY_ALERTS_ENABLED")
     # Comma-separated utilization % thresholds that trigger a per-array Teams alert

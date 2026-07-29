@@ -15,7 +15,9 @@ from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
 from app.db.session import get_db_cursor
 from app.services.notification import send_teams_alert
-from app.collectors.alert_utils import opened_recently, resolve_absent_alerts
+from app.collectors.alert_utils import (
+    opened_recently, resolve_absent_alerts, dispatch_datadog_new, push_datadog_resolutions,
+)
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -142,6 +144,10 @@ class PureAlertsCollector(BaseCollector):
 
             result.records_saved = len(messages)
 
+            # Resolve in Datadog any alerts that just closed on the array (own cursors)
+            if data.get("fetch_ok"):
+                push_datadog_resolutions(SCHEMA, self.array_name, "pure")
+
             # Fire notifications outside the DB transaction
             self._send_notifications(new_alerts)
             return True
@@ -152,6 +158,8 @@ class PureAlertsCollector(BaseCollector):
             return False
 
     def _send_notifications(self, alerts: List[Dict]):
+        # Push to Datadog (replaces the legacy ServiceNow/Zabbix ticket path)
+        dispatch_datadog_new(SCHEMA, "pure", alerts)
         for alert in alerts:
             if alert.get("_needs_teams"):
                 ok = send_teams_alert(
