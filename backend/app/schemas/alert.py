@@ -24,6 +24,17 @@ class AlertSchema(BaseModel):
     collected_at: Optional[str] = None
     teams_notified: Optional[str] = None
     snow_ticket: Optional[str] = None
+    datadog_notified: Optional[str] = None
+    # Recurrence: occurrence_count is this exact alert's clear→reappear count;
+    # event_occurrences is the unified "how many times this event occurred on this
+    # array" (SUM of occurrence_count over the same array+event signature), which is
+    # correct across both stable-id (flapping) and insert-per-event vendors.
+    occurrence_count: int = 1
+    event_occurrences: Optional[int] = None
+    # first_seen/last_seen = platform observation window (distinct from `opened`,
+    # the ARRAY-reported time, and `collected_at`, the crawl that last saw it).
+    first_seen: Optional[str] = None
+    last_seen: Optional[str] = None
     suppressed: bool = False
     resolved: bool = False
     metadata: dict[str, Any] = Field(default_factory=dict)

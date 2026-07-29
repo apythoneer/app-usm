@@ -387,6 +387,9 @@ def init_database() -> None:
                 teams_notified    DATETIME2,
                 snow_ticket       NVARCHAR(100),
                 datadog_notified  DATETIME2,
+                occurrence_count  INT NOT NULL DEFAULT 1,
+                first_seen        DATETIME2 DEFAULT GETDATE(),
+                last_seen         DATETIME2 DEFAULT GETDATE(),
                 suppressed        BIT DEFAULT 0,
                 resolved          BIT DEFAULT 0,
                 CONSTRAINT UK_messages UNIQUE (array_name, message_id)
@@ -503,6 +506,31 @@ def init_database() -> None:
                 AND name = 'datadog_notified'
             )
             ALTER TABLE {SCHEMA}.messages ADD datadog_notified DATETIME2 NULL
+        """)
+
+        # Migration: recurrence tracking on messages.
+        #   occurrence_count — bumped when a same-identity alert clears then
+        #     reappears (a genuine recurrence). Defaults to 1 for existing rows.
+        #   first_seen / last_seen — platform observation window (distinct from
+        #     `opened`, which is the ARRAY-reported time, and `collected_at`, the
+        #     crawl that saw it). Backfilled to now for existing rows.
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.messages') AND name = 'occurrence_count')
+            ALTER TABLE {SCHEMA}.messages ADD occurrence_count INT NOT NULL
+                CONSTRAINT DF_messages_occ DEFAULT 1
+        """)
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.messages') AND name = 'first_seen')
+            ALTER TABLE {SCHEMA}.messages ADD first_seen DATETIME2
+                CONSTRAINT DF_messages_first DEFAULT GETDATE()
+        """)
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.messages') AND name = 'last_seen')
+            ALTER TABLE {SCHEMA}.messages ADD last_seen DATETIME2
+                CONSTRAINT DF_messages_last DEFAULT GETDATE()
         """)
 
         # Migration: add vendor column to volumes_cache if missing.
