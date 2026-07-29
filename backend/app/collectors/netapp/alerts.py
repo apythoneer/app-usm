@@ -14,6 +14,7 @@ from app.collectors.registry import CollectorRegistry
 from app.collectors.netapp.client import NetAppClient
 from app.db.session import get_db_cursor
 from app.services.notification import send_teams_alert
+from app.collectors.alert_utils import dispatch_datadog_new, push_datadog_resolutions
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -157,6 +158,9 @@ class NetAppAlertsCollector(BaseCollector):
             # Uses its own cursor since the main save cursor is committed above.
             self._auto_resolve_old_alerts()
 
+            # Resolve in Datadog any alerts that just aged out
+            push_datadog_resolutions(SCHEMA, self.array_name, "netapp")
+
             return True
 
         except Exception as e:
@@ -185,6 +189,8 @@ class NetAppAlertsCollector(BaseCollector):
             logger.warning(f"[{self.array_name}] Auto-resolve failed (non-fatal): {e}")
 
     def _send_notifications(self, alerts: List[Dict]):
+        # Push to Datadog first (independent of Teams config)
+        dispatch_datadog_new(SCHEMA, "netapp", alerts)
         for alert in alerts:
             if alert.get("_needs_teams"):
                 ok = send_teams_alert(

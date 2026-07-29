@@ -73,3 +73,81 @@ def resolve_absent_alerts(cursor, schema: str, array_name: str, vendor: str,
     if n > 0:
         logger.info(f"[{array_name}] resolved {n} {vendor} alerts no longer open on the array")
     return n
+
+
+def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
+    """Open a Datadog event for each new critical/warning alert and stamp
+    datadog_notified so the resolver can later close it and it isn't re-opened.
+
+    `alerts` is the collector's list of new message dicts. send_datadog_alert()
+    self-filters on severity + datadog_enabled, so passing the full new-alert list
+    is safe (info-level and disabled → no-op). Non-fatal per alert.
+    """
+    from app.core.config import get_settings
+    if not get_settings().datadog_enabled or not alerts:
+        return 0
+    from app.services.notification import send_datadog_alert
+    from app.db.session import get_db_cursor
+
+    n = 0
+    for alert in alerts:
+        alert.setdefault("vendor", vendor)
+        try:
+            if send_datadog_alert(alert):
+                with get_db_cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {schema}.messages SET datadog_notified=GETDATE() "
+                        f"WHERE array_name=? AND message_id=?",
+                        (alert.get("array_name"), alert.get("message_id")),
+                    )
+                n += 1
+        except Exception as e:
+            logger.warning(f"[{alert.get('array_name')}] datadog open failed (non-fatal): {e}")
+    return n
+
+
+def push_datadog_resolutions(schema: str, array_name: str, vendor: str) -> int:
+    """Send a Datadog 'ok' (resolve) event for every alert of <array_name>/<vendor>
+    that USM has marked resolved but still carries an open Datadog event
+    (datadog_notified IS NOT NULL). On a successful resolve post, clear the flag so
+    it is never pushed again. Returns the number resolved in Datadog.
+
+    Call this AFTER resolution has been committed (its own short cursors, so a slow
+    Datadog POST never holds the collector's transaction open). No-op unless Datadog
+    is enabled. Non-fatal — a failed post just leaves the flag set to retry next cycle.
+    """
+    from app.core.config import get_settings
+    if not get_settings().datadog_enabled:
+        return 0
+    from app.services.notification import resolve_datadog_alert
+    from app.db.session import get_db_cursor
+
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                f"""SELECT message_id, event FROM {schema}.messages WITH (NOLOCK)
+                    WHERE array_name=? AND vendor=? AND resolved=1
+                      AND datadog_notified IS NOT NULL""",
+                (array_name, vendor),
+            )
+            pending = cur.fetchall()
+    except Exception as e:
+        logger.warning(f"[{array_name}] datadog-resolve query failed (non-fatal): {e}")
+        return 0
+
+    n = 0
+    for message_id, event in pending:
+        try:
+            if resolve_datadog_alert(vendor, array_name, message_id, event or ""):
+                with get_db_cursor() as cur:
+                    cur.execute(
+                        f"UPDATE {schema}.messages SET datadog_notified=NULL "
+                        f"WHERE array_name=? AND vendor=? AND message_id=?",
+                        (array_name, vendor, message_id),
+                    )
+                n += 1
+        except Exception as e:
+            logger.warning(f"[{array_name}] datadog-resolve for {message_id} failed (non-fatal): {e}")
+    if n:
+        logger.info(f"[{array_name}] resolved {n} {vendor} alerts in Datadog")
+    return n
