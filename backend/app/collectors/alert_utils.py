@@ -221,13 +221,16 @@ def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
         except Exception:
             pass
         try:
-            uid = send_datadog_alert(alert)
-            if uid:
+            res = send_datadog_alert(alert)
+            if res is not None:
+                event_id = (res.get("id") or res.get("uid") or "")[:120]
+                event_url = (res.get("url") or "")[:300]
                 with get_db_cursor() as cur:
                     cur.execute(
-                        f"UPDATE {schema}.messages SET datadog_notified=GETDATE(), datadog_event_id=? "
+                        f"UPDATE {schema}.messages SET datadog_notified=GETDATE(), "
+                        f"datadog_event_id=?, datadog_event_url=? "
                         f"WHERE array_name=? AND message_id=?",
-                        (str(uid)[:120], arr, mid),
+                        (event_id, event_url, arr, mid),
                     )
                 n += 1
         except Exception as e:

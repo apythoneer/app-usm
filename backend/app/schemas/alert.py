@@ -25,6 +25,8 @@ class AlertSchema(BaseModel):
     teams_notified: Optional[str] = None
     snow_ticket: Optional[str] = None
     datadog_notified: Optional[str] = None
+    datadog_event_id: Optional[str] = None
+    datadog_event_url: Optional[str] = None
     # Recurrence: occurrence_count is this exact alert's clear→reappear count;
     # event_occurrences is the unified "how many times this event occurred on this
     # array" (SUM of occurrence_count over the same array+event signature), which is

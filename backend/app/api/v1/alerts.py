@@ -124,6 +124,8 @@ def _row_to_alert(row: dict) -> AlertSchema:
         teams_notified=str(row["teams_notified"]) if row.get("teams_notified") else None,
         snow_ticket=row.get("snow_ticket"),
         datadog_notified=str(row["datadog_notified"]) if row.get("datadog_notified") else None,
+        datadog_event_id=row.get("datadog_event_id"),
+        datadog_event_url=row.get("datadog_event_url"),
         occurrence_count=row.get("occurrence_count") or 1,
         event_occurrences=row.get("event_occurrences"),
         first_seen=str(row["first_seen"]) if row.get("first_seen") else None,
