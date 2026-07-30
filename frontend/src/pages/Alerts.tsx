@@ -106,7 +106,10 @@ function AlertDetail({ alert, colSpan }: { alert: Alert; colSpan: number }) {
 
           <DetailField label="Datadog" value={
             alert.datadog_notified
-              ? <span className="text-green-400" title={alert.datadog_notified}>Paged ✓</span>
+              ? (alert.datadog_event_url
+                  ? <a href={alert.datadog_event_url} target="_blank" rel="noreferrer"
+                       className="text-green-400 hover:underline" title={`Event ${alert.datadog_event_id || ''}`}>Paged ✓ · view event ↗</a>
+                  : <span className="text-green-400" title={alert.datadog_event_id || alert.datadog_notified}>Paged ✓</span>)
               : <span className="text-gray-500">not paged</span>
           } />
           <DetailField label="Teams" value={

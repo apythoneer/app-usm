@@ -113,6 +113,8 @@ export interface Alert {
   teams_notified?: string
   snow_ticket?: string
   datadog_notified?: string
+  datadog_event_id?: string
+  datadog_event_url?: string
   occurrence_count?: number
   event_occurrences?: number
   first_seen?: string
