@@ -424,6 +424,7 @@ def init_database() -> None:
                 teams_notified    DATETIME2,
                 snow_ticket       NVARCHAR(100),
                 datadog_notified  DATETIME2,
+                datadog_event_id  NVARCHAR(120),
                 occurrence_count  INT NOT NULL DEFAULT 1,
                 first_seen        DATETIME2 DEFAULT GETDATE(),
                 last_seen         DATETIME2 DEFAULT GETDATE(),
@@ -543,6 +544,17 @@ def init_database() -> None:
                 AND name = 'datadog_notified'
             )
             ALTER TABLE {SCHEMA}.messages ADD datadog_notified DATETIME2 NULL
+        """)
+
+        # Migration: store the Datadog event uid returned by the POST so each alert
+        # can be traced/linked back to its Datadog event.
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.messages')
+                AND name = 'datadog_event_id'
+            )
+            ALTER TABLE {SCHEMA}.messages ADD datadog_event_id NVARCHAR(120) NULL
         """)
 
         # Migration: recurrence tracking on messages.
