@@ -75,6 +75,43 @@ def resolve_absent_alerts(cursor, schema: str, array_name: str, vendor: str,
     return n
 
 
+# Cache of array_name -> group_label so the Datadog group gate doesn't hit the DB
+# on every notification. Groups change rarely; refresh every 5 minutes.
+_group_cache: dict = {}
+_group_cache_ts: float = 0.0
+
+
+def _array_groups(schema: str) -> dict:
+    """array_name -> group_label (lowercased), cached for 5 min."""
+    global _group_cache, _group_cache_ts
+    import time
+    now = time.monotonic()
+    if _group_cache and (now - _group_cache_ts) < 300:
+        return _group_cache
+    from app.db.session import get_db_cursor
+    m: dict = {}
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(f"SELECT array_name, group_label FROM {schema}.managed_arrays WITH (NOLOCK)")
+            for name, grp in cur.fetchall():
+                m[name] = (grp or "").lower()
+        _group_cache = m
+        _group_cache_ts = now
+    except Exception as e:
+        logger.warning(f"array-group lookup for Datadog gate failed (non-fatal): {e}")
+        return _group_cache or {}
+    return m
+
+
+def _datadog_group_allowed(schema: str, array_name: str, allowed_prefixes: list) -> bool:
+    """True if this array's group_label starts with one of the allowed prefixes.
+    Empty allow-list means all groups are allowed."""
+    if not allowed_prefixes:
+        return True
+    grp = _array_groups(schema).get(array_name, "")
+    return any(grp.startswith(p) for p in allowed_prefixes)
+
+
 def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
     """Open a Datadog event for each new critical/warning alert and stamp
     datadog_notified so the resolver can later close it and it isn't re-opened.
@@ -82,16 +119,27 @@ def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
     `alerts` is the collector's list of new message dicts. send_datadog_alert()
     self-filters on severity + datadog_enabled, so passing the full new-alert list
     is safe (info-level and disabled → no-op). Non-fatal per alert.
+
+    Datadog paging is additionally restricted to arrays whose group matches
+    settings.datadog_notify_groups (e.g. "Cloud-AZU" → Azure only). This gate is
+    Datadog-ONLY; Teams notifications happen separately in the collector and are
+    unaffected, so non-Azure arrays still alert via Teams as usual.
     """
     from app.core.config import get_settings
-    if not get_settings().datadog_enabled or not alerts:
+    settings = get_settings()
+    if not settings.datadog_enabled or not alerts:
         return 0
     from app.services.notification import send_datadog_alert
     from app.db.session import get_db_cursor
 
+    allowed = [g.strip().lower() for g in (settings.datadog_notify_groups or "").split(",") if g.strip()]
+
     n = 0
     for alert in alerts:
         alert.setdefault("vendor", vendor)
+        # Group gate — skip Datadog for arrays outside the allowed groups.
+        if not _datadog_group_allowed(schema, alert.get("array_name"), allowed):
+            continue
         try:
             if send_datadog_alert(alert):
                 with get_db_cursor() as cur:
