@@ -112,6 +112,58 @@ def _datadog_group_allowed(schema: str, array_name: str, allowed_prefixes: list)
     return any(grp.startswith(p) for p in allowed_prefixes)
 
 
+# Runtime paging toggle + high-water mark, read from the app_settings table so a
+# UI toggle takes effect in the collector process (a SEPARATE container) without a
+# redeploy. Cached briefly so the gate doesn't hit the DB on every alert.
+_paging_cache: dict = {"enabled": None, "since": None, "ts": 0.0}
+
+
+def _paging_runtime(schema: str):
+    """Return (enabled: bool, since_iso: Optional[str]) from app_settings, cached 30s.
+    Defaults to enabled + no high-water when the settings are absent (preserves
+    prior behavior until someone toggles the switch)."""
+    import time
+    now = time.monotonic()
+    if _paging_cache["ts"] and (now - _paging_cache["ts"]) < 30:
+        return _paging_cache["enabled"], _paging_cache["since"]
+    from app.db.session import get_db_cursor
+    enabled, since = True, None
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                f"SELECT setting_key, setting_value FROM {schema}.app_settings WITH (NOLOCK) "
+                f"WHERE setting_key IN ('datadog_paging_enabled','datadog_paging_since')"
+            )
+            d = {k: v for k, v in cur.fetchall()}
+        if "datadog_paging_enabled" in d:
+            enabled = str(d["datadog_paging_enabled"]).strip().lower() in ("1", "true", "yes", "on")
+        since = d.get("datadog_paging_since")
+        _paging_cache.update(enabled=enabled, since=since, ts=now)
+    except Exception as e:
+        logger.warning(f"datadog paging runtime read failed (non-fatal): {e}")
+        if _paging_cache["enabled"] is not None:
+            return _paging_cache["enabled"], _paging_cache["since"]
+    return enabled, since
+
+
+def _opened_after(opened, since_iso) -> bool:
+    """True if the alert's opened time is at/after the paging high-water mark.
+    No high-water set, or unparseable timestamps → True (don't silently drop)."""
+    if not since_iso or not opened:
+        return True
+    try:
+        from datetime import datetime, timezone
+        o = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        s = datetime.fromisoformat(str(since_iso).replace("Z", "+00:00"))
+        if o.tzinfo is None:
+            o = o.replace(tzinfo=timezone.utc)
+        if s.tzinfo is None:
+            s = s.replace(tzinfo=timezone.utc)
+        return o >= s
+    except Exception:
+        return True
+
+
 def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
     """Open a Datadog event for each new critical/warning alert and stamp
     datadog_notified so the resolver can later close it and it isn't re-opened.
@@ -120,14 +172,24 @@ def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
     self-filters on severity + datadog_enabled, so passing the full new-alert list
     is safe (info-level and disabled → no-op). Non-fatal per alert.
 
-    Datadog paging is additionally restricted to arrays whose group matches
-    settings.datadog_notify_groups (e.g. "Cloud-AZU" → Azure only). This gate is
-    Datadog-ONLY; Teams notifications happen separately in the collector and are
-    unaffected, so non-Azure arrays still alert via Teams as usual.
+    Datadog paging is gated by, in order:
+      1. env DATADOG_ENABLED (hard master — integration configured at all),
+      2. the runtime on/off switch (app_settings 'datadog_paging_enabled', toggled
+         from the UI without a redeploy),
+      3. the high-water mark (app_settings 'datadog_paging_since') — only alerts
+         opened at/after the switch was turned on page, so enabling never backfills,
+      4. the group allow-list (settings.datadog_notify_groups, e.g. "Cloud-AZU"),
+      5. per-alert idempotency (skip if it already carries a Datadog event) — so a
+         restart never re-pages.
+    All of this is Datadog-ONLY; Teams notifications happen separately in the
+    collector and are unaffected.
     """
     from app.core.config import get_settings
     settings = get_settings()
     if not settings.datadog_enabled or not alerts:
+        return 0
+    enabled, since = _paging_runtime(schema)
+    if not enabled:
         return 0
     from app.services.notification import send_datadog_alert
     from app.db.session import get_db_cursor
@@ -137,20 +199,39 @@ def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
     n = 0
     for alert in alerts:
         alert.setdefault("vendor", vendor)
+        arr = alert.get("array_name")
+        mid = alert.get("message_id")
         # Group gate — skip Datadog for arrays outside the allowed groups.
-        if not _datadog_group_allowed(schema, alert.get("array_name"), allowed):
+        if not _datadog_group_allowed(schema, arr, allowed):
             continue
+        # High-water — only page alerts opened at/after the switch was turned on.
+        if not _opened_after(alert.get("opened"), since):
+            continue
+        # Idempotency — never re-page an alert that already has a Datadog event
+        # (covers restarts and the Teams-disabled case).
         try:
-            if send_datadog_alert(alert):
+            with get_db_cursor() as cur:
+                cur.execute(
+                    f"SELECT datadog_notified FROM {schema}.messages WITH (NOLOCK) "
+                    f"WHERE array_name=? AND message_id=?", (arr, mid),
+                )
+                row = cur.fetchone()
+            if row and row[0]:
+                continue
+        except Exception:
+            pass
+        try:
+            uid = send_datadog_alert(alert)
+            if uid:
                 with get_db_cursor() as cur:
                     cur.execute(
-                        f"UPDATE {schema}.messages SET datadog_notified=GETDATE() "
+                        f"UPDATE {schema}.messages SET datadog_notified=GETDATE(), datadog_event_id=? "
                         f"WHERE array_name=? AND message_id=?",
-                        (alert.get("array_name"), alert.get("message_id")),
+                        (str(uid)[:120], arr, mid),
                     )
                 n += 1
         except Exception as e:
-            logger.warning(f"[{alert.get('array_name')}] datadog open failed (non-fatal): {e}")
+            logger.warning(f"[{arr}] datadog open failed (non-fatal): {e}")
     return n
 
 

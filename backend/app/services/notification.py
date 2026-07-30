@@ -162,10 +162,11 @@ def post_datadog_event(
     tags: list,
     status: str,
     priority: str,
-) -> bool:
+) -> Optional[str]:
     """POST a single custom event to Datadog's v2 event-management intake.
 
-    status: 'error' | 'warn' | 'ok' (use 'ok' to resolve). Returns True on 2xx.
+    status: 'error' | 'warn' | 'ok' (use 'ok' to resolve). Returns the Datadog
+    event uid (or 'sent' if unparseable) on 2xx, None on failure.
     """
     if not settings.datadog_enabled:
         return False
@@ -196,10 +197,18 @@ def post_datadog_event(
             timeout=10,
         )
         resp.raise_for_status()
-        return True
+        # Capture the Datadog event uid (used in the event deep-link) so the alert
+        # can be traced back. Falls back to 'sent' if the body can't be parsed, so
+        # callers still see success.
+        try:
+            evt = (((resp.json() or {}).get("data", {}) or {}).get("attributes", {}) or {})
+            evt = (evt.get("attributes", {}) or {}).get("evt", {}) or {}
+            return evt.get("uid") or str(evt.get("id") or "") or "sent"
+        except Exception:
+            return "sent"
     except Exception as e:
         logger_dd.error(f"Datadog POST failed ({status}) for {host}: {e}")
-        return False
+        return None
 
 
 def _dd_component(alert: dict) -> str:
@@ -222,16 +231,16 @@ def _dd_tags(vendor: str, array_name: str, severity: str, alert: dict) -> list:
     return tags
 
 
-def send_datadog_alert(alert: dict) -> bool:
+def send_datadog_alert(alert: dict) -> Optional[str]:
     """Open/update a Datadog event for a new critical/warning storage alert.
 
     `alert` is the collector's message dict (array_name, vendor, severity, event,
     component_type, component_name, message_id, opened). No-op unless the severity
-    is enabled for Datadog. Returns True if the event was accepted.
+    is enabled for Datadog. Returns the Datadog event uid on success, else None.
     """
     severity = (alert.get("severity") or "").lower()
     if not datadog_severity_enabled(severity):
-        return False
+        return None
     vendor = alert.get("vendor") or ""
     array_name = alert.get("array_name") or ""
     message_id = alert.get("message_id")

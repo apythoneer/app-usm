@@ -46,6 +46,18 @@ class NotificationUpdate(BaseModel):
     teams_webhook_url: str
 
 
+class DatadogPagingUpdate(BaseModel):
+    enabled: bool
+
+
+def _runtime_paging_enabled(raw: Optional[str]) -> bool:
+    """app_settings 'datadog_paging_enabled' -> bool. Absent defaults to enabled
+    (matches the collector gate default)."""
+    if raw is None:
+        return True
+    return str(raw).strip().lower() in ("1", "true", "yes", "on")
+
+
 # ── DB helpers for app_settings table ─────────────────────────────────────────
 
 def _db_get_setting(key: str) -> Optional[str]:
@@ -143,6 +155,47 @@ async def test_notifications():
     if not ok:
         raise HTTPException(status_code=400, detail="Teams notification failed — check webhook URL")
     return {"success": True}
+
+
+@router.get("/datadog-paging")
+async def get_datadog_paging():
+    """Current Datadog paging switch state (runtime on/off + high-water mark)."""
+    s = get_settings()
+    raw = await run_in_threadpool(_db_get_setting, "datadog_paging_enabled")
+    since = await run_in_threadpool(_db_get_setting, "datadog_paging_since")
+    runtime_enabled = _runtime_paging_enabled(raw)
+    return {
+        # env master — whether the integration is configured at all (key present)
+        "integration_configured": s.datadog_enabled,
+        # the runtime switch team members flip
+        "runtime_enabled": runtime_enabled,
+        # effective: only pages when both are true
+        "paging_active": bool(s.datadog_enabled and runtime_enabled),
+        "since": since,
+        "notify_groups": s.datadog_notify_groups or "",
+    }
+
+
+@router.post("/datadog-paging")
+async def set_datadog_paging(body: DatadogPagingUpdate):
+    """Turn Datadog paging on/off at runtime (persisted; no redeploy).
+
+    Enabling records a high-water timestamp so paging only covers alerts from that
+    point onward — it never backfills the older open alerts. Teams is unaffected.
+    """
+    await run_in_threadpool(
+        _db_set_setting, "datadog_paging_enabled", "true" if body.enabled else "false"
+    )
+    result = {"success": True, "runtime_enabled": body.enabled}
+    if body.enabled:
+        from datetime import datetime, timezone
+        now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+        await run_in_threadpool(_db_set_setting, "datadog_paging_since", now_iso)
+        result["since"] = now_iso
+        logger.info(f"Datadog paging ENABLED via API — high-water {now_iso}")
+    else:
+        logger.info("Datadog paging DISABLED via API")
+    return result
 
 
 @router.get("/database")

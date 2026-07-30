@@ -84,6 +84,67 @@ function GeneralTab({ settings }: { settings: any }) {
   )
 }
 
+// ── Datadog paging switch ─────────────────────────────────────────────────────
+
+function DatadogPagingCard() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['datadog-paging'],
+    queryFn: () => settingsApi.getDatadogPaging(),
+    refetchInterval: 30_000,
+  })
+  const { mutate: toggle, isPending } = useMutation({
+    mutationFn: (enabled: boolean) => settingsApi.setDatadogPaging(enabled),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['datadog-paging'] }),
+  })
+
+  const configured = data?.integration_configured
+  const on = !!data?.runtime_enabled
+  const active = !!data?.paging_active
+
+  return (
+    <div className="card space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-gray-300">Datadog Paging</h3>
+        {/* Toggle */}
+        <button
+          role="switch"
+          aria-checked={on}
+          disabled={isLoading || isPending || !configured}
+          onClick={() => toggle(!on)}
+          className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-40 ${
+            on ? 'bg-green-500' : 'bg-gray-600'
+          }`}
+          title={configured ? 'Turn Datadog paging on/off' : 'Datadog integration not configured (DATADOG_ENABLED)'}
+        >
+          <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+        </button>
+      </div>
+
+      {isLoading ? (
+        <p className="text-xs text-gray-500">Loading…</p>
+      ) : !configured ? (
+        <p className="text-xs text-amber-400">
+          Datadog integration is not configured (DATADOG_ENABLED=false). The switch is disabled.
+        </p>
+      ) : (
+        <div className="space-y-1 text-xs text-gray-500">
+          <p>
+            Status: {active
+              ? <span className="text-green-400 font-medium">ON — paging active</span>
+              : <span className="text-gray-400 font-medium">OFF — not paging</span>}
+          </p>
+          <p>Scope: alert groups <span className="text-gray-300 font-mono">{data?.notify_groups || 'all'}</span> (Teams is unaffected and always sends).</p>
+          {on && data?.since && (
+            <p>Paging alerts opened since <span className="text-gray-300">{new Date(data.since).toLocaleString()}</span> — enabling never backfills older alerts.</p>
+          )}
+          <p className="text-gray-600">Persisted to the database; takes effect within ~a minute across the collector. Survives restarts.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Notifications tab ─────────────────────────────────────────────────────────
 
 function NotificationsTab({ settings }: { settings: any }) {
@@ -139,6 +200,8 @@ function NotificationsTab({ settings }: { settings: any }) {
           Webhook URL is persisted to the database and survives container restarts.
         </p>
       </div>
+
+      <DatadogPagingCard />
     </div>
   )
 }

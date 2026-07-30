@@ -27,6 +27,18 @@ export const settingsApi = {
   testNotifications: () =>
     apiClient.post('/settings/notifications/test').then((r) => r.data),
 
+  getDatadogPaging: () =>
+    apiClient.get<{
+      integration_configured: boolean
+      runtime_enabled: boolean
+      paging_active: boolean
+      since: string | null
+      notify_groups: string
+    }>('/settings/datadog-paging').then((r) => r.data),
+
+  setDatadogPaging: (enabled: boolean) =>
+    apiClient.post('/settings/datadog-paging', { enabled }).then((r) => r.data),
+
   getDatabaseInfo: () =>
     apiClient.get<DBTableInfo[]>('/settings/database').then((r) => r.data),
 
