@@ -62,6 +62,9 @@ services:
       # Restrict Datadog paging to these group_label prefixes (empty=all). Teams is
       # unaffected. Set to Cloud-AZU to page Datadog for Azure arrays only.
       - DATADOG_NOTIFY_GROUPS=${DATADOG_NOTIFY_GROUPS:-}
+      # Additionally restrict paging to these vendors (empty=all). groups+vendors is
+      # AND: Cloud-AZU + pure = Azure Pure only (Azure NetApp CVO excluded).
+      - DATADOG_NOTIFY_VENDORS=${DATADOG_NOTIFY_VENDORS:-}
       - DATADOG_EVENTS_URL=${DATADOG_EVENTS_URL:-https://event-management-intake.us5.datadoghq.com/api/v2/events}
       - SNOW_ENABLED=false
       - SNOW_SEVERITIES=critical
@@ -147,6 +150,9 @@ services:
       # Restrict Datadog paging to these group_label prefixes (empty=all). Teams is
       # unaffected. Set to Cloud-AZU to page Datadog for Azure arrays only.
       - DATADOG_NOTIFY_GROUPS=${DATADOG_NOTIFY_GROUPS:-}
+      # Additionally restrict paging to these vendors (empty=all). groups+vendors is
+      # AND: Cloud-AZU + pure = Azure Pure only (Azure NetApp CVO excluded).
+      - DATADOG_NOTIFY_VENDORS=${DATADOG_NOTIFY_VENDORS:-}
       - DATADOG_EVENTS_URL=${DATADOG_EVENTS_URL:-https://event-management-intake.us5.datadoghq.com/api/v2/events}
       - SNOW_ENABLED=false
       - SNOW_SEVERITIES=critical

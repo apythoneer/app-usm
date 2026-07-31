@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     # Set to "Cloud-AZU" to page Datadog ONLY for the Azure cloud arrays; every other
     # array still notifies via Teams as usual (Teams is not affected by this).
     datadog_notify_groups: str = Field(default="", alias="DATADOG_NOTIFY_GROUPS")
+    # Additionally restrict Datadog paging to these vendors (comma-separated,
+    # case-insensitive). Empty = all vendors. Combined with datadog_notify_groups as
+    # AND — e.g. groups="Cloud-AZU" + vendors="pure" pages Azure Pure arrays only
+    # (NetApp CVO in Azure is excluded). Teams is unaffected.
+    datadog_notify_vendors: str = Field(default="", alias="DATADOG_NOTIFY_VENDORS")
     # env: tag applied to every event (helps Datadog/CMDB routing).
     datadog_env: str = Field(default="production", alias="DATADOG_ENV")
     datadog_source: str = Field(default="usm", alias="DATADOG_SOURCE")
