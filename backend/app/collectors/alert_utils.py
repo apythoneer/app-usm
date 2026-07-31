@@ -195,6 +195,7 @@ def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
     from app.db.session import get_db_cursor
 
     allowed = [g.strip().lower() for g in (settings.datadog_notify_groups or "").split(",") if g.strip()]
+    allowed_vendors = [v.strip().lower() for v in (settings.datadog_notify_vendors or "").split(",") if v.strip()]
 
     n = 0
     for alert in alerts:
@@ -203,6 +204,10 @@ def dispatch_datadog_new(schema: str, vendor: str, alerts: List[dict]) -> int:
         mid = alert.get("message_id")
         # Group gate — skip Datadog for arrays outside the allowed groups.
         if not _datadog_group_allowed(schema, arr, allowed):
+            continue
+        # Vendor gate — skip Datadog for vendors outside the allow-list (e.g. keep
+        # Azure Pure but drop Azure NetApp CVO, which share the Cloud-AZU group).
+        if allowed_vendors and (alert.get("vendor") or "").lower() not in allowed_vendors:
             continue
         # High-water — only page alerts opened at/after the switch was turned on.
         if not _opened_after(alert.get("opened"), since):
