@@ -111,8 +111,28 @@ app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
 # ------------------------------------------------------------------ health
 @app.get("/ping", tags=["health"])
 async def ping():
-    """Lightweight liveness probe — used by Docker healthcheck."""
+    """Lightweight liveness probe (event loop only, no DB)."""
     return {"ok": True}
+
+
+@app.get("/health/ready", tags=["health"])
+async def ready():
+    """Readiness probe for the Docker healthcheck + autoheal.
+
+    Exercises the DB with a real SELECT 1 (offloaded to a thread). If the worker's
+    DB path is wedged this hangs, the healthcheck's curl --max-time trips, and the
+    container is marked unhealthy so autoheal can restart it. /ping stays green in
+    that state, which is exactly why the wedge went unnoticed before.
+    """
+    from fastapi.concurrency import run_in_threadpool
+    from fastapi.responses import JSONResponse
+    try:
+        ok = await run_in_threadpool(test_connection)
+    except Exception:
+        ok = False
+    if ok:
+        return {"ready": True}
+    return JSONResponse(status_code=503, content={"ready": False})
 
 
 @app.get("/health", tags=["health"])
