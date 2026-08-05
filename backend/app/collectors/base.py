@@ -211,6 +211,18 @@ class BaseCollector(ABC):
             if not data:
                 raise RuntimeError("No data returned from collect()")
 
+            # Apply configurable severity overrides to alert messages BEFORE save
+            # so both the stored severity and Datadog/Teams paging reflect them
+            # (e.g. Pure reports a controller reboot as warning; team wants critical).
+            if self.COLLECTOR_TYPE == "alerts" and isinstance(data, dict) and data.get("messages"):
+                try:
+                    from app.collectors.alert_utils import apply_severity_overrides
+                    n = apply_severity_overrides(data["messages"])
+                    if n:
+                        self.logger.info(f"applied severity override to {n} alert(s)")
+                except Exception as e:
+                    self.logger.warning(f"severity override failed (non-fatal): {e}")
+
             if not self.save(data, result):
                 raise RuntimeError("save() returned False")
 

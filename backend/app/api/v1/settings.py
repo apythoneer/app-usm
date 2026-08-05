@@ -50,6 +50,16 @@ class DatadogPagingUpdate(BaseModel):
     enabled: bool
 
 
+class SeverityRule(BaseModel):
+    vendor: str = ""          # "" = any vendor
+    field: str = "event"      # event | component_type | component_name | any
+    op: str = "contains"      # contains | equals | startswith | regex
+    value: str
+    severity: str             # critical | warning | info
+    enabled: bool = True
+    note: str = ""
+
+
 def _runtime_paging_enabled(raw: Optional[str]) -> bool:
     """app_settings 'datadog_paging_enabled' -> bool. Absent defaults to enabled
     (matches the collector gate default)."""
@@ -196,6 +206,37 @@ async def set_datadog_paging(body: DatadogPagingUpdate):
     else:
         logger.info("Datadog paging DISABLED via API")
     return result
+
+
+@router.get("/severity-overrides")
+async def get_severity_overrides():
+    """Current custom severity-override rules (JSON list from app_settings)."""
+    import json
+    raw = await run_in_threadpool(_db_get_setting, "alert_severity_overrides")
+    try:
+        rules = json.loads(raw) if raw else []
+        if not isinstance(rules, list):
+            rules = []
+    except Exception:
+        rules = []
+    return {"rules": rules}
+
+
+@router.put("/severity-overrides")
+async def set_severity_overrides(rules: List[SeverityRule]):
+    """Replace the severity-override rule set. Applied by collectors within ~1 min
+    (they read the rules from the DB with a short cache) — no redeploy."""
+    import json
+    valid = {"critical", "warning", "info"}
+    for r in rules:
+        if r.severity.lower() not in valid:
+            raise HTTPException(status_code=400, detail=f"Invalid severity '{r.severity}'")
+        if not (r.value or "").strip():
+            raise HTTPException(status_code=400, detail="Rule 'value' cannot be empty")
+    payload = json.dumps([r.model_dump() for r in rules])
+    await run_in_threadpool(_db_set_setting, "alert_severity_overrides", payload)
+    logger.info(f"Severity-override rules updated ({len(rules)} rule(s))")
+    return {"success": True, "count": len(rules)}
 
 
 @router.get("/database")
