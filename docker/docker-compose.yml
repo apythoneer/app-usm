@@ -77,7 +77,7 @@ services:
       # Collector intervals (seconds) — tuned for 84 arrays across 7 vendors
       - METRICS_INTERVAL=300
       - VOLUMES_INTERVAL=1800
-      - ALERTS_INTERVAL=600
+      - ALERTS_INTERVAL=${ALERTS_INTERVAL:-600}
       # Chat / Ollama (local LLM — no data leaves)
       - OLLAMA_BASE_URL=http://127.0.0.1:11434
       - OLLAMA_MODEL=qwen2.5:3b
@@ -106,12 +106,18 @@ services:
       - ../config:/app/config:ro
       - ../data:/app/data
     restart: unless-stopped
+    # autoheal restarts this container if it goes unhealthy (see usm-autoheal).
+    labels:
+      - autoheal=true
+    # DB-aware readiness: /health/ready runs a real SELECT 1, so a wedged worker
+    # (DB path hung while /ping still answers) fails the check -> unhealthy ->
+    # autoheal restarts it. -m bounds curl so a hung endpoint trips the check.
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/ping"]
-      interval: 30s
+      test: ["CMD", "curl", "-fsS", "-m", "8", "http://localhost:8000/health/ready"]
+      interval: 20s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
 
   # ============================================================
   # COLLECTOR — scheduler + all collectors (RUN_SCHEDULER=true).
@@ -163,7 +169,7 @@ services:
       - CORS_ORIGINS=["http://localhost:8080","http://usodclpsandadm1.corp.intranet:8080"]
       - METRICS_INTERVAL=300
       - VOLUMES_INTERVAL=1800
-      - ALERTS_INTERVAL=600
+      - ALERTS_INTERVAL=${ALERTS_INTERVAL:-600}
       - OLLAMA_BASE_URL=http://127.0.0.1:11434
       - OLLAMA_MODEL=qwen2.5:3b
       - CHAT_ENABLED=true
@@ -179,12 +185,32 @@ services:
       - ../config:/app/config:ro
       - ../data:/app/data
     restart: unless-stopped
+    labels:
+      - autoheal=true
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8001/ping"]
-      interval: 30s
+      test: ["CMD", "curl", "-fsS", "-m", "8", "http://localhost:8001/health/ready"]
+      interval: 20s
       timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 30s
+
+  # ============================================================
+  # AUTOHEAL — restarts any container labeled autoheal=true when it goes
+  # unhealthy. Tiny footprint; needs the Docker socket to issue restarts.
+  # This is the auto-recovery net: a wedged backend/collector self-restarts
+  # within ~1-2 min instead of staying down until someone notices.
+  # ============================================================
+  usm-autoheal:
+    image: willfarrell/autoheal:latest
+    container_name: usm-autoheal
+    restart: unless-stopped
+    environment:
+      - AUTOHEAL_CONTAINER_LABEL=autoheal
+      - AUTOHEAL_INTERVAL=10        # check every 10s
+      - AUTOHEAL_START_PERIOD=30    # give containers 30s after start
+      - CURL_TIMEOUT=30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   # ============================================================
   # FRONTEND — React SPA via Nginx on port 8080
