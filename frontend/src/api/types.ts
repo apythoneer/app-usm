@@ -315,6 +315,25 @@ export interface TopGrower {
   utilization_pct?: number | null
 }
 
+export interface CapacityHistoryArray {
+  array_name: string
+  vendor: string
+  group: string
+  model: string
+}
+export interface CapacityHistoryPoint {
+  d: string        // YYYY-MM-DD
+  a: string        // array_name
+  used_tb: number
+  total_tb: number
+  used_pct: number
+}
+export interface CapacityHistoryResponse {
+  days: number
+  arrays: CapacityHistoryArray[]
+  points: CapacityHistoryPoint[]
+}
+
 export interface TopGrowersResponse {
   days: number
   count: number

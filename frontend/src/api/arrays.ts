@@ -1,7 +1,7 @@
 import { apiClient } from './client'
 import type {
   ArraySummary, ArrayMetrics, ArrayTableRow, FleetStats, FleetHistoryResponse,
-  CapacityBreakdown, ArrayGrowth, DailyTrendResponse, TopGrowersResponse,
+  CapacityBreakdown, ArrayGrowth, DailyTrendResponse, TopGrowersResponse, CapacityHistoryResponse,
   VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse, CapacityForecast,
 } from './types'
 
@@ -59,6 +59,11 @@ export const arraysApi = {
   topGrowers: (days = 90, limit = 20) =>
     apiClient
       .get<TopGrowersResponse>('/analytics/top-growers', { params: { days, limit } })
+      .then((r) => r.data),
+
+  capacityHistory: (days = 90) =>
+    apiClient
+      .get<CapacityHistoryResponse>('/analytics/capacity-history', { params: { days } })
       .then((r) => r.data),
 
   // ── Per-volume growth (backed by volumes_history) ───────────────────────────
