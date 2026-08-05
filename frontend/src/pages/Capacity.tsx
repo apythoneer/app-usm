@@ -11,6 +11,7 @@ import {
 
 import { arraysApi } from '@/api/arrays'
 import { volumesApi } from '@/api/volumes'
+import CapacityExplorer from '@/pages/CapacityExplorer'
 import { formatTB as tb } from '@/utils/formatters'
 import type {
   CapacityBreakdown, CapacityBucket, VendorBucket, CloudBucket, VendorCloudBucket,
@@ -952,6 +953,11 @@ export default function Capacity() {
           </button>
         </div>
       </div>
+
+      {/* Slicer-driven capacity explorer (Vendor / Model / Site-Group multi-select) */}
+      <CapacityExplorer />
+
+      <div className="pt-2 border-t border-gray-800" />
 
 
       {isLoading && <p className="text-gray-500 text-sm">Loading capacity breakdown…</p>}

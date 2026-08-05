@@ -128,6 +128,62 @@ def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
         return rows_to_dicts(cursor, cursor.fetchall())
 
 
+@router.get("/capacity-history")
+async def get_capacity_history(days: int = Query(default=90, ge=1, le=400)):
+    """Per-array DAILY capacity history + array metadata, for the slicer-driven
+    capacity view. One fetch; the frontend filters (vendor/group/model) and
+    re-aggregates the trends client-side. Excludes disabled arrays."""
+    return await run_in_threadpool(_fetch_capacity_history, days)
+
+
+def _fetch_capacity_history(days: int) -> dict:
+    with get_db_cursor() as cursor:
+        # array metadata (vendor / group / model), disabled arrays excluded, joined
+        # to metrics_current so we only list arrays we actually collect capacity for.
+        cursor.execute(
+            f"""SELECT mc.array_name,
+                       COALESCE(ma.vendor, mc.vendor, 'unknown')          AS vendor,
+                       COALESCE(NULLIF(ma.group_label, ''), 'Unassigned') AS grp,
+                       COALESCE(ma.model, '')                             AS model
+                FROM {SCHEMA}.metrics_current mc WITH (NOLOCK)
+                LEFT JOIN {SCHEMA}.managed_arrays ma WITH (NOLOCK) ON ma.array_name = mc.array_name
+                WHERE mc.array_name NOT IN (
+                    SELECT array_name FROM {SCHEMA}.managed_arrays WITH (NOLOCK) WHERE enabled=0)"""
+        )
+        arrays = [
+            {"array_name": r[0], "vendor": r[1], "group": r[2], "model": r[3]}
+            for r in cursor.fetchall()
+        ]
+        # last reading per array per day within the window (ROW_NUMBER de-dupes the
+        # ~288 intra-day samples down to one daily point per array).
+        cursor.execute(
+            f"""SELECT array_name, CONVERT(varchar(10), d, 23) AS day,
+                       capacity_used, capacity_total, capacity_used_pct
+                FROM (
+                    SELECT array_name, CAST(collected_at AS DATE) AS d,
+                           capacity_used, capacity_total, capacity_used_pct,
+                           ROW_NUMBER() OVER (PARTITION BY array_name, CAST(collected_at AS DATE)
+                                              ORDER BY collected_at DESC) AS rn
+                    FROM {SCHEMA}.metrics_history WITH (NOLOCK)
+                    WHERE collected_at >= DATEADD(DAY, -?, GETDATE())
+                      AND capacity_total > 0
+                ) t
+                WHERE t.rn = 1
+                ORDER BY day, array_name""",
+            (days,),
+        )
+        points = []
+        for arr, day, used, total, pct in cursor.fetchall():
+            points.append({
+                "d": day,
+                "a": arr,
+                "used_tb": round((used or 0) / _TIB, 2),
+                "total_tb": round((total or 0) / _TIB, 2),
+                "used_pct": round(pct or 0, 2),
+            })
+    return {"days": days, "arrays": arrays, "points": points}
+
+
 # ── Capacity breakdown (by vendor / cloud / vendor×cloud) ─────────────────────
 
 _TIB = 1099511627776.0  # bytes per TiB
