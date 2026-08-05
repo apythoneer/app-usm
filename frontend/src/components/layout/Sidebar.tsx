@@ -21,8 +21,8 @@ export default function Sidebar() {
     <aside className="w-56 bg-gray-900 border-r border-gray-800 flex flex-col shrink-0">
       {/* Logo */}
       <div className="h-14 flex items-center px-4 border-b border-gray-800">
-        <span className="text-brand-500 font-bold text-lg tracking-tight">USM</span>
-        <span className="text-gray-400 text-xs ml-2 mt-0.5">v3.0</span>
+        <span className="text-brand-500 font-bold text-lg tracking-tight">SIP</span>
+        <span className="text-gray-500 text-[10px] ml-2 leading-tight">Storage<br/>Intelligence</span>
       </div>
 
       {/* Nav */}
@@ -46,8 +46,9 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="p-4 border-t border-gray-800 text-xs text-gray-600">
-        Unified Storage Monitoring
+      <div className="p-4 border-t border-gray-800 text-xs text-gray-600 leading-relaxed">
+        <div className="text-gray-400 font-medium">Storage Intelligence Platform</div>
+        <div className="text-gray-600">powered by USM · v3.0</div>
       </div>
     </aside>
   )
