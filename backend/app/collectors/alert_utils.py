@@ -41,6 +41,99 @@ def opened_recently(opened: Optional[str], max_age_hours: int) -> bool:
         return True
 
 
+# ---------------------------------------------------------------------------
+# Custom severity overrides
+# ---------------------------------------------------------------------------
+# Vendors report a severity, but it isn't always how the team wants to treat the
+# event (e.g. Pure reports a controller reboot as "warning"; we want "critical").
+# Rules are stored as a JSON list in app_settings['alert_severity_overrides'] and
+# applied to each alert message BEFORE save/notify, so both the stored severity and
+# any Datadog/Teams paging reflect the override. Rule shape:
+#   {"vendor": "pure"|"", "field": "event"|"component_type"|"component_name"|"any",
+#    "op": "contains"|"equals"|"startswith"|"regex", "value": "reboot",
+#    "severity": "critical"|"warning"|"info", "enabled": true, "note": "..."}
+_override_cache: dict = {"rules": None, "ts": 0.0}
+
+
+def _load_severity_overrides(schema: str) -> list:
+    """Load override rules from app_settings (JSON), cached 60s."""
+    import time
+    now = time.monotonic()
+    if _override_cache["rules"] is not None and (now - _override_cache["ts"]) < 60:
+        return _override_cache["rules"]
+    import json
+    from app.db.session import get_db_cursor
+    rules: list = []
+    try:
+        with get_db_cursor() as cur:
+            cur.execute(
+                f"SELECT setting_value FROM {schema}.app_settings WITH (NOLOCK) "
+                f"WHERE setting_key='alert_severity_overrides'"
+            )
+            row = cur.fetchone()
+        if row and row[0]:
+            parsed = json.loads(row[0])
+            if isinstance(parsed, list):
+                rules = parsed
+        _override_cache.update(rules=rules, ts=now)
+    except Exception as e:
+        logger.warning(f"severity-override load failed (non-fatal): {e}")
+        return _override_cache["rules"] or []
+    return rules
+
+
+def _rule_matches(rule: dict, msg: dict) -> bool:
+    val = (rule.get("value") or "").lower()
+    if not val:
+        return False
+    field = (rule.get("field") or "event").lower()
+    if field == "any":
+        hay = " ".join(str(msg.get(k) or "") for k in
+                       ("event", "component_type", "component_name", "actual")).lower()
+    else:
+        hay = str(msg.get(field) or "").lower()
+    op = (rule.get("op") or "contains").lower()
+    if op == "equals":
+        return hay == val
+    if op == "startswith":
+        return hay.startswith(val)
+    if op == "regex":
+        import re
+        try:
+            return re.search(val, hay) is not None
+        except re.error:
+            return False
+    return val in hay  # default: contains
+
+
+def apply_severity_overrides(messages: list, schema: Optional[str] = None) -> int:
+    """Rewrite msg['severity'] for any message matching a configured rule. First
+    matching (enabled) rule wins. Returns the number of messages changed. Non-fatal."""
+    if not messages:
+        return 0
+    if schema is None:
+        from app.core.config import get_settings
+        schema = get_settings().db_schema
+    rules = _load_severity_overrides(schema)
+    if not rules:
+        return 0
+    changed = 0
+    for msg in messages:
+        for rule in rules:
+            if not rule.get("enabled", True):
+                continue
+            rv = (rule.get("vendor") or "").lower()
+            if rv and rv != (msg.get("vendor") or "").lower():
+                continue
+            if _rule_matches(rule, msg):
+                new_sev = (rule.get("severity") or "").lower()
+                if new_sev and new_sev != (msg.get("severity") or "").lower():
+                    msg["severity"] = new_sev
+                    changed += 1
+                break  # first matching rule wins for this message
+    return changed
+
+
 def resolve_absent_alerts(cursor, schema: str, array_name: str, vendor: str,
                           current_ids: List) -> int:
     """Mark <vendor> alerts for <array_name> resolved when they are no longer in

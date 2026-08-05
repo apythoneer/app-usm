@@ -1,6 +1,16 @@
 import { apiClient } from './client'
 import type { DBTableInfo, ManagedArray, ManagedArrayCreate, ArrayVerifyResult } from './types'
 
+export interface SeverityRule {
+  vendor: string
+  field: string
+  op: string
+  value: string
+  severity: string
+  enabled: boolean
+  note: string
+}
+
 export const managedArraysApi = {
   list: () =>
     apiClient.get<ManagedArray[]>('/arrays/managed').then((r) => r.data),
@@ -38,6 +48,12 @@ export const settingsApi = {
 
   setDatadogPaging: (enabled: boolean) =>
     apiClient.post('/settings/datadog-paging', { enabled }).then((r) => r.data),
+
+  getSeverityOverrides: () =>
+    apiClient.get<{ rules: SeverityRule[] }>('/settings/severity-overrides').then((r) => r.data),
+
+  setSeverityOverrides: (rules: SeverityRule[]) =>
+    apiClient.put('/settings/severity-overrides', rules).then((r) => r.data),
 
   getDatabaseInfo: () =>
     apiClient.get<DBTableInfo[]>('/settings/database').then((r) => r.data),

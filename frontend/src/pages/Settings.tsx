@@ -1,8 +1,10 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { Check, X, RefreshCw, Play, Pause, RotateCw, Plus, Trash2, Zap, Pencil, Search } from 'lucide-react'
 import { apiClient } from '@/api/client'
 import { settingsApi, managedArraysApi } from '@/api/settings'
+import type { SeverityRule } from '@/api/settings'
+import { severityBg } from '@/utils/formatters'
 import type { DBTableInfo, ManagedArray, ArrayVerifyResult, Vendor } from '@/api/types'
 import LogsTab from '@/pages/Logs'
 
@@ -145,6 +147,95 @@ function DatadogPagingCard() {
   )
 }
 
+// ── Severity overrides ────────────────────────────────────────────────────────
+
+const OV_FIELDS = ['event', 'component_type', 'component_name', 'any']
+const OV_OPS = ['contains', 'equals', 'startswith', 'regex']
+const OV_SEVS = ['critical', 'warning', 'info']
+const EMPTY_RULE: SeverityRule = { vendor: '', field: 'event', op: 'contains', value: '', severity: 'critical', enabled: true, note: '' }
+
+function SeverityOverridesCard() {
+  const qc = useQueryClient()
+  const { data } = useQuery({ queryKey: ['severity-overrides'], queryFn: () => settingsApi.getSeverityOverrides() })
+  const [rules, setRules] = useState<SeverityRule[]>([])
+  const [dirty, setDirty] = useState(false)
+  const [draft, setDraft] = useState<SeverityRule>(EMPTY_RULE)
+  const [saved, setSaved] = useState(false)
+
+  useEffect(() => { if (data?.rules && !dirty) setRules(data.rules) }, [data, dirty])
+
+  const { mutate: save, isPending } = useMutation({
+    mutationFn: () => settingsApi.setSeverityOverrides(rules),
+    onSuccess: () => { setDirty(false); setSaved(true); setTimeout(() => setSaved(false), 2500); qc.invalidateQueries({ queryKey: ['severity-overrides'] }) },
+  })
+
+  function addRule() {
+    if (!draft.value.trim()) return
+    setRules([...rules, { ...draft }]); setDraft({ ...EMPTY_RULE, vendor: draft.vendor, field: draft.field, op: draft.op, severity: draft.severity }); setDirty(true)
+  }
+  function removeRule(i: number) { setRules(rules.filter((_, idx) => idx !== i)); setDirty(true) }
+  function toggleRule(i: number) { setRules(rules.map((r, idx) => idx === i ? { ...r, enabled: !r.enabled } : r)); setDirty(true) }
+
+  const inp = 'bg-gray-800 border border-gray-700 text-xs text-gray-200 rounded px-2 py-1 focus:outline-none focus:border-brand-500'
+
+  return (
+    <div className="card space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-gray-300">Alert Severity Overrides</h3>
+        <p className="text-xs text-gray-500 mt-1">Re-map how an alert's severity is treated (e.g. Pure reports a controller reboot as <span className="text-gray-300">warning</span> — mark it <span className="text-red-400">critical</span>). Applied before storage and Datadog/Teams paging; takes effect within ~a minute.</p>
+      </div>
+
+      {/* Existing rules */}
+      {rules.length === 0 ? (
+        <p className="text-xs text-gray-600">No override rules.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-500 text-left">
+                <th className="py-1 pr-3">On</th><th className="pr-3">Vendor</th><th className="pr-3">Field</th><th className="pr-3">Match</th><th className="pr-3">Value</th><th className="pr-3">→ Severity</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((r, i) => (
+                <tr key={i} className="border-t border-gray-800">
+                  <td className="py-1.5 pr-3">
+                    <input type="checkbox" checked={r.enabled} onChange={() => toggleRule(i)} className="accent-brand-500" />
+                  </td>
+                  <td className="pr-3 text-gray-300">{r.vendor || 'any'}</td>
+                  <td className="pr-3 text-gray-400 font-mono">{r.field}</td>
+                  <td className="pr-3 text-gray-400">{r.op}</td>
+                  <td className="pr-3 text-gray-200 font-mono">{r.value}</td>
+                  <td className="pr-3"><span className={`px-1.5 py-0.5 rounded border ${severityBg(r.severity)}`}>{r.severity}</span></td>
+                  <td><button onClick={() => removeRule(i)} className="text-gray-500 hover:text-red-400"><Trash2 size={13} /></button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Add rule */}
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <input value={draft.vendor} onChange={(e) => setDraft({ ...draft, vendor: e.target.value })} placeholder="vendor (any)" className={`${inp} w-24`} />
+        <select value={draft.field} onChange={(e) => setDraft({ ...draft, field: e.target.value })} className={inp}>{OV_FIELDS.map(f => <option key={f}>{f}</option>)}</select>
+        <select value={draft.op} onChange={(e) => setDraft({ ...draft, op: e.target.value })} className={inp}>{OV_OPS.map(o => <option key={o}>{o}</option>)}</select>
+        <input value={draft.value} onChange={(e) => setDraft({ ...draft, value: e.target.value })} placeholder="value (e.g. reboot)" className={`${inp} w-40`} />
+        <span className="text-gray-600 text-xs">→</span>
+        <select value={draft.severity} onChange={(e) => setDraft({ ...draft, severity: e.target.value })} className={inp}>{OV_SEVS.map(sv => <option key={sv}>{sv}</option>)}</select>
+        <button onClick={addRule} disabled={!draft.value.trim()} className="px-2.5 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-200 rounded disabled:opacity-40 inline-flex items-center gap-1"><Plus size={12} />Add</button>
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <button onClick={() => save()} disabled={!dirty || isPending} className="px-4 py-1.5 text-sm bg-brand-600 hover:bg-brand-700 text-white rounded-lg disabled:opacity-50">
+          {isPending ? 'Saving…' : dirty ? 'Save rules' : 'Saved'}
+        </button>
+        {saved && <span className="text-xs text-green-400">Rules saved.</span>}
+      </div>
+    </div>
+  )
+}
+
 // ── Notifications tab ─────────────────────────────────────────────────────────
 
 function NotificationsTab({ settings }: { settings: any }) {
@@ -202,6 +293,7 @@ function NotificationsTab({ settings }: { settings: any }) {
       </div>
 
       <DatadogPagingCard />
+      <SeverityOverridesCard />
     </div>
   )
 }
