@@ -34,6 +34,9 @@ services:
     environment:
       # API-only role: do NOT run the scheduler/collectors in this process.
       - RUN_SCHEDULER=false
+      # Fail-fast statement timeout for the API: a slow query is cancelled at 30s
+      # instead of holding a worker ~a minute (prevents one heavy endpoint wedging it).
+      - DB_QUERY_TIMEOUT=${API_DB_QUERY_TIMEOUT:-30}
       - TZ=America/Denver
       # Pin the hash seed so Python's hash() is stable across restarts. Several
       # alert collectors derive message_id from hash(native_id); without this,
@@ -138,6 +141,9 @@ services:
     environment:
       # Collector role: this is the ONLY process that runs the scheduler.
       - RUN_SCHEDULER=true
+      # Collectors do heavy batch writes (44k-row volume upserts) — give the
+      # statement timeout more headroom than the API.
+      - DB_QUERY_TIMEOUT=${COLLECTOR_DB_QUERY_TIMEOUT:-120}
       - TZ=America/Denver
       - PYTHONHASHSEED=0
       - SQL_SERVER=usidcvsql0252.ctl.intranet
