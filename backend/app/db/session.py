@@ -73,14 +73,14 @@ def get_connection() -> pyodbc.Connection:
 
     if not settings.db_preping:
         conn = pyodbc.connect(conn_str, autocommit=False)
-        conn.timeout = 60  # increased from 30 for heavy queries
+        conn.timeout = settings.db_query_timeout  # per-query statement timeout (fail fast)
         return conn
 
     attempts = max(1, settings.db_conn_max_retries)
     last_err: Optional[Exception] = None
     for i in range(attempts):
         conn = pyodbc.connect(conn_str, autocommit=False)
-        conn.timeout = 60
+        conn.timeout = settings.db_query_timeout
         try:
             cur = conn.cursor()
             cur.execute("SELECT 1")

@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     # and replaces it with a fresh one, so a DB bounce self-heals.
     db_preping: bool = Field(default=True, alias="DB_PREPING")
     db_conn_max_retries: int = Field(default=3, alias="DB_CONN_MAX_RETRIES")
+    # Per-query statement timeout (seconds). A slow query is cancelled after this
+    # instead of holding an API worker for up to a minute — so one heavy endpoint
+    # can't saturate the worker and wedge the app. The API container runs a short
+    # fail-fast value; the collector (heavy batch writes) gets more headroom.
+    db_query_timeout: int = Field(default=60, alias="DB_QUERY_TIMEOUT")
 
     # Notifications
     teams_webhook_url: str = Field(default="", alias="TEAMS_WEBHOOK_URL")
