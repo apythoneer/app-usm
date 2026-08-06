@@ -128,12 +128,25 @@ def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
         return rows_to_dicts(cursor, cursor.fetchall())
 
 
+# Small in-memory TTL cache: the Capacity page auto-fetches this and react-query
+# refetches on focus/remount across users, so without a cache the (heavy) query
+# runs many times concurrently. Cache per `days` for 5 min.
+import time as _time
+_caphist_cache: dict = {}
+_CAPHIST_TTL = 300
+
+
 @router.get("/capacity-history")
 async def get_capacity_history(days: int = Query(default=90, ge=1, le=400)):
     """Per-array DAILY capacity history + array metadata, for the slicer-driven
     capacity view. One fetch; the frontend filters (vendor/group/model) and
-    re-aggregates the trends client-side. Excludes disabled arrays."""
-    return await run_in_threadpool(_fetch_capacity_history, days)
+    re-aggregates the trends client-side. Excludes disabled arrays. Cached 5 min."""
+    hit = _caphist_cache.get(days)
+    if hit and (_time.monotonic() - hit[0]) < _CAPHIST_TTL:
+        return hit[1]
+    result = await run_in_threadpool(_fetch_capacity_history, days)
+    _caphist_cache[days] = (_time.monotonic(), result)
+    return result
 
 
 def _fetch_capacity_history(days: int) -> dict:
@@ -154,21 +167,21 @@ def _fetch_capacity_history(days: int) -> dict:
             {"array_name": r[0], "vendor": r[1], "group": r[2], "model": r[3]}
             for r in cursor.fetchall()
         ]
-        # last reading per array per day within the window (ROW_NUMBER de-dupes the
-        # ~288 intra-day samples down to one daily point per array).
+        # One daily point per array via a GROUP BY aggregate (AVG over the day —
+        # capacity moves slowly, so the daily mean is a faithful trend value). This
+        # replaced a ROW_NUMBER window over the full ~1.3M-row 90-day set, which
+        # cost ~5s and — fired concurrently by the auto-loading Capacity page —
+        # blew past the query timeout and wedged the worker. GROUP BY streams the
+        # scan straight to ~one row per array/day with no giant sorted intermediate.
         cursor.execute(
-            f"""SELECT array_name, CONVERT(varchar(10), d, 23) AS day,
-                       capacity_used, capacity_total, capacity_used_pct
-                FROM (
-                    SELECT array_name, CAST(collected_at AS DATE) AS d,
-                           capacity_used, capacity_total, capacity_used_pct,
-                           ROW_NUMBER() OVER (PARTITION BY array_name, CAST(collected_at AS DATE)
-                                              ORDER BY collected_at DESC) AS rn
-                    FROM {SCHEMA}.metrics_history WITH (NOLOCK)
-                    WHERE collected_at >= DATEADD(DAY, -?, GETDATE())
-                      AND capacity_total > 0
-                ) t
-                WHERE t.rn = 1
+            f"""SELECT array_name, CONVERT(varchar(10), CAST(collected_at AS DATE), 23) AS day,
+                       AVG(CAST(capacity_used AS FLOAT))  AS used,
+                       AVG(CAST(capacity_total AS FLOAT)) AS total,
+                       AVG(capacity_used_pct)             AS pct
+                FROM {SCHEMA}.metrics_history WITH (NOLOCK)
+                WHERE collected_at >= DATEADD(DAY, -?, GETDATE())
+                  AND capacity_total > 0
+                GROUP BY array_name, CAST(collected_at AS DATE)
                 ORDER BY day, array_name""",
             (days,),
         )
