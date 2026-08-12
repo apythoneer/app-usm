@@ -70,6 +70,33 @@ class NetAppMetricsCollector(BaseCollector):
                 metrics["read_bandwidth"] = throughput.get("read", 0)
                 metrics["write_bandwidth"] = throughput.get("write", 0)
 
+        # Controller load — node CPU utilization. ONTAP exposes cumulative
+        # processor_utilization_raw/base counters; instantaneous CPU% is the delta
+        # between two samples ~1s apart, averaged across nodes.
+        try:
+            import time as _t
+
+            def _sample():
+                r = self.client.get(
+                    "cluster/nodes",
+                    params={"fields": "statistics.processor_utilization_raw,statistics.processor_utilization_base"},
+                )
+                return [(n.get("statistics", {}) or {}) for n in (r or {}).get("records", [])]
+
+            s1 = _sample()
+            _t.sleep(1)
+            s2 = _sample()
+            loads = []
+            for a, b in zip(s1, s2):
+                dr = (b.get("processor_utilization_raw", 0) or 0) - (a.get("processor_utilization_raw", 0) or 0)
+                db = (b.get("processor_utilization_base", 0) or 0) - (a.get("processor_utilization_base", 0) or 0)
+                if db > 0:
+                    loads.append(max(0.0, min(100.0, dr / db * 100.0)))
+            if loads:
+                metrics["controller_load"] = round(sum(loads) / len(loads), 1)
+        except Exception as e:
+            logger.debug(f"[{self.array_name}] controller-load sample failed: {e}")
+
         # Capacity — sum all aggregates
         aggs = self.client.get_all("storage/aggregates", params={
             "fields": "space",
@@ -191,7 +218,7 @@ class NetAppMetricsCollector(BaseCollector):
                         f"""UPDATE {SCHEMA}.metrics_current SET
                             vendor=?, purity_version=?, read_iops=?, write_iops=?,
                             read_latency_us=?, write_latency_us=?,
-                            read_bandwidth=?, write_bandwidth=?,
+                            read_bandwidth=?, write_bandwidth=?, controller_load=?,
                             capacity_total=?, capacity_used=?, capacity_used_pct=?,
                             data_reduction=?,
                             array_status=?, controller_status=?,
@@ -204,6 +231,7 @@ class NetAppMetricsCollector(BaseCollector):
                             data.get("read_iops", 0), data.get("write_iops", 0),
                             data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                             data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
+                            data.get("controller_load"),
                             data.get("capacity_total", 0), data.get("capacity_used", 0),
                             data.get("capacity_used_pct", 0),
                             data.get("data_reduction", 1),
@@ -219,18 +247,20 @@ class NetAppMetricsCollector(BaseCollector):
                         f"""INSERT INTO {SCHEMA}.metrics_current (
                             array_name, vendor, purity_version, read_iops, write_iops,
                             read_latency_us, write_latency_us, read_bandwidth, write_bandwidth,
+                            controller_load,
                             capacity_total, capacity_used, capacity_used_pct,
                             data_reduction,
                             array_status, controller_status,
                             uptime_seconds, uptime_str, last_reboot,
                             collected_at
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             array_name, "netapp",
                             data.get("purity_version", ""),
                             data.get("read_iops", 0), data.get("write_iops", 0),
                             data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                             data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
+                            data.get("controller_load"),
                             data.get("capacity_total", 0), data.get("capacity_used", 0),
                             data.get("capacity_used_pct", 0),
                             data.get("data_reduction", 1),
@@ -247,14 +277,15 @@ class NetAppMetricsCollector(BaseCollector):
                     f"""INSERT INTO {SCHEMA}.metrics_history (
                         array_name, vendor, collected_at,
                         read_latency_us, write_latency_us, read_iops, write_iops,
-                        read_bandwidth, write_bandwidth,
+                        read_bandwidth, write_bandwidth, controller_load,
                         capacity_total, capacity_used, capacity_used_pct, data_reduction
-                    ) VALUES (?, 'netapp', GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, 'netapp', GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         array_name,
                         data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                         data.get("read_iops", 0), data.get("write_iops", 0),
                         data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
+                        data.get("controller_load"),
                         data.get("capacity_total", 0), data.get("capacity_used", 0),
                         data.get("capacity_used_pct", 0), data.get("data_reduction", 1),
                     ),

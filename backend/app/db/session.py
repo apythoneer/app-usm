@@ -454,6 +454,8 @@ def init_database() -> None:
                 write_iops          INT,
                 read_bandwidth      BIGINT,
                 write_bandwidth     BIGINT,
+                controller_load     FLOAT,
+                queue_depth         FLOAT,
                 capacity_total      BIGINT,
                 capacity_used       BIGINT,
                 capacity_used_pct   FLOAT,
@@ -492,6 +494,8 @@ def init_database() -> None:
                 write_iops        FLOAT,
                 read_bandwidth    BIGINT,
                 write_bandwidth   BIGINT,
+                controller_load   FLOAT,
+                queue_depth       FLOAT,
                 capacity_total    BIGINT,
                 capacity_used     BIGINT,
                 capacity_used_pct FLOAT,
@@ -567,6 +571,18 @@ def init_database() -> None:
             )
             ALTER TABLE {SCHEMA}.messages ADD datadog_event_url NVARCHAR(300) NULL
         """)
+
+        # Migration: controller load metrics (controller_load = CPU/busy %, e.g.
+        # NetApp node CPU; queue_depth = load/pressure, e.g. Pure) on both metrics
+        # tables. Nullable — vendors that don't expose them just store NULL.
+        for _tbl in ("metrics_current", "metrics_history"):
+            for _col in ("controller_load", "queue_depth"):
+                cursor.execute(f"""
+                    IF OBJECT_ID('{SCHEMA}.{_tbl}') IS NOT NULL
+                       AND NOT EXISTS (SELECT * FROM sys.columns
+                           WHERE object_id = OBJECT_ID('{SCHEMA}.{_tbl}') AND name = '{_col}')
+                    ALTER TABLE {SCHEMA}.{_tbl} ADD {_col} FLOAT NULL
+                """)
 
         # Migration: recurrence tracking on messages.
         #   occurrence_count — bumped when a same-identity alert clears then

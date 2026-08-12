@@ -111,12 +111,16 @@ def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
             f"""SELECT array_name, collected_at,
                        read_iops, write_iops,
                        read_latency_us, write_latency_us,
+                       read_bandwidth, write_bandwidth,
+                       controller_load, queue_depth,
                        capacity_used_pct
                 FROM (
                     SELECT TOP {limit}
                         array_name, collected_at,
                         read_iops, write_iops,
                         read_latency_us, write_latency_us,
+                        read_bandwidth, write_bandwidth,
+                        controller_load, queue_depth,
                         capacity_used_pct
                     FROM {SCHEMA}.metrics_history
                     WHERE collected_at >= DATEADD(HOUR, -?, GETDATE())
