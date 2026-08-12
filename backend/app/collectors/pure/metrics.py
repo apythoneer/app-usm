@@ -55,6 +55,8 @@ class PureMetricsCollector(BaseCollector):
             metrics["write_latency_us"] = perf.get("usec_per_write_op", 0)
             metrics["read_bandwidth"] = perf.get("input_per_sec", 0)
             metrics["write_bandwidth"] = perf.get("output_per_sec", 0)
+            # Load/pressure indicator (Pure v1 REST has no controller CPU%).
+            metrics["queue_depth"] = perf.get("queue_depth", 0)
 
         # Capacity
         data = self.client.get("array", params={"space": "true"})
@@ -150,7 +152,7 @@ class PureMetricsCollector(BaseCollector):
                         f"""UPDATE {SCHEMA}.metrics_current SET
                             purity_version=?, read_iops=?, write_iops=?,
                             read_latency_us=?, write_latency_us=?,
-                            read_bandwidth=?, write_bandwidth=?,
+                            read_bandwidth=?, write_bandwidth=?, queue_depth=?,
                             capacity_total=?, capacity_used=?, capacity_used_pct=?,
                             data_reduction=?, total_reduction=?,
                             shared_space=?, snapshot_space=?, volume_space=?,
@@ -163,6 +165,7 @@ class PureMetricsCollector(BaseCollector):
                             data.get("read_iops", 0), data.get("write_iops", 0),
                             data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                             data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
+                            data.get("queue_depth"),
                             data.get("capacity_total", 0), data.get("capacity_used", 0),
                             data.get("capacity_used_pct", 0),
                             data.get("data_reduction", 1), data.get("total_reduction", 1),
@@ -179,17 +182,19 @@ class PureMetricsCollector(BaseCollector):
                         f"""INSERT INTO {SCHEMA}.metrics_current (
                             array_name, purity_version, read_iops, write_iops,
                             read_latency_us, write_latency_us, read_bandwidth, write_bandwidth,
+                            queue_depth,
                             capacity_total, capacity_used, capacity_used_pct,
                             data_reduction, total_reduction, shared_space, snapshot_space,
                             volume_space, controller_status,
                             uptime_seconds, uptime_str, last_reboot, reboot_count,
                             collected_at
-                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             array_name, data.get("purity_version", ""),
                             data.get("read_iops", 0), data.get("write_iops", 0),
                             data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                             data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
+                            data.get("queue_depth"),
                             data.get("capacity_total", 0), data.get("capacity_used", 0),
                             data.get("capacity_used_pct", 0),
                             data.get("data_reduction", 1), data.get("total_reduction", 1),
@@ -207,14 +212,15 @@ class PureMetricsCollector(BaseCollector):
                     f"""INSERT INTO {SCHEMA}.metrics_history (
                         array_name, collected_at,
                         read_latency_us, write_latency_us, read_iops, write_iops,
-                        read_bandwidth, write_bandwidth,
+                        read_bandwidth, write_bandwidth, queue_depth,
                         capacity_total, capacity_used, capacity_used_pct, data_reduction
-                    ) VALUES (?, GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         array_name,
                         data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                         data.get("read_iops", 0), data.get("write_iops", 0),
                         data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
+                        data.get("queue_depth"),
                         data.get("capacity_total", 0), data.get("capacity_used", 0),
                         data.get("capacity_used_pct", 0), data.get("data_reduction", 1),
                     ),
