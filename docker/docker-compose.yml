@@ -31,6 +31,10 @@ services:
     container_name: usm-backend
     hostname: usm-backend
     network_mode: host
+    # Multiple uvicorn workers: real concurrency so one slow query only ties up one
+    # worker of N, not the whole API. Safe because RUN_SCHEDULER=false here (no
+    # duplicate collection) and migrations are owned by the collector.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--timeout-keep-alive", "30", "--backlog", "100", "--workers", "${API_WORKERS:-4}"]
     environment:
       # API-only role: do NOT run the scheduler/collectors in this process.
       - RUN_SCHEDULER=false

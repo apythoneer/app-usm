@@ -51,9 +51,17 @@ async def lifespan(app: FastAPI):
     logger.info(f"Database connection: {'OK' if db_ok else 'FAILED'}")
 
     if db_ok:
-        init_database()
+        # Schema creation/migration is owned by the collector role (a single
+        # process). The API container now runs MULTIPLE uvicorn workers, so if each
+        # ran init_database() they would race the same ALTERs on startup. The
+        # collector runs migrations; API workers just consume the ready schema.
+        if settings.run_scheduler:
+            init_database()
         from app.api.v1.settings import load_persisted_settings
-        load_persisted_settings()
+        try:
+            load_persisted_settings()
+        except Exception as e:
+            logger.warning(f"load_persisted_settings skipped (schema not ready yet?): {e}")
 
     # Initialize SQLite read cache
     from app.db.cache import init_cache
