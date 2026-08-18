@@ -11,7 +11,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
-from app.db.session import get_db_cursor
+from app.db.session import get_db_cursor, update_extended_metrics
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -57,6 +57,48 @@ class PureMetricsCollector(BaseCollector):
             metrics["write_bandwidth"] = perf.get("output_per_sec", 0)
             # Load/pressure indicator (Pure v1 REST has no controller CPU%).
             metrics["queue_depth"] = perf.get("queue_depth", 0)
+
+        # ---- v2 metrics (best-effort; additive to v1) ---------------------------
+        # over-subscription: provisioned vs usable
+        sp = self.client.get_v2("arrays/space")
+        if sp:
+            space = (sp[0].get("space") or {})
+            metrics["total_provisioned"] = space.get("total_provisioned")
+        # latency breakdown (usec per op) — where latency originates
+        v2perf = self.client.get_v2("arrays/performance")
+        if v2perf:
+            p = v2perf[0]
+
+            def _avg(*keys):
+                vals = [p.get(k) for k in keys if p.get(k) is not None]
+                return round(sum(vals) / len(vals), 1) if vals else None
+
+            metrics["san_latency_us"] = _avg("san_usec_per_read_op", "san_usec_per_write_op")
+            metrics["queue_latency_us"] = _avg("queue_usec_per_read_op", "queue_usec_per_write_op")
+        # NIC utilization + port errors — per-interface throughput vs link speed
+        nperf = self.client.get_v2("network-interfaces/performance")
+        nifs = self.client.get_v2("network-interfaces")
+        if nperf and nifs:
+            speed_by = {n["name"]: n.get("speed") for n in nifs if n.get("speed")}
+            utils, errs = [], 0.0
+            for n in nperf:
+                for proto in ("eth", "fc"):
+                    d = n.get(proto) or {}
+                    rx = d.get("received_bytes_per_sec") or 0
+                    tx = d.get("transmitted_bytes_per_sec") or 0
+                    errs += sum(v for k, v in d.items() if "error" in k.lower() and isinstance(v, (int, float)))
+                    spd = speed_by.get(n.get("name"))
+                    if spd and (rx or tx):
+                        utils.append(min(100.0, (rx + tx) * 8.0 / spd * 100.0))
+            if utils:
+                metrics["nic_util_pct"] = round(max(utils), 1)   # busiest interface
+            metrics["nic_errors_per_sec"] = round(errs, 2)
+        # hardware temperature (max across components)
+        hw = self.client.get_v2("hardware")
+        if hw:
+            temps = [h.get("temperature") for h in hw if h.get("temperature") is not None]
+            if temps:
+                metrics["hw_temp_c"] = max(temps)
 
         # Capacity
         data = self.client.get("array", params={"space": "true"})
@@ -213,18 +255,26 @@ class PureMetricsCollector(BaseCollector):
                         array_name, collected_at,
                         read_latency_us, write_latency_us, read_iops, write_iops,
                         read_bandwidth, write_bandwidth, queue_depth,
+                        nic_util_pct, total_provisioned, san_latency_us,
+                        queue_latency_us, nic_errors_per_sec, hw_temp_c,
                         capacity_total, capacity_used, capacity_used_pct, data_reduction
-                    ) VALUES (?, GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         array_name,
                         data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                         data.get("read_iops", 0), data.get("write_iops", 0),
                         data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
                         data.get("queue_depth"),
+                        data.get("nic_util_pct"), data.get("total_provisioned"),
+                        data.get("san_latency_us"), data.get("queue_latency_us"),
+                        data.get("nic_errors_per_sec"), data.get("hw_temp_c"),
                         data.get("capacity_total", 0), data.get("capacity_used", 0),
                         data.get("capacity_used_pct", 0), data.get("data_reduction", 1),
                     ),
                 )
+
+                # Extended metrics onto metrics_current (supplementary upsert)
+                update_extended_metrics(cursor, SCHEMA, array_name, data)
 
             result.records_saved = 2  # current + history
             return True

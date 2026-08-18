@@ -17,6 +17,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logger = logging.getLogger("usm.pure.client")
 settings = get_settings()
 API_VERSION = "1.19"
+API_V2 = "2.17"  # v2 exposes NIC perf, provisioned/over-subscription, latency breakdown
 
 
 class PureClient:
@@ -25,7 +26,9 @@ class PureClient:
     def __init__(self, array_name: str):
         self.array_name = array_name
         self.base_url = f"https://{array_name}/api/{API_VERSION}"
+        self.v2_base = f"https://{array_name}/api/{API_V2}"
         self.session: Optional[requests.Session] = None
+        self._v2_token: Optional[str] = None
 
     def authenticate(self) -> bool:
         api_token = self._get_api_token()
@@ -66,6 +69,37 @@ class PureClient:
             logger.warning(f"[{self.array_name}] GET {endpoint} → HTTP {resp.status_code}")
         except Exception as e:
             logger.error(f"[{self.array_name}] GET {endpoint} error: {e}")
+        return None
+
+    def get_v2(self, endpoint: str, params: Dict = None) -> Optional[list]:
+        """GET a v2 REST resource (returns the `items` list) or None. Lazily logs
+        into v2 (POST /login with the api-token header -> x-auth-token) on first use;
+        the token is cached on the client. Best-effort: any failure returns None so
+        v2 metrics are additive and never break the v1 collection."""
+        if not self.session:
+            return None
+        if not self._v2_token:
+            try:
+                token = self._get_api_token()
+                r = self.session.post(f"{self.v2_base}/login", headers={"api-token": token}, timeout=10)
+                self._v2_token = r.headers.get("x-auth-token")
+            except Exception as e:
+                logger.debug(f"[{self.array_name}] v2 login failed: {e}")
+                return None
+        if not self._v2_token:
+            return None
+        try:
+            resp = self.session.get(
+                f"{self.v2_base}/{endpoint.lstrip('/')}",
+                headers={"x-auth-token": self._v2_token},
+                params=params, timeout=20,
+            )
+            if resp.status_code == 200:
+                j = resp.json()
+                return j.get("items", j) if isinstance(j, dict) else j
+            logger.debug(f"[{self.array_name}] v2 GET {endpoint} -> {resp.status_code}")
+        except Exception as e:
+            logger.debug(f"[{self.array_name}] v2 GET {endpoint} error: {e}")
         return None
 
     def disconnect(self):

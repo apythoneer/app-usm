@@ -112,7 +112,7 @@ def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
                        read_iops, write_iops,
                        read_latency_us, write_latency_us,
                        read_bandwidth, write_bandwidth,
-                       controller_load, queue_depth,
+                       controller_load, queue_depth, nic_util_pct, san_latency_us, queue_latency_us,
                        capacity_used_pct
                 FROM (
                     SELECT TOP {limit}
@@ -120,7 +120,7 @@ def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
                         read_iops, write_iops,
                         read_latency_us, write_latency_us,
                         read_bandwidth, write_bandwidth,
-                        controller_load, queue_depth,
+                        controller_load, queue_depth, nic_util_pct, san_latency_us, queue_latency_us,
                         capacity_used_pct
                     FROM {SCHEMA}.metrics_history
                     WHERE collected_at >= DATEADD(HOUR, -?, GETDATE())

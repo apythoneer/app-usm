@@ -164,6 +164,28 @@ def get_fast_cursor() -> Generator:
                 pass
 
 
+_EXT_METRIC_COLS = ("nic_util_pct", "total_provisioned", "san_latency_us",
+                    "queue_latency_us", "nic_errors_per_sec", "hw_temp_c")
+
+
+def update_extended_metrics(cursor, schema: str, array_name: str, data: dict) -> None:
+    """Supplementary UPDATE of the expansion metrics (NIC util, over-subscription,
+    latency breakdown, port errors, hw temp) onto metrics_current — so each vendor's
+    save() doesn't have to thread all of them through its main upsert. COALESCE keeps
+    the last-known value when a metric wasn't collected this cycle. Best-effort."""
+    if not any(c in data for c in _EXT_METRIC_COLS):
+        return
+    sets = ", ".join(f"{c}=COALESCE(?, {c})" for c in _EXT_METRIC_COLS)
+    vals = [data.get(c) for c in _EXT_METRIC_COLS]
+    try:
+        cursor.execute(
+            f"UPDATE {schema}.metrics_current SET {sets} WHERE array_name=?",
+            (*vals, array_name),
+        )
+    except Exception as e:
+        logger.debug(f"[{array_name}] extended-metrics update skipped: {e}")
+
+
 def would_shrink_below(
     cursor,
     table: str,
@@ -575,14 +597,24 @@ def init_database() -> None:
         # Migration: controller load metrics (controller_load = CPU/busy %, e.g.
         # NetApp node CPU; queue_depth = load/pressure, e.g. Pure) on both metrics
         # tables. Nullable — vendors that don't expose them just store NULL.
+        # controller_load/queue_depth + the metric-expansion set (NIC util, latency
+        # breakdown, port errors, hw temp) as FLOAT; total_provisioned as BIGINT.
+        _float_cols = ("controller_load", "queue_depth", "nic_util_pct",
+                       "san_latency_us", "queue_latency_us", "nic_errors_per_sec", "hw_temp_c")
         for _tbl in ("metrics_current", "metrics_history"):
-            for _col in ("controller_load", "queue_depth"):
+            for _col in _float_cols:
                 cursor.execute(f"""
                     IF OBJECT_ID('{SCHEMA}.{_tbl}') IS NOT NULL
                        AND NOT EXISTS (SELECT * FROM sys.columns
                            WHERE object_id = OBJECT_ID('{SCHEMA}.{_tbl}') AND name = '{_col}')
                     ALTER TABLE {SCHEMA}.{_tbl} ADD {_col} FLOAT NULL
                 """)
+            cursor.execute(f"""
+                IF OBJECT_ID('{SCHEMA}.{_tbl}') IS NOT NULL
+                   AND NOT EXISTS (SELECT * FROM sys.columns
+                       WHERE object_id = OBJECT_ID('{SCHEMA}.{_tbl}') AND name = 'total_provisioned')
+                ALTER TABLE {SCHEMA}.{_tbl} ADD total_provisioned BIGINT NULL
+            """)
 
         # Migration: recurrence tracking on messages.
         #   occurrence_count — bumped when a same-identity alert clears then
