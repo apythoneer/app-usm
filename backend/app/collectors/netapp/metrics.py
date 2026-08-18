@@ -12,7 +12,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.netapp.client import NetAppClient
-from app.db.session import get_db_cursor
+from app.db.session import get_db_cursor, update_extended_metrics
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
 
@@ -96,6 +96,33 @@ class NetAppMetricsCollector(BaseCollector):
                 metrics["controller_load"] = round(sum(loads) / len(loads), 1)
         except Exception as e:
             logger.debug(f"[{self.array_name}] controller-load sample failed: {e}")
+
+        # NIC utilization — ethernet port throughput vs link speed (two samples ~1s
+        # apart; throughput_raw is cumulative bytes). Only physical ports (speed>0).
+        try:
+            import time as _t
+
+            def _psample():
+                r = self.client.get("network/ethernet/ports", params={"fields": "name,speed,statistics"})
+                out = {}
+                for p in (r or {}).get("records", []):
+                    tp = ((p.get("statistics", {}) or {}).get("throughput_raw", {}) or {})
+                    out[p.get("name")] = (p.get("speed") or 0, tp.get("total") or 0)
+                return out
+
+            a = _psample()
+            _t.sleep(1)
+            b = _psample()
+            utils = []
+            for name, (speed, tot_a) in a.items():
+                _, tot_b = b.get(name, (0, 0))
+                if speed and tot_b and tot_a and tot_b >= tot_a:
+                    bytes_per_s = tot_b - tot_a
+                    utils.append(min(100.0, bytes_per_s / (speed / 8.0) * 100.0))
+            if utils:
+                metrics["nic_util_pct"] = round(max(utils), 1)
+        except Exception as e:
+            logger.debug(f"[{self.array_name}] nic-util sample failed: {e}")
 
         # Capacity — sum all aggregates
         aggs = self.client.get_all("storage/aggregates", params={
@@ -277,19 +304,22 @@ class NetAppMetricsCollector(BaseCollector):
                     f"""INSERT INTO {SCHEMA}.metrics_history (
                         array_name, vendor, collected_at,
                         read_latency_us, write_latency_us, read_iops, write_iops,
-                        read_bandwidth, write_bandwidth, controller_load,
+                        read_bandwidth, write_bandwidth, controller_load, nic_util_pct,
                         capacity_total, capacity_used, capacity_used_pct, data_reduction
-                    ) VALUES (?, 'netapp', GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    ) VALUES (?, 'netapp', GETDATE(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         array_name,
                         data.get("read_latency_us", 0), data.get("write_latency_us", 0),
                         data.get("read_iops", 0), data.get("write_iops", 0),
                         data.get("read_bandwidth", 0), data.get("write_bandwidth", 0),
-                        data.get("controller_load"),
+                        data.get("controller_load"), data.get("nic_util_pct"),
                         data.get("capacity_total", 0), data.get("capacity_used", 0),
                         data.get("capacity_used_pct", 0), data.get("data_reduction", 1),
                     ),
                 )
+
+                # Extended metrics onto metrics_current (supplementary upsert)
+                update_extended_metrics(cursor, SCHEMA, array_name, data)
 
             result.records_saved = 2  # current + history
             return True
