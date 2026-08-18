@@ -5,8 +5,21 @@ All config comes from environment variables / .env file
 
 from functools import lru_cache
 from typing import List
-from pydantic import Field
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class ExternalApiKey(BaseModel):
+    """A partner/consumer API key for the read-only external API surface.
+
+    Only the SHA-256 hash of the key is stored (never the plaintext), so the
+    .env / config on disk can't be used to call the API. Each key is scoped so a
+    consumer gets only what it needs, and can be revoked independently by
+    removing its entry.
+    """
+    name: str                       # human label for logs/audit, e.g. "capacity-portal"
+    key_sha256: str                 # lowercase hex sha256 of the plaintext key
+    scopes: List[str] = []          # e.g. ["hosts:read", "volumes:read"]; "*" = all
 
 
 class Settings(BaseSettings):
@@ -41,6 +54,12 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="CHANGE_ME_BEFORE_PRODUCTION_USE", alias="SECRET_KEY")
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 480  # 8 hours
+
+    # External (partner) read-only API — /api/ext/v1. Disabled until at least one
+    # key is configured. Provide as a JSON list of {name, key_sha256, scopes} via
+    # the EXTERNAL_API_KEYS env var; mint entries with backend/scripts/gen_external_key.py.
+    external_api_keys: List[ExternalApiKey] = Field(default_factory=list, alias="EXTERNAL_API_KEYS")
+    external_api_rate_limit: int = Field(default=120, alias="EXTERNAL_API_RATE_LIMIT")  # req/min per key
 
     # SQL Server
     sql_server: str = Field(default="usidcvsql0252.ctl.intranet", alias="SQL_SERVER")
