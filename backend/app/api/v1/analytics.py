@@ -132,6 +132,101 @@ def _fetch_fleet_history(hours: int, limit: int) -> List[dict]:
         return rows_to_dicts(cursor, cursor.fetchall())
 
 
+# ---------------------------------------------------------------------------
+# Fleet TREND — server-side time-bucketed aggregate for the interactive
+# Analytics chart. GROUP BY a floored time bucket per array (same streaming
+# GROUP-BY pattern as capacity-history) so we avoid the two problems the old
+# raw fleet-history had for charting:
+#   1. The TOP-N row cap silently truncated 24h/7d "all arrays" to the last few
+#      hours (~90 arrays * 288 samples/day > cap).
+#   2. Each array collected at slightly different timestamps, so a client pivot
+#      keyed on exact collected_at produced one-array-per-row (all others NULL)
+#      and the lines never connected.
+# Bucketing on the server aligns every array onto a shared time grid AND shrinks
+# the payload to (arrays * buckets) aggregated rows.
+# ---------------------------------------------------------------------------
+def _bucket_minutes_for(hours: int) -> int:
+    if hours <= 6:
+        return 5
+    if hours <= 24:
+        return 15
+    if hours <= 48:
+        return 30
+    if hours <= 168:
+        return 60
+    return 180
+
+
+_TREND_METRIC_COLS = (
+    "read_iops", "write_iops",
+    "read_latency_us", "write_latency_us",
+    "read_bandwidth", "write_bandwidth",
+    "controller_load", "nic_util_pct",
+    "san_latency_us", "queue_latency_us",
+    "capacity_used_pct",
+)
+
+_fleet_trend_cache: dict = {}
+_FLEET_TREND_TTL = 60
+
+
+@router.get("/fleet-trend")
+async def get_fleet_trend(
+    hours: int = Query(default=24, ge=1, le=720),
+    bucket_min: int = Query(default=0, ge=0, le=1440),
+):
+    """Time-bucketed fleet metrics for the interactive Analytics chart. One AVG
+    aggregate per array per bucket, across every metric family. Cached 60s per
+    (hours, bucket)."""
+    bucket = bucket_min or _bucket_minutes_for(hours)
+    key = (hours, bucket)
+    hit = _fleet_trend_cache.get(key)
+    if hit and (_time.time() - hit[0]) < _FLEET_TREND_TTL:
+        return hit[1]
+    rows = await run_in_threadpool(_fetch_fleet_trend, hours, bucket)
+    arrays = sorted({r["array_name"] for r in rows})
+    payload = {
+        "hours": hours,
+        "bucket_min": bucket,
+        "arrays": arrays,
+        "metrics": list(_TREND_METRIC_COLS),
+        "data_points": len(rows),
+        "data": rows,
+    }
+    _fleet_trend_cache[key] = (_time.time(), payload)
+    return payload
+
+
+def _fetch_fleet_trend(hours: int, bucket: int) -> List[dict]:
+    # Floor collected_at to `bucket`-minute boundaries: minutes-since-datetime0
+    # integer-divided by bucket, times bucket, added back onto datetime 0.
+    #
+    # `bucket` is INLINED as an int literal (not a parameter). SQL Server matches
+    # the SELECT bucket expression to the GROUP BY one textually; two positional
+    # `?` markers aren't considered the same expression, so a parameterized bucket
+    # trips "collected_at is invalid in the select list". `bucket` is a bounded
+    # int from a range-checked Query / our own table, so inlining is injection-safe.
+    bucket = max(1, int(bucket))
+    bucket_expr = (
+        f"DATEADD(MINUTE, (DATEDIFF(MINUTE, 0, collected_at) / {bucket}) * {bucket}, 0)"
+    )
+    avg_cols = ", ".join(
+        f"AVG(CAST({c} AS FLOAT)) AS {c}" for c in _TREND_METRIC_COLS
+    )
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            f"""SELECT array_name,
+                       {bucket_expr} AS bucket,
+                       {avg_cols}
+                FROM {SCHEMA}.metrics_history WITH (NOLOCK)
+                WHERE collected_at >= DATEADD(HOUR, -?, GETDATE())
+                GROUP BY array_name, {bucket_expr}
+                ORDER BY bucket ASC""",
+            (hours,),
+        )
+        return rows_to_dicts(cursor, cursor.fetchall())
+
+
 # Small in-memory TTL cache: the Capacity page auto-fetches this and react-query
 # refetches on focus/remount across users, so without a cache the (heavy) query
 # runs many times concurrently. Cache per `days` for 5 min.

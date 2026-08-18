@@ -1,6 +1,6 @@
 import { apiClient } from './client'
 import type {
-  ArraySummary, ArrayMetrics, ArrayTableRow, FleetStats, FleetHistoryResponse,
+  ArraySummary, ArrayMetrics, ArrayTableRow, FleetStats, FleetHistoryResponse, FleetTrendResponse,
   CapacityBreakdown, ArrayGrowth, DailyTrendResponse, TopGrowersResponse, CapacityHistoryResponse,
   VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse, CapacityForecast,
 } from './types'
@@ -41,6 +41,11 @@ export const arraysApi = {
   fleetHistory: (hours = 24) =>
     apiClient
       .get<FleetHistoryResponse>('/analytics/fleet-history', { params: { hours } })
+      .then((r) => r.data),
+
+  fleetTrend: (hours = 24) =>
+    apiClient
+      .get<FleetTrendResponse>('/analytics/fleet-trend', { params: { hours } })
       .then((r) => r.data),
 
   capacityBreakdown: () =>

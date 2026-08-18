@@ -131,6 +131,13 @@ export interface MetricsHistoryPoint {
   write_iops?: number
   read_latency_us?: number
   write_latency_us?: number
+  read_bandwidth?: number
+  write_bandwidth?: number
+  controller_load?: number
+  queue_depth?: number
+  nic_util_pct?: number
+  san_latency_us?: number
+  queue_latency_us?: number
   capacity_used_pct?: number
 }
 
@@ -139,6 +146,32 @@ export interface FleetHistoryResponse {
   arrays: string[]
   data_points: number
   data: MetricsHistoryPoint[]
+}
+
+// One AVG-aggregated point per array per time bucket (server-bucketed).
+export interface TrendPoint {
+  array_name: string
+  bucket: string
+  read_iops?: number | null
+  write_iops?: number | null
+  read_latency_us?: number | null
+  write_latency_us?: number | null
+  read_bandwidth?: number | null
+  write_bandwidth?: number | null
+  controller_load?: number | null
+  nic_util_pct?: number | null
+  san_latency_us?: number | null
+  queue_latency_us?: number | null
+  capacity_used_pct?: number | null
+}
+
+export interface FleetTrendResponse {
+  hours: number
+  bucket_min: number
+  arrays: string[]
+  metrics: string[]
+  data_points: number
+  data: TrendPoint[]
 }
 
 export interface DBTableInfo {

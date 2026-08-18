@@ -4,10 +4,10 @@ import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
   Legend, ResponsiveContainer,
 } from 'recharts'
-import { ChevronDown, ChevronRight, Filter, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, X } from 'lucide-react'
 import { arraysApi } from '@/api/arrays'
-import type { ArraySummary, MetricsHistoryPoint } from '@/api/types'
-import { formatIOPS, formatLatency } from '@/utils/formatters'
+import type { ArraySummary, TrendPoint } from '@/api/types'
+import { formatIOPS, formatLatency, formatBytes, formatPct } from '@/utils/formatters'
 
 // 20-color palette for multi-array lines
 const LINE_COLORS = [
@@ -22,6 +22,7 @@ const TIME_RANGES = [
   { h: 24, label: '24h' },
   { h: 48, label: '48h' },
   { h: 168, label: '7d' },
+  { h: 720, label: '30d' },
 ]
 
 const TOP_N_OPTIONS = [
@@ -31,19 +32,60 @@ const TOP_N_OPTIONS = [
   { n: 0, label: 'All' },
 ]
 
-function timeLabel(v: string, hours: number) {
-  const d = new Date(v)
+const bwPerSec = (v: number) => `${formatBytes(v)}/s`
+
+// A metric = how to pull a single number out of a bucketed TrendPoint + how to
+// render it. `accessor` returns null when the array/vendor doesn't report it,
+// so sparse metrics (e.g. controller_load is NetApp-only) simply leave gaps that
+// `connectNulls` bridges.
+type Metric = {
+  key: string
+  label: string
+  group: string
+  accessor: (p: TrendPoint) => number | null
+  format: (v: number) => string
+  hint?: string
+}
+
+const METRICS: Metric[] = [
+  { key: 'iops', label: 'Total IOPS', group: 'Performance',
+    accessor: (p) => (p.read_iops ?? 0) + (p.write_iops ?? 0), format: formatIOPS },
+  { key: 'read_lat', label: 'Read Latency', group: 'Performance',
+    accessor: (p) => p.read_latency_us ?? null, format: formatLatency },
+  { key: 'write_lat', label: 'Write Latency', group: 'Performance',
+    accessor: (p) => p.write_latency_us ?? null, format: formatLatency },
+  { key: 'bandwidth', label: 'Bandwidth', group: 'Performance',
+    accessor: (p) => (p.read_bandwidth ?? 0) + (p.write_bandwidth ?? 0), format: bwPerSec },
+  { key: 'controller_load', label: 'Controller Load', group: 'Controller',
+    accessor: (p) => p.controller_load ?? null, format: formatPct, hint: 'NetApp CPU %' },
+  { key: 'nic_util', label: 'NIC Utilization', group: 'Controller',
+    accessor: (p) => p.nic_util_pct ?? null, format: formatPct, hint: 'Pure + NetApp' },
+  { key: 'san_lat', label: 'SAN Latency', group: 'Latency breakdown',
+    accessor: (p) => p.san_latency_us ?? null, format: formatLatency, hint: 'Pure' },
+  { key: 'queue_lat', label: 'Queue Latency', group: 'Latency breakdown',
+    accessor: (p) => p.queue_latency_us ?? null, format: formatLatency, hint: 'Pure' },
+  { key: 'capacity_pct', label: 'Capacity Used', group: 'Capacity',
+    accessor: (p) => p.capacity_used_pct ?? null, format: formatPct },
+]
+
+const METRIC_GROUPS = [...new Set(METRICS.map((m) => m.group))]
+
+function timeLabel(ms: number, hours: number) {
+  const d = new Date(ms)
   if (hours <= 48) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 export default function Analytics() {
   const [hours, setHours] = useState(24)
+  const [metricKey, setMetricKey] = useState('iops')
   const [vendorFilter, setVendorFilter] = useState('')
   const [groupFilter, setGroupFilter] = useState('')
   const [topN, setTopN] = useState(10)
   const [arrayFilter, setArrayFilter] = useState<string[]>([])
   const [showArrays, setShowArrays] = useState(false)
+
+  const metric = METRICS.find((m) => m.key === metricKey) ?? METRICS[0]
 
   // Array list for filters
   const { data: arrays = [] } = useQuery<ArraySummary[]>({
@@ -51,94 +93,98 @@ export default function Analytics() {
     queryFn: () => arraysApi.list(),
   })
 
-  // Fleet-wide history — all arrays in one query
-  const { data: histResp, isLoading } = useQuery({
-    queryKey: ['fleet-history', hours],
-    queryFn: () => arraysApi.fleetHistory(hours),
+  // Fleet-wide TREND — server-bucketed, all arrays in one query
+  const { data: trend, isLoading } = useQuery({
+    queryKey: ['fleet-trend', hours],
+    queryFn: () => arraysApi.fleetTrend(hours),
     refetchInterval: 60_000,
   })
 
-  const allArrayNames: string[] = histResp?.arrays ?? []
-  const rawData: MetricsHistoryPoint[] = histResp?.data ?? []
+  const allArrayNames: string[] = trend?.arrays ?? []
+  const rawData: TrendPoint[] = trend?.data ?? []
+  const bucketMin = trend?.bucket_min ?? 0
 
-  // Unique vendors and groups for filter dropdowns
   const vendors = [...new Set(arrays.map((a) => a.vendor))].sort()
   const groups  = [...new Set(arrays.filter((a) => a.group).map((a) => a.group!))].sort()
 
-  // Compute total IOPS per array for Top-N ranking
-  const arrayIOPSRank = useMemo(() => {
-    const totals: Record<string, number> = {}
+  // Rank arrays by average of the SELECTED metric (drives Top-N).
+  const metricRank = useMemo(() => {
+    const agg: Record<string, { sum: number; n: number }> = {}
     rawData.forEach((pt) => {
-      const iops = (pt.read_iops ?? 0) + (pt.write_iops ?? 0)
-      totals[pt.array_name] = (totals[pt.array_name] ?? 0) + iops
+      const v = metric.accessor(pt)
+      if (v == null) return
+      const a = (agg[pt.array_name] ??= { sum: 0, n: 0 })
+      a.sum += v; a.n += 1
     })
-    return Object.entries(totals)
+    return Object.entries(agg)
+      .map(([name, { sum, n }]) => [name, n ? sum / n : 0] as const)
       .sort(([, a], [, b]) => b - a)
       .map(([name]) => name)
-  }, [rawData])
+  }, [rawData, metric])
 
-  // Build set of visible array names after filters
   const visibleArrays = useMemo(() => {
     let visible = allArrayNames
     if (vendorFilter) {
-      const vendorSet = new Set(arrays.filter((a) => a.vendor === vendorFilter).map((a) => a.array_name))
-      visible = visible.filter((n) => vendorSet.has(n))
+      const set = new Set(arrays.filter((a) => a.vendor === vendorFilter).map((a) => a.array_name))
+      visible = visible.filter((n) => set.has(n))
     }
     if (groupFilter) {
-      const groupSet = new Set(arrays.filter((a) => a.group === groupFilter).map((a) => a.array_name))
-      visible = visible.filter((n) => groupSet.has(n))
+      const set = new Set(arrays.filter((a) => a.group === groupFilter).map((a) => a.array_name))
+      visible = visible.filter((n) => set.has(n))
     }
     if (arrayFilter.length > 0) {
       const sel = new Set(arrayFilter)
       visible = visible.filter((n) => sel.has(n))
     }
-    // Apply Top-N limit (by IOPS rank)
     if (topN > 0 && arrayFilter.length === 0) {
-      const topSet = new Set(arrayIOPSRank.slice(0, topN))
-      visible = visible.filter((n) => topSet.has(n))
+      const top = new Set(metricRank.slice(0, topN))
+      visible = visible.filter((n) => top.has(n))
     }
     return visible
-  }, [allArrayNames, arrays, vendorFilter, groupFilter, arrayFilter, topN, arrayIOPSRank])
+  }, [allArrayNames, arrays, vendorFilter, groupFilter, arrayFilter, topN, metricRank])
 
-  // Pivot data: [{collected_at, arrayName: value, ...}]
-  const iopsData = useMemo(() => {
-    const byTime: Record<string, Record<string, number>> = {}
+  // Pivot: shared bucket grid → { t: ms, [array]: value }. The server already
+  // aggregated one row per (array, bucket), so this is a straight assignment —
+  // every array lands on the same x-positions and the lines connect.
+  const chartData = useMemo(() => {
+    const visSet = new Set(visibleArrays)
+    const byBucket: Record<number, Record<string, number>> = {}
     rawData.forEach((pt) => {
-      if (!visibleArrays.includes(pt.array_name)) return
-      const t = pt.collected_at
-      if (!byTime[t]) byTime[t] = { collected_at: t as unknown as number }
-      byTime[t][pt.array_name] = (pt.read_iops ?? 0) + (pt.write_iops ?? 0)
+      if (!visSet.has(pt.array_name)) return
+      const v = metric.accessor(pt)
+      if (v == null) return
+      const t = new Date(pt.bucket).getTime()
+      ;(byBucket[t] ??= { t } as Record<string, number>)[pt.array_name] = v
     })
-    return Object.values(byTime).sort((a, b) =>
-      String(a.collected_at).localeCompare(String(b.collected_at))
-    )
-  }, [rawData, visibleArrays])
+    return Object.values(byBucket).sort((a, b) => (a.t as number) - (b.t as number))
+  }, [rawData, visibleArrays, metric])
 
-  const latData = useMemo(() => {
-    const byTime: Record<string, Record<string, number>> = {}
-    rawData.forEach((pt) => {
-      if (!visibleArrays.includes(pt.array_name)) return
-      const t = pt.collected_at
-      if (!byTime[t]) byTime[t] = { collected_at: t as unknown as number }
-      if (pt.read_latency_us != null) byTime[t][pt.array_name] = pt.read_latency_us
+  // Series actually carrying data for this metric (drop empty ones from legend).
+  const activeSeries = useMemo(() => {
+    const present = new Set<string>()
+    chartData.forEach((row) => {
+      Object.keys(row).forEach((k) => { if (k !== 't') present.add(k) })
     })
-    return Object.values(byTime).sort((a, b) =>
-      String(a.collected_at).localeCompare(String(b.collected_at))
-    )
-  }, [rawData, visibleArrays])
+    return visibleArrays.filter((n) => present.has(n))
+  }, [chartData, visibleArrays])
 
-  const writeLatData = useMemo(() => {
-    const byTime: Record<string, Record<string, number>> = {}
-    rawData.forEach((pt) => {
-      if (!visibleArrays.includes(pt.array_name)) return
-      const t = pt.collected_at
-      if (!byTime[t]) byTime[t] = { collected_at: t as unknown as number }
-      if (pt.write_latency_us != null) byTime[t][pt.array_name] = pt.write_latency_us
-    })
-    return Object.values(byTime).sort((a, b) =>
-      String(a.collected_at).localeCompare(String(b.collected_at))
-    )
-  }, [rawData, visibleArrays])
+  // Fleet snapshot for the selected metric (latest bucket).
+  const snapshot = useMemo(() => {
+    const last = chartData[chartData.length - 1]
+    if (!last) return null
+    const entries = activeSeries
+      .map((n) => [n, last[n] as number] as const)
+      .filter(([, v]) => typeof v === 'number')
+    if (entries.length === 0) return null
+    const vals = entries.map(([, v]) => v)
+    const peak = entries.reduce((m, e) => (e[1] > m[1] ? e : m))
+    return {
+      avg: vals.reduce((s, v) => s + v, 0) / vals.length,
+      peak: peak[1],
+      peakArray: peak[0],
+      count: entries.length,
+    }
+  }, [chartData, activeSeries])
 
   function toggleArray(name: string) {
     setArrayFilter((prev) =>
@@ -150,22 +196,53 @@ export default function Analytics() {
 
   const tooltipStyle = {
     contentStyle: { background: '#111827', border: '1px solid #374151', borderRadius: 8, fontSize: 12 },
-    labelFormatter: (v: string) => timeLabel(v, hours),
+    labelFormatter: (v: number) => timeLabel(v, hours),
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-white">Analytics</h2>
+        <div>
+          <h2 className="text-xl font-semibold text-white">Analytics</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Fleet metric trends · {bucketMin ? `${bucketMin}-min buckets` : 'live'}
+          </p>
+        </div>
         <span className="text-xs text-gray-500">
-          {visibleArrays.length} of {allArrayNames.length} arrays · {rawData.length.toLocaleString()} data points
+          {activeSeries.length} of {allArrayNames.length} arrays · {rawData.length.toLocaleString()} points
         </span>
       </div>
 
-      {/* Compact filter toolbar */}
+      {/* Metric selector — grouped */}
+      <div className="card p-3">
+        <div className="flex flex-wrap gap-x-4 gap-y-2">
+          {METRIC_GROUPS.map((g) => (
+            <div key={g} className="flex flex-col gap-1">
+              <span className="text-[10px] uppercase tracking-wide text-gray-600">{g}</span>
+              <div className="flex flex-wrap gap-1">
+                {METRICS.filter((m) => m.group === g).map((m) => (
+                  <button
+                    key={m.key}
+                    onClick={() => setMetricKey(m.key)}
+                    title={m.hint}
+                    className={`text-xs px-3 py-1.5 rounded border transition-colors ${
+                      metricKey === m.key
+                        ? 'bg-brand-600/20 text-brand-400 border-brand-500/40'
+                        : 'text-gray-400 border-gray-700 hover:border-gray-500'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Filter toolbar */}
       <div className="card p-3">
         <div className="flex flex-wrap gap-2 items-center">
-          {/* Time range */}
           <div className="flex gap-1">
             {TIME_RANGES.map(({ h, label }) => (
               <button
@@ -184,7 +261,6 @@ export default function Analytics() {
 
           <span className="text-gray-700">|</span>
 
-          {/* Top-N selector */}
           <div className="flex gap-1">
             {TOP_N_OPTIONS.map(({ n, label }) => (
               <button
@@ -203,7 +279,6 @@ export default function Analytics() {
 
           <span className="text-gray-700">|</span>
 
-          {/* Vendor filter */}
           {vendors.length > 1 && (
             <select
               value={vendorFilter}
@@ -215,7 +290,6 @@ export default function Analytics() {
             </select>
           )}
 
-          {/* Group filter */}
           {groups.length > 0 && (
             <select
               value={groupFilter}
@@ -227,7 +301,6 @@ export default function Analytics() {
             </select>
           )}
 
-          {/* Clear filters */}
           {hasFilters && (
             <button
               onClick={() => { setVendorFilter(''); setGroupFilter(''); setArrayFilter([]) }}
@@ -237,7 +310,6 @@ export default function Analytics() {
             </button>
           )}
 
-          {/* Toggle array chips */}
           <button
             onClick={() => setShowArrays(!showArrays)}
             className="text-xs text-gray-500 hover:text-gray-300 flex items-center gap-1 ml-auto"
@@ -247,12 +319,11 @@ export default function Analytics() {
           </button>
         </div>
 
-        {/* Collapsible array chips */}
         {showArrays && allArrayNames.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mt-3 pt-3 border-t border-gray-800">
             {allArrayNames.map((name, i) => {
               const active = arrayFilter.length === 0 || arrayFilter.includes(name)
-              const inTopN = topN === 0 || arrayIOPSRank.indexOf(name) < topN
+              const inTopN = topN === 0 || metricRank.indexOf(name) < topN
               return (
                 <button
                   key={name}
@@ -276,103 +347,74 @@ export default function Analytics() {
         )}
       </div>
 
-      {isLoading && <p className="text-gray-500 text-sm">Loading history…</p>}
-
-      {!isLoading && iopsData.length === 0 && (
-        <div className="card text-center py-12 text-gray-500">
-          No history data yet — data appears once collectors have run at least once.
+      {/* Snapshot stat cards for the selected metric */}
+      {snapshot && (
+        <div className="grid grid-cols-3 gap-3">
+          <div className="card py-3">
+            <p className="text-[10px] uppercase tracking-wide text-gray-600">Fleet avg · {metric.label}</p>
+            <p className="text-lg font-semibold text-white mt-0.5">{metric.format(snapshot.avg)}</p>
+          </div>
+          <div className="card py-3">
+            <p className="text-[10px] uppercase tracking-wide text-gray-600">Peak</p>
+            <p className="text-lg font-semibold text-white mt-0.5">{metric.format(snapshot.peak)}</p>
+            <p className="text-[10px] text-gray-500 truncate">{snapshot.peakArray}</p>
+          </div>
+          <div className="card py-3">
+            <p className="text-[10px] uppercase tracking-wide text-gray-600">Reporting</p>
+            <p className="text-lg font-semibold text-white mt-0.5">{snapshot.count}</p>
+            <p className="text-[10px] text-gray-500">arrays with data</p>
+          </div>
         </div>
       )}
 
-      {iopsData.length > 0 && (
-        <div className="space-y-6">
-          {/* IOPS — full width */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-gray-300 mb-4">Total IOPS (Read + Write)</h3>
-            <ResponsiveContainer width="100%" height={260}>
-              <LineChart data={iopsData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                <XAxis
-                  dataKey="collected_at"
-                  tick={{ fill: '#6b7280', fontSize: 10 }}
-                  tickFormatter={(v) => timeLabel(v, hours)}
+      {isLoading && <p className="text-gray-500 text-sm">Loading trend…</p>}
+
+      {!isLoading && chartData.length === 0 && (
+        <div className="card text-center py-12 text-gray-500">
+          No <span className="text-gray-300">{metric.label}</span> data in this range.
+          {metric.hint && <span className="block text-xs mt-1">Reported by: {metric.hint}.</span>}
+        </div>
+      )}
+
+      {chartData.length > 0 && (
+        <div className="card">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-300">{metric.label}</h3>
+            {metric.hint && <span className="text-[11px] text-gray-600">{metric.hint}</span>}
+          </div>
+          <ResponsiveContainer width="100%" height={380}>
+            <LineChart data={chartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis
+                dataKey="t"
+                type="number"
+                scale="time"
+                domain={['dataMin', 'dataMax']}
+                tick={{ fill: '#6b7280', fontSize: 10 }}
+                tickFormatter={(v) => timeLabel(v, hours)}
+              />
+              <YAxis
+                tick={{ fill: '#6b7280', fontSize: 10 }}
+                tickFormatter={metric.format}
+                width={64}
+              />
+              <Tooltip {...tooltipStyle} formatter={(v: number) => [metric.format(v), '']} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              {activeSeries.map((name) => (
+                <Line
+                  key={name}
+                  type="monotone"
+                  dataKey={name}
+                  stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
+                  dot={false}
+                  name={name}
+                  strokeWidth={1.5}
+                  connectNulls
+                  isAnimationActive={false}
                 />
-                <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatIOPS} width={55} />
-                <Tooltip {...tooltipStyle} formatter={(v: number) => [formatIOPS(v), '']} />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                {visibleArrays.map((name) => (
-                  <Line
-                    key={name}
-                    type="monotone"
-                    dataKey={name}
-                    stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
-                    dot={false}
-                    name={name}
-                    strokeWidth={1.5}
-                  />
-                ))}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Latency — Read & Write side by side */}
-          <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-            <div className="card">
-              <h3 className="text-sm font-semibold text-gray-300 mb-4">Read Latency</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={latData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis
-                    dataKey="collected_at"
-                    tick={{ fill: '#6b7280', fontSize: 10 }}
-                    tickFormatter={(v) => timeLabel(v, hours)}
-                  />
-                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatLatency} width={60} />
-                  <Tooltip {...tooltipStyle} formatter={(v: number) => [formatLatency(v), '']} />
-                  <Legend wrapperStyle={{ fontSize: 10 }} />
-                  {visibleArrays.map((name) => (
-                    <Line
-                      key={name}
-                      type="monotone"
-                      dataKey={name}
-                      stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
-                      dot={false}
-                      name={name}
-                      strokeWidth={1.5}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-
-            <div className="card">
-              <h3 className="text-sm font-semibold text-gray-300 mb-4">Write Latency</h3>
-              <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={writeLatData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
-                  <XAxis
-                    dataKey="collected_at"
-                    tick={{ fill: '#6b7280', fontSize: 10 }}
-                    tickFormatter={(v) => timeLabel(v, hours)}
-                  />
-                  <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} tickFormatter={formatLatency} width={60} />
-                  <Tooltip {...tooltipStyle} formatter={(v: number) => [formatLatency(v), '']} />
-                  <Legend wrapperStyle={{ fontSize: 10 }} />
-                  {visibleArrays.map((name) => (
-                    <Line
-                      key={name}
-                      type="monotone"
-                      dataKey={name}
-                      stroke={LINE_COLORS[allArrayNames.indexOf(name) % LINE_COLORS.length]}
-                      dot={false}
-                      name={name}
-                      strokeWidth={1.5}
-                    />
-                  ))}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
         </div>
       )}
     </div>
