@@ -58,6 +58,11 @@ services:
       - PURE_CRED_KEY=PureStorage
       # JWT auth (not enforced yet — set a real value before Phase 3)
       - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_BEFORE_PRODUCTION}
+      # External partner read-only API (/api/ext/v1). JSON list of
+      # {name, key_sha256, scopes}; empty => surface disabled. Mint entries with
+      # backend/scripts/gen_external_key.py. Only hashes are stored here.
+      - EXTERNAL_API_KEYS=${EXTERNAL_API_KEYS:-[]}
+      - EXTERNAL_API_RATE_LIMIT=${EXTERNAL_API_RATE_LIMIT:-120}
       # Notifications (set TEAMS_WEBHOOK_URL in .env to enable)
       - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
       # Datadog Event Management — the alert paging path. API key is resolved from
@@ -158,6 +163,11 @@ services:
       - SQL_CRED_KEY=SQLServerDB
       - PURE_CRED_KEY=PureStorage
       - SECRET_KEY=${SECRET_KEY:-CHANGE_ME_BEFORE_PRODUCTION}
+      # External partner read-only API (/api/ext/v1). JSON list of
+      # {name, key_sha256, scopes}; empty => surface disabled. Mint entries with
+      # backend/scripts/gen_external_key.py. Only hashes are stored here.
+      - EXTERNAL_API_KEYS=${EXTERNAL_API_KEYS:-[]}
+      - EXTERNAL_API_RATE_LIMIT=${EXTERNAL_API_RATE_LIMIT:-120}
       - TEAMS_WEBHOOK_URL=${TEAMS_WEBHOOK_URL:-}
       - DATADOG_ENABLED=${DATADOG_ENABLED:-false}
       - DATADOG_CRED_KEY=${DATADOG_CRED_KEY:-Datadog}

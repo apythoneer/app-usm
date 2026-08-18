@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.api.v1.router import router as api_v1_router
+from app.api.ext.router import router as ext_api_router
 from app.collectors.scheduler import build_scheduler
 from app.db.session import test_connection, init_database
 
@@ -114,6 +115,8 @@ app.add_middleware(
 )
 
 app.include_router(api_v1_router, prefix=settings.api_v1_prefix)
+# External partner API — token-authenticated, read-only (own /api/ext/v1 prefix).
+app.include_router(ext_api_router)
 
 
 # ------------------------------------------------------------------ health
