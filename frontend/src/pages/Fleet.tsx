@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { X } from 'lucide-react'
 import { arraysApi } from '@/api/arrays'
@@ -20,6 +20,11 @@ function fmtCap(b: number): string {
 }
 const fmtNum = (n: number) => (n >= 1000 ? n.toLocaleString() : String(n))
 const usedColor = (p: number) => (p >= 90 ? '#ef4444' : p >= 75 ? '#f59e0b' : '#3b82f6')
+// hex -> rgba, for the treemap's faded-envelope / solid-fill "tank" treatment
+function tint(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
 
 // ---- squarified treemap (Bruls/Huizing/van Wijk) ----
 type Cell = { node: DCNode; x: number; y: number; w: number; h: number }
@@ -113,14 +118,18 @@ export default function Fleet() {
     }
   }, [filtered])
 
-  // treemap width (responsive)
-  const treeRef = useRef<HTMLDivElement>(null)
-  const [treeW, setTreeW] = useState(900)
-  useEffect(() => {
-    if (!treeRef.current) return
-    const ro = new ResizeObserver((e) => setTreeW(e[0].contentRect.width))
-    ro.observe(treeRef.current)
-    return () => ro.disconnect()
+  // treemap width (responsive) — callback ref so the observer attaches the moment
+  // the node mounts. (A plain effect ran once during the loading return, before
+  // this div existed, so it never measured and the width stuck at the default.)
+  const [treeW, setTreeW] = useState(0)
+  const roRef = useRef<ResizeObserver | null>(null)
+  const treeRef = useCallback((node: HTMLDivElement | null) => {
+    roRef.current?.disconnect()
+    if (node) {
+      setTreeW(node.clientWidth)
+      roRef.current = new ResizeObserver((e) => setTreeW(e[0].contentRect.width))
+      roRef.current.observe(node)
+    }
   }, [])
   const treeH = 340
   const cells = useMemo(() => {
@@ -293,13 +302,17 @@ export default function Fleet() {
               <div key={n.dc} onClick={() => toggle(dc, setDc, n.dc)}
                 onMouseMove={(e) => setTip({ x: e.clientX, y: e.clientY, html: `<b>${n.dc}</b> (${n.csp})<br/>Usable ${fmtCap(n.value)}<br/>Used ${fmtCap(n.used)} (${pct.toFixed(0)}%)<br/>${n.n} arrays` })}
                 onMouseLeave={() => setTip(null)}
-                className={`absolute rounded-md overflow-hidden cursor-pointer border-2 ${sel ? 'border-white' : 'border-gray-950'} hover:brightness-110`}
-                style={{ left: c.x, top: c.y, width: Math.max(0, c.w), height: Math.max(0, c.h), background: CSP_COLOR[n.csp] }}>
-                <div className="absolute left-0 right-0 bottom-0 bg-black/30" style={{ height: `${pct}%` }} />
+                className="absolute rounded-md overflow-hidden cursor-pointer border-2 hover:brightness-110"
+                style={{ left: c.x, top: c.y, width: Math.max(0, c.w), height: Math.max(0, c.h),
+                  background: tint(CSP_COLOR[n.csp], 0.2),
+                  borderColor: sel ? '#ffffff' : '#111827' }}>
+                {/* used capacity fills from the bottom in the same cloud hue (a "tank" gauge) */}
+                <div className="absolute left-0 right-0 bottom-0" style={{ height: `${pct}%`,
+                  background: tint(CSP_COLOR[n.csp], 0.9), boxShadow: `inset 0 1px 0 ${CSP_COLOR[n.csp]}` }} />
                 {label && (
-                  <div className="absolute inset-0 p-1.5 flex flex-col justify-between text-white pointer-events-none" style={{ textShadow: '0 1px 2px rgba(0,0,0,.6)' }}>
+                  <div className="absolute inset-0 p-1.5 flex flex-col justify-between text-white pointer-events-none" style={{ textShadow: '0 1px 3px rgba(0,0,0,.85)' }}>
                     <div className="text-xs font-bold leading-tight">{n.dc}</div>
-                    <div className="text-[10px] opacity-90 tabular-nums">{fmtCap(n.value)} · {pct.toFixed(0)}%</div>
+                    <div className="text-[10px] opacity-95 tabular-nums">{fmtCap(n.value)} · {pct.toFixed(0)}%</div>
                   </div>
                 )}
               </div>
