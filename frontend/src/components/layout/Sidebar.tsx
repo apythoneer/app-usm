@@ -1,12 +1,13 @@
 import { NavLink } from 'react-router-dom'
 import {
-  LayoutDashboard, HardDrive, Server, Bell, BarChart2, Settings, PieChart,
+  LayoutDashboard, LayoutGrid, HardDrive, Server, Bell, BarChart2, Settings, PieChart,
   MessageSquare,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 
 const NAV = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/fleet',     icon: LayoutGrid,      label: 'Fleet' },
   { to: '/volumes',   icon: HardDrive,       label: 'Volumes' },
   { to: '/hosts',     icon: Server,          label: 'Hosts' },
   { to: '/alerts',    icon: Bell,            label: 'Alerts' },
