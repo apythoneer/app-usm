@@ -423,5 +423,26 @@ export interface TopVolumeGrowersResponse {
   data: TopVolumeGrower[]
 }
 
+// Fleet dashboard — one row per array with derived CSP/DC/technology.
+export interface FleetArray {
+  name: string
+  vendor: string
+  group: string | null
+  csp: string
+  dc: string
+  tech: string
+  category: string | null
+  model: string | null
+  cap_total: number
+  cap_used: number
+  used_pct: number | null
+  dr: number | null
+  alerts: number
+  vols: number
+  hosts: number
+}
 
-
+export interface FleetOverviewResponse {
+  count: number
+  arrays: FleetArray[]
+}

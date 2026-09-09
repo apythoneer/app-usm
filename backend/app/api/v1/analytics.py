@@ -1068,3 +1068,88 @@ async def export_capacity_xlsx():
     )
 
 
+
+
+# ---------------------------------------------------------------------------
+# Fleet overview — one per-array row with derived CSP / DC / technology plus
+# capacity, host/volume counts and active-alert count. Drives the interactive
+# Fleet dashboard, which does all slicing/aggregation client-side (like the
+# capacity explorer). One join, NOLOCK, 60s TTL cache.
+# ---------------------------------------------------------------------------
+def _fleet_csp(group: str) -> str:
+    g = group or ""
+    if g.startswith("Cloud-AWS"):
+        return "AWS"
+    if g.startswith("Cloud-AZU"):
+        return "Azure"
+    if g.startswith("Cloud-GCP"):
+        return "GCP"
+    return "On-Prem"
+
+
+def _fleet_dc(group: str) -> str:
+    g = group or "Unknown"
+    if g.startswith("Cloud-"):
+        parts = g.replace("Cloud-", "").split("-")
+        return "-".join(parts[:2]) if len(parts) >= 2 else parts[0]
+    return g
+
+
+_FLEET_TECH = {"Block": "Block", "NAS": "File", "Object": "Object"}
+
+_fleet_overview_cache: dict = {}
+_FLEET_OVERVIEW_TTL = 60
+
+
+@router.get("/fleet-overview")
+async def get_fleet_overview():
+    """Per-array inventory + capacity + counts for the Fleet dashboard."""
+    hit = _fleet_overview_cache.get("data")
+    if hit and (_time.time() - hit[0]) < _FLEET_OVERVIEW_TTL:
+        return hit[1]
+    rows = await run_in_threadpool(_fetch_fleet_overview)
+    payload = {"count": len(rows), "arrays": rows}
+    _fleet_overview_cache["data"] = (_time.time(), payload)
+    return payload
+
+
+def _fetch_fleet_overview() -> List[dict]:
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            f"""
+            SELECT ma.array_name, ma.vendor, ma.group_label, ma.technology, ma.category, ma.model,
+                   mc.capacity_total, mc.capacity_used, mc.capacity_used_pct, mc.data_reduction,
+                   ISNULL(al.cnt,0) AS alerts, ISNULL(v.cnt,0) AS vols, ISNULL(h.cnt,0) AS hosts
+            FROM {SCHEMA}.managed_arrays ma WITH (NOLOCK)
+            LEFT JOIN {SCHEMA}.metrics_current mc WITH (NOLOCK) ON mc.array_name = ma.array_name
+            LEFT JOIN (SELECT array_name, COUNT(*) cnt FROM {SCHEMA}.messages WITH (NOLOCK)
+                       WHERE resolved=0 AND suppressed=0 GROUP BY array_name) al ON al.array_name = ma.array_name
+            LEFT JOIN (SELECT array_name, COUNT(*) cnt FROM {SCHEMA}.volumes_cache WITH (NOLOCK)
+                       GROUP BY array_name) v ON v.array_name = ma.array_name
+            LEFT JOIN (SELECT array_name, COUNT(*) cnt FROM {SCHEMA}.hosts_cache WITH (NOLOCK)
+                       GROUP BY array_name) h ON h.array_name = ma.array_name
+            WHERE ma.enabled = 1
+            ORDER BY ma.vendor, ma.array_name
+            """
+        )
+        out = []
+        for r in rows_to_dicts(cursor, cursor.fetchall()):
+            g = r.get("group_label")
+            out.append({
+                "name": r.get("array_name"),
+                "vendor": r.get("vendor"),
+                "group": g,
+                "csp": _fleet_csp(g),
+                "dc": _fleet_dc(g),
+                "tech": _FLEET_TECH.get(r.get("technology"), "Unknown"),
+                "category": r.get("category"),
+                "model": r.get("model"),
+                "cap_total": int(r["capacity_total"]) if r.get("capacity_total") is not None else 0,
+                "cap_used": int(r["capacity_used"]) if r.get("capacity_used") is not None else 0,
+                "used_pct": round(float(r["capacity_used_pct"]), 1) if r.get("capacity_used_pct") is not None else None,
+                "dr": round(float(r["data_reduction"]), 2) if r.get("data_reduction") is not None else None,
+                "alerts": int(r.get("alerts") or 0),
+                "vols": int(r.get("vols") or 0),
+                "hosts": int(r.get("hosts") or 0),
+            })
+        return out

@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from '@/components/layout/Layout'
 import Dashboard from '@/pages/Dashboard'
+import Fleet from '@/pages/Fleet'
 import Volumes from '@/pages/Volumes'
 import Hosts from '@/pages/Hosts'
 import Alerts from '@/pages/Alerts'
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
+          <Route path="fleet" element={<Fleet />} />
           <Route path="volumes" element={<Volumes />} />
           <Route path="hosts" element={<Hosts />} />
           <Route path="alerts" element={<Alerts />} />
