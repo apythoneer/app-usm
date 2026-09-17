@@ -141,10 +141,25 @@ export default function Fleet() {
     return squarify(Object.values(byDC).filter((n) => n.value > 0), treeW, treeH)
   }, [filtered, treeW])
 
-  const agg = (dim: keyof FleetArray) => {
+  // Smart-filter availability: a slicer option's count reflects the arrays that
+  // pass every OTHER dimension's filter (its own dimension isn't self-restricted),
+  // so impossible combinations — e.g. Azure + AWS-EUS1 — show 0 and get disabled.
+  const otherPass = (a: FleetArray, except: string) => {
+    if (except !== 'csp' && csp.size && !csp.has(a.csp)) return false
+    if (except !== 'dc' && dc.size && !dc.has(a.dc)) return false
+    if (except !== 'vendor' && vendor.size && !vendor.has(a.vendor)) return false
+    if (except !== 'tech' && tech.size && !tech.has(a.tech)) return false
+    if (onlyAlerts && a.alerts <= 0) return false
+    return true
+  }
+  const ctxCounts = (dim: keyof FleetArray) => {
     const m: Record<string, number> = {}
-    for (const a of all) { const v = String(a[dim]); m[v] = (m[v] ?? 0) + 1 }
+    for (const a of all) { if (!otherPass(a, dim as string)) continue; const v = String(a[dim]); m[v] = (m[v] ?? 0) + 1 }
     return m
+  }
+  const universeOf = (dim: keyof FleetArray, order?: string[]) => {
+    const keys = [...new Set(all.map((a) => String(a[dim])))]
+    return order ? order.filter((k) => keys.includes(k)) : keys.sort()
   }
 
   const table = useMemo(() => {
@@ -170,21 +185,27 @@ export default function Fleet() {
   const Slicer = ({ label, dim, set, setter, order, colored }: {
     label: string; dim: keyof FleetArray; set: Set<string>; setter: (v: Set<string>) => void; order?: string[]; colored?: boolean
   }) => {
-    const counts = agg(dim)
-    const keys = (order || Object.keys(counts).sort()).filter((x) => counts[x] != null)
+    const counts = ctxCounts(dim)
+    const keys = universeOf(dim, order)
     return (
       <div className="flex flex-col gap-1.5">
         <span className="text-[10px] uppercase tracking-wider text-gray-600 font-mono">{label}</span>
         <div className="flex flex-wrap gap-1.5">
           {keys.map((key) => {
             const on = set.has(key)
+            const cnt = counts[key] ?? 0
+            const disabled = cnt === 0 && !on
             return (
-              <button key={key} onClick={() => toggle(set, setter, key)}
+              <button key={key} disabled={disabled}
+                onClick={() => { if (!disabled) toggle(set, setter, key) }}
+                title={disabled ? 'No arrays with the current filters' : undefined}
                 className={`text-xs px-2.5 py-1 rounded-full border flex items-center gap-1.5 transition-colors ${
-                  on ? 'text-white border-transparent font-semibold' : 'text-gray-400 border-gray-700 bg-gray-800/60 hover:border-brand-500 hover:text-gray-200'}`}
+                  on ? 'text-white border-transparent font-semibold'
+                     : disabled ? 'text-gray-600 border-gray-800 bg-transparent opacity-40 cursor-not-allowed'
+                     : 'text-gray-400 border-gray-700 bg-gray-800/60 hover:border-brand-500 hover:text-gray-200'}`}
                 style={on ? { background: colored ? CSP_COLOR[key] : '#2563eb' } : undefined}>
-                {colored && <span className="w-2 h-2 rounded-sm" style={{ background: CSP_COLOR[key] }} />}
-                {key}<span className="opacity-70 text-[10px] tabular-nums">{counts[key]}</span>
+                {colored && <span className="w-2 h-2 rounded-sm" style={{ background: CSP_COLOR[key], opacity: disabled ? 0.4 : 1 }} />}
+                {key}<span className="opacity-70 text-[10px] tabular-nums">{cnt}</span>
               </button>
             )
           })}
@@ -296,7 +317,8 @@ export default function Fleet() {
           {cells.length === 0 && <div className="text-gray-500 text-sm p-4">No arrays match the current filters.</div>}
           {cells.map((c) => {
             const n = c.node, pct = n.value ? (n.used / n.value) * 100 : 0
-            const label = c.w > 54 && c.h > 28
+            const bigLabel = c.w > 58 && c.h > 34
+            const nameOnly = !bigLabel && c.w > 26 && c.h > 16
             const sel = dc.has(n.dc)
             return (
               <div key={n.dc} onClick={() => toggle(dc, setDc, n.dc)}
@@ -309,10 +331,15 @@ export default function Fleet() {
                 {/* used capacity fills from the bottom in the same cloud hue (a "tank" gauge) */}
                 <div className="absolute left-0 right-0 bottom-0" style={{ height: `${pct}%`,
                   background: tint(CSP_COLOR[n.csp], 0.9), boxShadow: `inset 0 1px 0 ${CSP_COLOR[n.csp]}` }} />
-                {label && (
+                {bigLabel && (
                   <div className="absolute inset-0 p-1.5 flex flex-col justify-between text-white pointer-events-none" style={{ textShadow: '0 1px 3px rgba(0,0,0,.85)' }}>
                     <div className="text-xs font-bold leading-tight">{n.dc}</div>
                     <div className="text-[10px] opacity-95 tabular-nums">{fmtCap(n.value)} · {pct.toFixed(0)}%</div>
+                  </div>
+                )}
+                {nameOnly && (
+                  <div className="absolute inset-0 flex items-center justify-center px-0.5 text-white pointer-events-none" style={{ textShadow: '0 1px 3px rgba(0,0,0,.95)' }}>
+                    <span className="text-[9px] font-semibold leading-none truncate max-w-full">{n.dc}</span>
                   </div>
                 )}
               </div>
