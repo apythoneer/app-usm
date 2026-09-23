@@ -11,6 +11,14 @@ spec:
   template:
     metadata:
       labels: { app: usm-backend }
+      annotations:
+        # Opt out of the EKS CloudWatch Application Signals (ADOT) auto-instrumentation
+        # webhook — its bundled Python agent ships an old typing_extensions that breaks
+        # anyio/fastapi (ImportError: cannot import name 'sentinel').
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
     spec:
       imagePullSecrets:
         - name: ghcr-apythoneer
