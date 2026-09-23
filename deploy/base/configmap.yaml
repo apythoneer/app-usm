@@ -1,0 +1,36 @@
+# Non-secret runtime config shared by the API + collector.
+# Per-role differences (RUN_SCHEDULER, workers, timeouts) are set on each
+# Deployment. Real secrets (Datadog key, external API keys, prod SECRET_KEY) are
+# NOT here — they come from a k8s Secret injected out-of-band. This dev SECRET_KEY
+# is a throwaway (JWT auth is not enforced yet).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: usm-config
+data:
+  APP_NAME: "SIP - Storage Intelligence Platform"
+  APP_VERSION: "3.1.0"
+  DEBUG: "false"
+  LOG_DIR: "/app/logs"
+  API_V1_PREFIX: "/api/v1"
+  CORS_ORIGINS: '["http://localhost:8080"]'
+  SECRET_KEY: "dev-not-a-secret-auth-not-enforced"
+  # Data store — current on-prem SQL Server (reachable from the Rancher pods).
+  SQL_SERVER: "usidcvsql0252.ctl.intranet"
+  SQL_DATABASE: "StorMart"
+  DB_SCHEMA: "USM"
+  SQL_DRIVER: "ODBC Driver 17 for SQL Server"
+  # Credentials via the in-cluster KeePass broker service.
+  KEEPASS_URL: "http://keepass-broker:2000/keepass"
+  SQL_CRED_KEY: "SQLServerDB"
+  PURE_CRED_KEY: "PureStorage"
+  # Collection intervals (seconds).
+  METRICS_INTERVAL: "300"
+  VOLUMES_INTERVAL: "1800"
+  ALERTS_INTERVAL: "300"
+  # Feature toggles for dev (no Ollama / Datadog / partner API in this namespace).
+  CHAT_ENABLED: "false"
+  DATADOG_ENABLED: "false"
+  EXTERNAL_API_KEYS: "[]"
+  USM_CACHE_DB: "/app/data/usm_cache.db"
+  ARRAYS_CONFIG_FILE: "/app/config/arrays.txt"

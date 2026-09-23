@@ -1,0 +1,59 @@
+name: Deploy dev
+
+# Runs AFTER the CI workflow finishes on main (so images exist), on the
+# self-hosted runner inside the corp network (only thing that reaches the
+# corp-internal Rancher API). Deploys the dev overlay to the AWS Rancher nonprod
+# namespace, pinned to the exact SHA CI just built.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # only on a successful CI run (or a manual dispatch)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: [self-hosted, ec2-dev]
+    env:
+      NS: storage-mgt-tools-na-dev
+      SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Ensure private GHCR pull secret
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create secret docker-registry ghcr-apythoneer \
+            --docker-server=ghcr.io \
+            --docker-username=apythoneer \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply manifests
+        run: kubectl apply -k deploy/overlays/dev
+
+      - name: Pin images to the built SHA + roll out
+        run: |
+          kubectl -n "$NS" set image deployment/usm-backend  backend=ghcr.io/apythoneer/usm-backend:$SHA
+          kubectl -n "$NS" set image deployment/usm-collector collector=ghcr.io/apythoneer/usm-backend:$SHA
+          kubectl -n "$NS" set image deployment/usm-frontend  frontend=ghcr.io/apythoneer/usm-frontend:$SHA
+          kubectl -n "$NS" rollout status deployment/usm-backend  --timeout=180s
+          kubectl -n "$NS" rollout status deployment/usm-collector --timeout=180s
+          kubectl -n "$NS" rollout status deployment/usm-frontend  --timeout=120s
+
+      - name: Summary
+        if: always()
+        run: kubectl -n "$NS" get deploy,pods -l app.kubernetes.io/part-of=sip -o wide || true

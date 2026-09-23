@@ -1,0 +1,57 @@
+# Collector tier — RUN_SCHEDULER=true, exactly ONE replica (a second would run a
+# duplicate scheduler). Recreate strategy so a rollout never briefly runs two.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usm-collector
+  labels: { app: usm-collector }
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app: usm-collector }
+  template:
+    metadata:
+      labels: { app: usm-collector }
+    spec:
+      imagePullSecrets:
+        - name: ghcr-apythoneer
+      containers:
+        - name: collector
+          image: ghcr.io/apythoneer/usm-backend
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "1"]
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef: { name: usm-config }
+          env:
+            - { name: RUN_SCHEDULER, value: "true" }
+            - { name: DB_QUERY_TIMEOUT, value: "120" }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8001 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 5
+          livenessProbe:
+            httpGet: { path: /ping, port: 8001 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+          volumeMounts:
+            - { name: logs, mountPath: /app/logs }
+            - { name: data, mountPath: /app/data }
+      volumes:
+        - { name: logs, emptyDir: {} }
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: usm-collector
+spec:
+  selector: { app: usm-collector }
+  ports:
+    - { name: http, port: 8001, targetPort: 8001 }
