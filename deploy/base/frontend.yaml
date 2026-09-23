@@ -11,6 +11,12 @@ spec:
   template:
     metadata:
       labels: { app: usm-frontend }
+      annotations:
+        # Skip ADOT auto-instrumentation (nginx doesn't need it; avoids the injected init containers).
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
     spec:
       imagePullSecrets:
         - name: ghcr-apythoneer
