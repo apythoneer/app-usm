@@ -1,0 +1,55 @@
+# API tier — RUN_SCHEDULER=false, multiple uvicorn workers. Stateless; scalable.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usm-backend
+  labels: { app: usm-backend }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: usm-backend }
+  template:
+    metadata:
+      labels: { app: usm-backend }
+    spec:
+      imagePullSecrets:
+        - name: ghcr-apythoneer
+      containers:
+        - name: backend
+          image: ghcr.io/apythoneer/usm-backend
+          command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "4"]
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef: { name: usm-config }
+          env:
+            - { name: RUN_SCHEDULER, value: "false" }
+            - { name: API_WORKERS, value: "4" }
+            - { name: DB_QUERY_TIMEOUT, value: "30" }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 8000 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 4
+          livenessProbe:
+            httpGet: { path: /ping, port: 8000 }
+            initialDelaySeconds: 25
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+          volumeMounts:
+            - { name: logs, mountPath: /app/logs }
+            - { name: data, mountPath: /app/data }
+      volumes:
+        - { name: logs, emptyDir: {} }
+        - { name: data, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: usm-backend
+spec:
+  selector: { app: usm-backend }
+  ports:
+    - { name: http, port: 8000, targetPort: 8000 }
