@@ -9,7 +9,7 @@ metadata:
   name: usm-config
 data:
   APP_NAME: "SIP - Storage Intelligence Platform"
-  APP_VERSION: "3.1.0"
+  APP_VERSION: "3.4.0"
   DEBUG: "false"
   LOG_DIR: "/app/logs"
   API_V1_PREFIX: "/api/v1"
