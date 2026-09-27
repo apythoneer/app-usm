@@ -32,7 +32,7 @@ class Settings(BaseSettings):
 
     # App
     app_name: str = "Unified Storage Monitoring"
-    app_version: str = "3.0.0"
+    app_version: str = "3.4.0"
     debug: bool = False
     log_dir: str = "/app/logs"
 

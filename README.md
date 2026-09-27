@@ -29,7 +29,7 @@ alert paging, a token-authenticated partner API, and a local AI query engine.
 12. [Storage AI (Chat)](#storage-ai-chat)
 13. [Development](#development)
 14. [Documentation](#documentation)
-15. [Version History](#version-history)
+15. [Versioning & Changelog](#versioning--changelog)
 
 ---
 
@@ -334,11 +334,12 @@ cd backend && pytest
 
 ---
 
-## Version History
+## Versioning & Changelog
 
-| Version | Date | Highlights |
-|---------|------|------------|
-| **v3.1** | 2026-09 | Collector/API container split + autoheal + multi-worker API; metric expansion (controller load, NIC util, SAN/queue latency, over-subscription); interactive Analytics (server-bucketed trends); **Fleet Overview** dashboard (slicers + capacity treemap); Datadog paging with runtime switch; **external partner API**; SIP rebrand |
-| **v3.0.0** | 2026-05 | 7 vendors, Storage AI chat, FastAPI + React |
-| **v2.0.0** | 2026-05 | FastAPI rewrite, React dashboard, 5 vendors |
-| **v1.0.0** | 2026-03 | Flask + cron, Pure Storage only |
+Current version: **3.4.0**. Full release history is in
+[CHANGELOG.md](CHANGELOG.md); the versioning + release process (SemVer, tagging,
+env promotion) is in [docs/VERSIONING.md](docs/VERSIONING.md).
+
+Recent line: **3.4.0** cloud enablement (CI/CD + AWS Rancher dev) · **3.3.0** Fleet
+Overview + repo hardening · **3.2.0** reliability + metric expansion + partner API ·
+**3.1.0** alerting, Datadog paging & resilience · **3.0.0** platform baseline.
