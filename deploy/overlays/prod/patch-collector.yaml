@@ -1,0 +1,32 @@
+# AKS prod hardening for the collector tier — same Azure Policy constraints as
+# the API tier.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usm-collector
+spec:
+  template:
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: collector
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }

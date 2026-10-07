@@ -1,0 +1,33 @@
+# AKS prod hardening for the API tier (Azure Policy / Gatekeeper deployment
+# safeguards): non-root, readonly rootfs, no SA token automount, drop all caps.
+# Writable paths are emptyDir; PYTHONDONTWRITEBYTECODE avoids .pyc writes to /app.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usm-backend
+spec:
+  template:
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: backend
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 1000
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: tmp, emptyDir: {} }
