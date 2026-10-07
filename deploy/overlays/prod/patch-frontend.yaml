@@ -1,0 +1,33 @@
+# AKS prod hardening for the frontend (nginx-unprivileged, uid 101). Readonly
+# rootfs needs writable emptyDirs for nginx's pid/temp (/tmp) and cache
+# (/var/cache/nginx). The usm-frontend-nginx ConfigMap mount from base is kept.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usm-frontend
+spec:
+  template:
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        fsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: frontend
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 101
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: nginx-cache, mountPath: /var/cache/nginx }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - { name: nginx-cache, emptyDir: {} }

@@ -1,0 +1,85 @@
+# In-namespace KeePass credential broker for prod. Both the API and collector
+# fetch their SQL Server (and array) creds from this service via KEEPASS_URL.
+# Mirrors the dev broker (Krunal's shared image ghcr.io/kplumen/...), hardened
+# for the AKS Azure Policy. Two secrets must exist in the namespace, supplied
+# out-of-band (never in git):
+#   - keepass-kdbx    (key: StorageOps-Database.kdbx)  the .kdbx database file
+#   - keepass-master  (key: KEEPASS_PASSWORD)          the master password
+# The kplumen image is pulled with the existing ghcr-pull secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keepass-broker
+  labels:
+    app: keepass-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keepass-broker
+  template:
+    metadata:
+      labels:
+        app: keepass-broker
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10002
+        runAsGroup: 10002
+        fsGroup: 10002
+        seccompProfile:
+          type: RuntimeDefault
+      imagePullSecrets:
+        - name: ghcr-pull
+      containers:
+        - name: keepass-broker
+          image: ghcr.io/kplumen/storage_ops_keepass_broker:latest
+          ports:
+            - containerPort: 2000
+          env:
+            - { name: KEEPASS_DB, value: /kdbx/StorageOps-Database.kdbx }
+            - name: KEEPASS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keepass-master
+                  key: KEEPASS_PASSWORD
+            - { name: RELOAD_SECONDS, value: "300" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10002
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 2000 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /healthz, port: 2000 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "250m", memory: "256Mi" }
+          volumeMounts:
+            - { name: kdbx, mountPath: /kdbx, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: kdbx
+          secret:
+            secretName: keepass-kdbx
+            items:
+              - { key: StorageOps-Database.kdbx, path: StorageOps-Database.kdbx }
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keepass-broker
+spec:
+  selector:
+    app: keepass-broker
+  ports:
+    - { name: http, port: 2000, targetPort: 2000 }

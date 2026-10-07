@@ -1,0 +1,75 @@
+name: Deploy prod
+
+# Promotion model: CI builds+pushes ghcr images tagged :<sha> on every merge to
+# main. Promoting to prod = advancing the `prod` branch to a chosen main SHA
+# (fast-forward / PR main -> prod). That push fires this workflow, which deploys
+# the prod overlay to the AKS (Azure) cluster c-jmkcx / namespace
+# storage-mgt-tools-na, pinned to the exact SHA (whose images already exist).
+#
+# Runs on the azure-prod self-hosted runner (azeus2lsanadmp1) -- the only box on
+# the Azure VNet that reaches the prod Rancher proxy. Deploys as the cicd service
+# account (its kubeconfig lives on the runner), never a personal identity.
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, azure-prod]
+    env:
+      NS: storage-mgt-tools-na
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Ensure private GHCR pull secret
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create secret docker-registry ghcr-apythoneer \
+            --docker-server=ghcr.io \
+            --docker-username=apythoneer \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Verify the promoted SHA's images exist in ghcr
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          for img in usm-backend usm-frontend; do
+            tok=$(printf '%s' "$GHCR_PULL_TOKEN" | base64)
+            code=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: Bearer $tok" \
+              "https://ghcr.io/v2/apythoneer/$img/manifests/$SHA")
+            echo "  $img:$SHA -> HTTP $code"
+            if [ "$code" != "200" ]; then
+              echo "::error::image $img:$SHA not found in ghcr -- promote only SHAs that CI built on main"; exit 1
+            fi
+          done
+
+      - name: Apply manifests
+        run: kubectl apply -k deploy/overlays/prod
+
+      - name: Pin images to the promoted SHA + roll out
+        run: |
+          kubectl -n "$NS" set image deployment/usm-backend  backend=ghcr.io/apythoneer/usm-backend:$SHA
+          kubectl -n "$NS" set image deployment/usm-collector collector=ghcr.io/apythoneer/usm-backend:$SHA
+          kubectl -n "$NS" set image deployment/usm-frontend  frontend=ghcr.io/apythoneer/usm-frontend:$SHA
+          kubectl -n "$NS" rollout status deployment/usm-backend  --timeout=180s
+          kubectl -n "$NS" rollout status deployment/usm-collector --timeout=180s
+          kubectl -n "$NS" rollout status deployment/usm-frontend  --timeout=120s
+
+      - name: Summary
+        if: always()
+        run: kubectl -n "$NS" get deploy,pods -l app.kubernetes.io/part-of=sip -o wide || true

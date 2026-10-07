@@ -11,14 +11,30 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Prod deployment to AKS (Azure)** (`deploy/overlays/prod`) — hardened overlay
+  for the production Rancher cluster `c-jmkcx` / namespace `storage-mgt-tools-na`.
+  Every workload is non-root, readonly-rootfs, drops all caps, and disables SA-token
+  automount to satisfy the cluster's Azure Policy / Gatekeeper deployment
+  safeguards (verified via server-side admission dry-run). Adds an in-namespace
+  `keepass-broker` (fed by `keepass-kdbx` + `keepass-master` secrets) that both the
+  API and collector use for DB/array creds. Points at the on-prem SQL Server.
+- **`deploy-prod` workflow** (`.github/workflows/deploy-prod.yml`) — promotion by
+  advancing the `prod` branch to a built `main` SHA; deploys from the `azure-prod`
+  self-hosted runner (Azure VM, same VNet as the cluster), and guards that the
+  promoted image already exists in ghcr before applying.
+
+### Changed
+- **Frontend image is now rootless** (`frontend/Dockerfile` →
+  `nginxinc/nginx-unprivileged`) so a single image passes the AKS readonly-rootfs
+  policy; drop-in for on-prem compose and dev EKS (both already bind 8080).
+
 ### In progress
-- **Cloud migration — prod:** `prod` overlay + `prod`-branch promotion to the
-  production Rancher cluster (pending prod-cluster access).
-- **SQL Server → AWS Postgres:** data-layer port (driver + SQL dialect + schema)
-  for when the AWS Postgres lands.
-- **Azure collector:** in-Azure collector reaching the AWS-hosted DB via the
-  M365/SharePoint relay (Azure↔AWS is firewall-blocked at the data plane).
-- Stable ingress for the dev dashboard (currently port-forward).
+- **SQL Server → AWS Postgres:** data-layer port (driver + SQL dialect + schema).
+  AWS Postgres is directly reachable from AKS prod pods (proven at the protocol
+  layer), so no cross-CSP relay is needed — the earlier M365/SharePoint relay plan
+  is dropped.
+- Stable ingress for the prod/dev dashboards (currently port-forward).
 
 ---
 
