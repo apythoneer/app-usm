@@ -205,26 +205,6 @@ class Settings(BaseSettings):
     # unhealthy — which is exactly what happened. Excess requests get a fast 503.
     chat_max_concurrent: int = Field(default=2, alias="CHAT_MAX_CONCURRENT")
 
-    # ── Second chat backend: DGX Spark (benchmark / POC) ─────────────────────
-    # Used to compare the CPU-hosted qwen2.5:3b against dedicated GPU hardware
-    # running qwen3:30b-a3b, to evidence a hardware business case.
-    #
-    # NOTE ON DATA EGRESS: unlike the local backend, this one sends question text
-    # AND SQL result rows (array names, volume names, capacities) to an external
-    # host over the public internet. docker-compose still describes chat as
-    # "local LLM — no data leaves"; that stops being true for any request routed
-    # here. Left empty by default so this is opt-in, never accidental.
-    chat_dgx_base_url: str = Field(default="", alias="CHAT_DGX_BASE_URL")
-    chat_dgx_model: str = Field(default="qwen3:30b-a3b", alias="CHAT_DGX_MODEL")
-
-    # Cloudflare Access service token for the DGX endpoint. It sits behind
-    # Zero Trust, which 302s unauthenticated calls to an IdP login page — so
-    # without these every request silently becomes an HTML redirect, not JSON.
-    # The Access app also needs a policy with action "Service Auth"; a token
-    # alone is not sufficient.
-    cf_access_client_id: str = Field(default="", alias="CF_ACCESS_CLIENT_ID")
-    cf_access_client_secret: str = Field(default="", alias="CF_ACCESS_CLIENT_SECRET")
-
     # Partial-collection data-loss guard.
     #
     # Delete-then-insert collectors (hitachi/hpe/dell/oracle) DELETE an array's

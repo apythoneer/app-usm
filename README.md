@@ -293,9 +293,8 @@ Ensure the package is imported so the decorators fire, then enable arrays with
 
 Local **Text-to-SQL**: the LLM turns a natural-language question into a
 SELECT-only, USM-schema-validated query, runs it, and formats the answer (with
-self-correction on failure). Default model `qwen2.5:3b` runs locally on CPU; a
-larger `qwen3:30b` is available via an off-network DGX endpoint (opt-in, since it
-sends data externally). Access via the **Storage AI** sidebar link or
+self-correction on failure). The model `qwen2.5:3b` runs locally on CPU — no data
+leaves the host. Access via the **Storage AI** sidebar link or
 `POST /api/v1/chat/ask`.
 
 ---
