@@ -14,9 +14,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ### Added
 - **AWS prod deployment (EKS)** — `deploy/overlays/prod` is the **full app**
   (backend + collector + frontend) on the AWS backbone, namespace
-  `storage-mgt-tools-na`, deployed by the `ec2-prod` self-hosted runner
-  (`.github/workflows/deploy-prod.yml`). Promotion = advancing the `prod` branch to
-  a built `main` SHA; guards that the image exists in ghcr before applying.
+  `storage-mgt-tools-na`, deployed by `deploy-prod.yml` on promotion (advancing the
+  `prod` branch to a built `main` SHA; guards the image exists in ghcr first), and
+  gated behind a `production` GitHub Environment (required-reviewer approval).
+- **In-cluster prod runner** (`deploy/runner/eks-prod-runner.yaml`) — a self-hosted
+  GitHub Actions runner (`eks-prod`) deployed as a pod in the dev EKS cluster,
+  because it is the only vantage point reaching both GitHub and the prod Rancher
+  (`c-5zsl4`) — the nonprod EC2 is firewalled off prod. Mounts the prod kubeconfig;
+  registers via a fine-grained PAT. Bring-up runbook: `docs/SIP-prod-runner-setup.md`.
 - **Azure collector satellite (AKS)** — `deploy/overlays/azure-collector` runs the
   **collector only** on AKS `c-jmkcx` (the 18 Azure arrays are reachable only from
   inside Azure), writing back to the central DB. Collector + in-namespace
