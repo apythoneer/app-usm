@@ -1,0 +1,63 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# AZURE COLLECTOR satellite = AKS cluster c-jmkcx, namespace storage-mgt-tools-na.
+# ONLY the collector runs here — the 18 Azure arrays are reachable solely from
+# inside Azure; the collector writes back to the central DB (reachable from AKS
+# pods: on-prem SQL 1433 today, AWS Postgres 5432 after the cutover). The frontend,
+# backend-API and nginx are removed (they live in AWS prod).
+#
+# Deployed by the Azure VM `azure-prod` runner via deploy-azure-collector.yml, on
+# the same prod-branch promotion as AWS prod.
+#
+# AKS enforces Azure Policy / Gatekeeper, so the collector + keepass-broker are
+# hardened (patch-collector.yaml / keepass.yaml: non-root, readonly rootfs, drop
+# caps, no SA-token automount). Requires secrets keepass-kdbx + keepass-master in
+# the namespace (supplied out-of-band; the workflow preflights for them).
+namespace: storage-mgt-tools-na
+
+resources:
+  - ../../base
+  - keepass.yaml
+
+patches:
+  # harden the collector for Azure Policy
+  - path: patch-collector.yaml
+  # strip the AWS-only tiers — collector-only on Azure
+  - target: { kind: Deployment, name: usm-backend }
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: usm-backend }
+  - target: { kind: Service, name: usm-backend }
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: usm-backend }
+  - target: { kind: Deployment, name: usm-frontend }
+    patch: |
+      $patch: delete
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata: { name: usm-frontend }
+  - target: { kind: Service, name: usm-frontend }
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata: { name: usm-frontend }
+  - target: { kind: ConfigMap, name: usm-frontend-nginx }
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: ConfigMap
+      metadata: { name: usm-frontend-nginx }
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: sip
+      environment: prod
+      sip.role: azure-collector
+    includeSelectors: false

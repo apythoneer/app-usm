@@ -1,0 +1,60 @@
+name: Deploy Azure collector (AKS)
+
+# The 18 Azure arrays are reachable ONLY from inside Azure, so a collector-only
+# deployment runs on AKS (c-jmkcx), writing back to the central DB. Deployed from
+# the Azure VM `azure-prod` self-hosted runner on the same `prod`-branch promotion
+# as AWS prod. No frontend/backend here — those live in AWS prod.
+
+on:
+  push:
+    branches: [prod]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-azure-collector
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, azure-prod]
+    env:
+      NS: storage-mgt-tools-na
+      SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Ensure private GHCR pull secret
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create secret docker-registry ghcr-apythoneer \
+            --docker-server=ghcr.io \
+            --docker-username=apythoneer \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Preflight — keepass secrets present
+        run: |
+          for s in keepass-kdbx keepass-master; do
+            if ! kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
+              echo "::error::missing secret $s in $NS — Krunal supplies the .kdbx + master password"; exit 1
+            fi
+          done
+
+      - name: Apply manifests
+        run: kubectl apply -k deploy/overlays/azure-collector
+
+      - name: Pin collector image to the promoted SHA + roll out
+        run: |
+          kubectl -n "$NS" set image deployment/usm-collector collector=ghcr.io/apythoneer/usm-backend:$SHA
+          kubectl -n "$NS" rollout status deployment/usm-collector  --timeout=180s
+          kubectl -n "$NS" rollout status deployment/keepass-broker --timeout=120s
+
+      - name: Summary
+        if: always()
+        run: kubectl -n "$NS" get deploy,pods -l app.kubernetes.io/part-of=sip -o wide || true

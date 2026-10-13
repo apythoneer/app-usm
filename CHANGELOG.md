@@ -12,17 +12,22 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
-- **Prod deployment to AKS (Azure)** (`deploy/overlays/prod`) — hardened overlay
-  for the production Rancher cluster `c-jmkcx` / namespace `storage-mgt-tools-na`.
-  Every workload is non-root, readonly-rootfs, drops all caps, and disables SA-token
-  automount to satisfy the cluster's Azure Policy / Gatekeeper deployment
-  safeguards (verified via server-side admission dry-run). Adds an in-namespace
-  `keepass-broker` (fed by `keepass-kdbx` + `keepass-master` secrets) that both the
-  API and collector use for DB/array creds. Points at the on-prem SQL Server.
-- **`deploy-prod` workflow** (`.github/workflows/deploy-prod.yml`) — promotion by
-  advancing the `prod` branch to a built `main` SHA; deploys from the `azure-prod`
-  self-hosted runner (Azure VM, same VNet as the cluster), and guards that the
-  promoted image already exists in ghcr before applying.
+- **AWS prod deployment (EKS)** — `deploy/overlays/prod` is the **full app**
+  (backend + collector + frontend) on the AWS backbone, namespace
+  `storage-mgt-tools-na`, deployed by the `ec2-prod` self-hosted runner
+  (`.github/workflows/deploy-prod.yml`). Promotion = advancing the `prod` branch to
+  a built `main` SHA; guards that the image exists in ghcr before applying.
+- **Azure collector satellite (AKS)** — `deploy/overlays/azure-collector` runs the
+  **collector only** on AKS `c-jmkcx` (the 18 Azure arrays are reachable only from
+  inside Azure), writing back to the central DB. Collector + in-namespace
+  `keepass-broker` are hardened for Azure Policy / Gatekeeper (non-root,
+  readonly-rootfs, drop caps, no SA-token automount; verified via server-side
+  admission dry-run). Deployed by the `azure-prod` runner
+  (`.github/workflows/deploy-azure-collector.yml`), which preflights the
+  `keepass-kdbx`/`keepass-master` secrets. Needs those secrets in the namespace.
+- **Deployment design of record** — `docs/SIP-deployment-architecture.md`: AWS is
+  the backbone (dev + prod, full app); AKS is an Azure-collector-only satellite;
+  GCP arrays are collected from AWS (no GCP namespace).
 
 ### Changed
 - **Frontend image is now rootless** (`frontend/Dockerfile` →
