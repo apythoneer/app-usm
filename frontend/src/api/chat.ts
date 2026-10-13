@@ -9,12 +9,9 @@ export interface ChatMessage {
   error?: string
 }
 
-export type ChatBackend = 'local' | 'dgx'
-
 interface ChatRequest {
   message: string
   context?: { question: string; sql?: string }[]
-  backend?: ChatBackend
 }
 
 interface ChatResponse {
@@ -34,15 +31,12 @@ interface ChatStatus {
     required_model?: string
     error?: string
   }
-  dgx_configured?: boolean
-  dgx_model?: string | null
 }
 
 export const chatApi = {
   async send(
     message: string,
     context?: ChatMessage[],
-    backend: ChatBackend = 'local',
   ): Promise<ChatResponse> {
     // Build context from previous turns
     const ctx = context
@@ -57,7 +51,6 @@ export const chatApi = {
     const { data } = await apiClient.post<ChatResponse>('/chat', {
       message,
       context: ctx?.length ? ctx : undefined,
-      backend,
     } as ChatRequest, { timeout: 120_000 })
     return data
   },

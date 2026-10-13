@@ -11,6 +11,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed
+- **DGX chat backend (POC)** — removed the off-network DGX / `qwen3:30b` second
+  chat backend and its Cloudflare Access wiring from the chat service, API,
+  frontend toggle and compose (`CHAT_DGX_*`, `CF_ACCESS_*`). It was a benchmark /
+  POC; chat is now **local-only** (`qwen2.5:3b` via Ollama), so no chat path leaves
+  the host.
+
 ### Added
 - **Prod deployment to AKS (Azure)** (`deploy/overlays/prod`) — hardened overlay
   for the production Rancher cluster `c-jmkcx` / namespace `storage-mgt-tools-na`.

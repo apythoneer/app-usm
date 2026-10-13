@@ -553,28 +553,10 @@ class ChatService:
 
     @classmethod
     def for_backend(cls, backend: str = "local") -> "ChatService":
-        """Build a ChatService for a named backend: 'local' or 'dgx'."""
+        """Build the local ChatService (Ollama on this host)."""
         if backend == "local":
             return cls(name="local")
-        if backend == "dgx":
-            if not settings.chat_dgx_base_url:
-                raise ValueError(
-                    "CHAT_DGX_BASE_URL is not set — the DGX backend is opt-in "
-                    "because it sends data off-network."
-                )
-            headers = {}
-            if settings.cf_access_client_id and settings.cf_access_client_secret:
-                headers = {
-                    "CF-Access-Client-Id": settings.cf_access_client_id,
-                    "CF-Access-Client-Secret": settings.cf_access_client_secret,
-                }
-            return cls(
-                base_url=settings.chat_dgx_base_url,
-                model=settings.chat_dgx_model,
-                headers=headers,
-                name="dgx",
-            )
-        raise ValueError(f"Unknown chat backend '{backend}' (expected 'local' or 'dgx')")
+        raise ValueError(f"Unknown chat backend '{backend}' (only 'local' is supported)")
 
     def ask(self, question: str, context: List[Dict] = None) -> Dict[str, Any]:
         """
