@@ -18,6 +18,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   POC; chat is now **local-only** (`qwen2.5:3b` via Ollama), so no chat path leaves
   the host.
 
+### Fixed
+- **Frontend crash-loop on the rootless nginx image** — the `nginx-unprivileged`
+  switch (#68) `COPY`'d the config as root, so the uid-101 runtime user could not
+  read `/etc/nginx/conf.d/default.conf` (`[emerg] Permission denied`), crash-looping
+  the container. Fixed with `COPY --chown=nginx:nginx`. Surfaced on the first real
+  run of that image (the on-prem sandbox deploy).
+
 ### Added
 - **AWS prod deployment (EKS)** — `deploy/overlays/prod` is the **full app**
   (backend + collector + frontend) on the AWS backbone, namespace
