@@ -11,6 +11,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### In progress
+- **Chatbot performance program** — a data-dictionary / semantic layer + pgvector
+  RAG (SCPSB-946), explicitly guard-railed to not affect capacity forecasting or
+  analytics that share the model/DB (`docs/chatbot-performance.md`).
+- **SQL Server → AWS Postgres:** application repoint (driver + SQL dialect +
+  `sslmode=require`) + cutover; connectivity to `stormart01p` is proven from pods.
+- Stable ingress for the prod/dev dashboards (currently port-forward).
+
+---
+
+## [3.5.0] — 2026-10-13 — Multi-CSP deployment & local-only chat
+
 ### Removed
 - **DGX chat backend (POC)** — removed the off-network DGX / `qwen3:30b` second
   chat backend and its Cloudflare Access wiring from the chat service, API,
@@ -26,11 +38,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   run of that image (the on-prem sandbox deploy).
 
 ### Added
-- **AWS prod deployment (EKS)** — `deploy/overlays/prod` is the **full app**
-  (backend + collector + frontend) on the AWS backbone, namespace
-  `storage-mgt-tools-na`, deployed by the `ec2-prod` self-hosted runner
-  (`.github/workflows/deploy-prod.yml`). Promotion = advancing the `prod` branch to
-  a built `main` SHA; guards that the image exists in ghcr before applying.
+- **AWS prod deployment (EKS `c-5zsl4`)** — `deploy/overlays/prod` is the **full
+  app** (backend + collector + frontend) on the AWS backbone, namespace
+  `storage-mgt-tools-na`, deployed by `deploy-prod.yml` on `prod`-branch promotion
+  (guards that the image exists in ghcr first), gated behind a `production` GitHub
+  Environment (required-reviewer approval).
+- **In-cluster prod runner** (`deploy/runner/eks-prod-runner.yaml`) — a self-hosted
+  GitHub Actions runner (`eks-prod`) deployed as a pod in the dev EKS cluster — the
+  only vantage point that reaches both GitHub and the prod Rancher (the nonprod EC2
+  is firewalled off prod). Mounts the prod kubeconfig; PAT-registered. Bring-up
+  runbook: `docs/SIP-prod-runner-setup.md`.
 - **Azure collector satellite (AKS)** — `deploy/overlays/azure-collector` runs the
   **collector only** on AKS `c-jmkcx` (the 18 Azure arrays are reachable only from
   inside Azure), writing back to the central DB. Collector + in-namespace
@@ -47,13 +64,6 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **Frontend image is now rootless** (`frontend/Dockerfile` →
   `nginxinc/nginx-unprivileged`) so a single image passes the AKS readonly-rootfs
   policy; drop-in for on-prem compose and dev EKS (both already bind 8080).
-
-### In progress
-- **SQL Server → AWS Postgres:** data-layer port (driver + SQL dialect + schema).
-  AWS Postgres is directly reachable from AKS prod pods (proven at the protocol
-  layer), so no cross-CSP relay is needed — the earlier M365/SharePoint relay plan
-  is dropped.
-- Stable ingress for the prod/dev dashboards (currently port-forward).
 
 ---
 
