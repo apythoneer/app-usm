@@ -1,0 +1,85 @@
+# In-cluster GitHub Actions self-hosted runner, deployed INTO the dev EKS cluster
+# (c-lnk78, namespace storage-mgt-tools-na-dev).
+#
+# Why here: this pod is the only vantage point whose network reaches BOTH
+# github.com AND the AWS prod Rancher (c-5zsl4). The nonprod EC2 cannot reach the
+# prod Rancher (prod/nonprod firewall drops the TLS ClientHello), but the dev EKS
+# pod network can (verified). So the prod deploy runs from here: it polls GitHub,
+# and on a `prod`-branch promotion runs deploy-prod.yml -> `kubectl apply -k
+# deploy/overlays/prod` against prod EKS via the mounted prod kubeconfig.
+#
+# Required secrets in this namespace (out-of-band, NEVER in git):
+#   gh-runner-pat    key: token   — fine-grained PAT, repo scope "Self-hosted runners: Read and write"
+#   prod-kubeconfig  key: config  — kubeconfig for c-5zsl4 with edit on the prod namespace
+# (prod-kubeconfig is mounted optional: the runner starts + registers without it;
+#  deploys fail clearly until it is present.)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gha-runner-eks-prod
+  namespace: storage-mgt-tools-na-dev
+  labels:
+    app: gha-runner-eks-prod
+    app.kubernetes.io/part-of: sip
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: gha-runner-eks-prod
+  template:
+    metadata:
+      labels:
+        app: gha-runner-eks-prod
+      annotations:
+        # don't let the EKS ADOT webhook inject into the runner pod
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+    spec:
+      automountServiceAccountToken: false
+      initContainers:
+        # kubectl is downloaded into a shared volume (dl.k8s.io reachable from here);
+        # the workflow puts /tools on PATH.
+        - name: fetch-kubectl
+          image: curlimages/curl:8.11.1
+          command: ["sh", "-c"]
+          args:
+            - >-
+              curl -fsSL -o /tools/kubectl
+              https://dl.k8s.io/release/v1.31.3/bin/linux/amd64/kubectl &&
+              chmod +x /tools/kubectl &&
+              /tools/kubectl version --client=true
+          volumeMounts:
+            - { name: tools, mountPath: /tools }
+      containers:
+        - name: runner
+          image: myoung34/github-runner:latest
+          env:
+            - { name: REPO_URL,          value: "https://github.com/apythoneer/app-usm" }
+            - { name: RUNNER_SCOPE,      value: "repo" }
+            - { name: RUNNER_NAME_PREFIX, value: "eks-prod" }
+            - { name: LABELS,            value: "self-hosted,eks-prod" }
+            - { name: DISABLE_AUTO_UPDATE, value: "true" }
+            - { name: EPHEMERAL,         value: "false" }
+            # fine-grained PAT so the runner mints fresh registration tokens on
+            # (re)start — durable across pod restarts.
+            - name: ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: gh-runner-pat, key: token }
+            # the prod cluster kubeconfig the deploy job uses
+            - { name: KUBECONFIG, value: "/opt/prod-kube/config" }
+          volumeMounts:
+            - { name: tools,     mountPath: /tools }
+            - { name: prod-kube, mountPath: /opt/prod-kube, readOnly: true }
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits:   { cpu: "500m", memory: "512Mi" }
+      volumes:
+        - { name: tools, emptyDir: {} }
+        - name: prod-kube
+          secret:
+            secretName: prod-kubeconfig
+            optional: true
