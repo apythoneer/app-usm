@@ -1,31 +1,20 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Prod = the AKS (Azure) Rancher cluster c-jmkcx, namespace storage-mgt-tools-na.
-# Reached THROUGH the prod Rancher proxy (rancher-mgmt-east-prod.azure.corp.intranet
-# /k8s/clusters/c-jmkcx) by the azure-prod self-hosted runner on azeus2lsanadmp1,
-# which sits on the same Azure VNet (10.120.x) as the cluster + the 18 Azure arrays.
+# PROD = AWS EKS (the primary backbone), namespace storage-mgt-tools-na.
+# Full app (backend + collector + frontend) — same shape as the dev overlay one
+# tier up. Deployed by the EC2 `ec2-prod` runner via deploy-prod.yml.
 #
-# Build-once / promote-same-artifact: CI builds ghcr images tagged :<sha> on merge
-# to main. Promotion = advancing the `prod` branch to a chosen main SHA; the
-# deploy-prod workflow then pins every image to that exact :<sha> (identical model
-# to dev). The newTag below is only a standalone-apply default and is overridden at
-# deploy time by the workflow's `set image`.
+# EKS runs the CloudWatch ADOT auto-instrumentation webhook, so the base OTel
+# opt-out annotations apply (inherited from ../../base). No Azure Policy / Gatekeeper
+# here — that is only the AKS azure-collector overlay. The keepass-broker is expected
+# to already run in the namespace (as it does in dev).
 #
-# Base is EKS-shaped; these overlays add the AKS Azure Policy hardening
-# (non-root, readonly rootfs, no SA-token automount, drop caps) and the in-namespace
-# keepass-broker that both tiers need for DB/array creds. DB target stays the base
-# on-prem SQL Server until the AWS Postgres cutover (proven reachable from pods).
+# Build-once/promote: images are pinned to the promoted main SHA at deploy time.
 namespace: storage-mgt-tools-na
 
 resources:
   - ../../base
-  - keepass.yaml
-
-patches:
-  - path: patch-backend.yaml
-  - path: patch-collector.yaml
-  - path: patch-frontend.yaml
 
 labels:
   - pairs:

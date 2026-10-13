@@ -1,14 +1,9 @@
-name: Deploy prod
+name: Deploy prod (AWS EKS)
 
-# Promotion model: CI builds+pushes ghcr images tagged :<sha> on every merge to
-# main. Promoting to prod = advancing the `prod` branch to a chosen main SHA
-# (fast-forward / PR main -> prod). That push fires this workflow, which deploys
-# the prod overlay to the AKS (Azure) cluster c-jmkcx / namespace
-# storage-mgt-tools-na, pinned to the exact SHA (whose images already exist).
-#
-# Runs on the azure-prod self-hosted runner (azeus2lsanadmp1) -- the only box on
-# the Azure VNet that reaches the prod Rancher proxy. Deploys as the cicd service
-# account (its kubeconfig lives on the runner), never a personal identity.
+# PROD on the AWS backbone. Promotion = advancing the `prod` branch to a main SHA
+# that CI already built. Deploys the full app to the AWS prod EKS namespace from
+# the EC2 `ec2-prod` self-hosted runner (the corp-internal box that reaches the
+# AWS prod Rancher). Build-once / promote-same-artifact: images pinned to the SHA.
 
 on:
   push:
@@ -19,12 +14,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: deploy-prod
+  group: deploy-prod-aws
   cancel-in-progress: false
 
 jobs:
   deploy:
-    runs-on: [self-hosted, azure-prod]
+    runs-on: [self-hosted, ec2-prod]
     env:
       NS: storage-mgt-tools-na
       SHA: ${{ github.sha }}
@@ -54,7 +49,7 @@ jobs:
               "https://ghcr.io/v2/apythoneer/$img/manifests/$SHA")
             echo "  $img:$SHA -> HTTP $code"
             if [ "$code" != "200" ]; then
-              echo "::error::image $img:$SHA not found in ghcr -- promote only SHAs that CI built on main"; exit 1
+              echo "::error::image $img:$SHA not found in ghcr -- promote only SHAs CI built on main"; exit 1
             fi
           done
 
