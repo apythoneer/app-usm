@@ -26,6 +26,8 @@ spec:
               drop: ["ALL"]
           env:
             - { name: PYTHONDONTWRITEBYTECODE, value: "1" }
+            # Azure has no in-cluster broker; use the on-prem USM KeePass (reachable from AKS pods).
+            - { name: KEEPASS_URL, value: "http://usodclpsandadm1.corp.intranet:2000/keepass" }
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
       volumes:
