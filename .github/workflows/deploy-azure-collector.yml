@@ -38,14 +38,6 @@ jobs:
             --docker-password="$GHCR_PULL_TOKEN" \
             -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
 
-      - name: Preflight — keepass secrets present
-        run: |
-          for s in keepass-kdbx keepass-master; do
-            if ! kubectl -n "$NS" get secret "$s" >/dev/null 2>&1; then
-              echo "::error::missing secret $s in $NS — Krunal supplies the .kdbx + master password"; exit 1
-            fi
-          done
-
       - name: Apply manifests
         run: kubectl apply -k deploy/overlays/azure-collector
 
@@ -53,7 +45,6 @@ jobs:
         run: |
           kubectl -n "$NS" set image deployment/usm-collector collector=ghcr.io/apythoneer/usm-backend:$SHA
           kubectl -n "$NS" rollout status deployment/usm-collector  --timeout=180s
-          kubectl -n "$NS" rollout status deployment/keepass-broker --timeout=120s
 
       - name: Summary
         if: always()

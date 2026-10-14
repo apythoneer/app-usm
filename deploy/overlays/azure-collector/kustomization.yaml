@@ -10,15 +10,15 @@ kind: Kustomization
 # Deployed by the Azure VM `azure-prod` runner via deploy-azure-collector.yml, on
 # the same prod-branch promotion as AWS prod.
 #
-# AKS enforces Azure Policy / Gatekeeper, so the collector + keepass-broker are
-# hardened (patch-collector.yaml / keepass.yaml: non-root, readonly rootfs, drop
-# caps, no SA-token automount). Requires secrets keepass-kdbx + keepass-master in
-# the namespace (supplied out-of-band; the workflow preflights for them).
+# AKS enforces Azure Policy / Gatekeeper, so the collector is hardened
+# (patch-collector.yaml: non-root, readonly rootfs, drop caps, no SA-token
+# automount). Credentials come from the ON-PREM USM KeePass broker (KEEPASS_URL
+# override in patch-collector.yaml, reachable from AKS pods) — so NO in-cluster
+# broker and NO keepass secrets are needed here.
 namespace: storage-mgt-tools-na
 
 resources:
   - ../../base
-  - keepass.yaml
 
 patches:
   # harden the collector for Azure Policy

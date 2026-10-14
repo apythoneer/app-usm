@@ -17,6 +17,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   image index, which a bare request can't read) and is non-fatal, so it can't
   false-block a promotion whose images actually exist.
 
+### Changed
+- **Azure collector uses the on-prem USM KeePass directly** — the `azure-collector`
+  overlay no longer deploys an in-AKS `keepass-broker` or needs `keepass-kdbx` /
+  `keepass-master` secrets; the collector's `KEEPASS_URL` points at
+  `usodclpsandadm1:2000` (reachable from AKS pods). Removes the Krunal-secret
+  dependency for the Azure satellite.
+
 ### In progress
 - **Chatbot performance program** — a data-dictionary / semantic layer + pgvector
   RAG (SCPSB-946), explicitly guard-railed to not affect capacity forecasting or
