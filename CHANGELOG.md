@@ -11,6 +11,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+- **Prod-deploy ghcr image-provenance guard** (`deploy-prod.yml`) — the check now
+  sends the OCI/Docker manifest `Accept` media types (ghcr serves a buildx OCI
+  image index, which a bare request can't read) and is non-fatal, so it can't
+  false-block a promotion whose images actually exist.
+
 ### In progress
 - **Chatbot performance program** — a data-dictionary / semantic layer + pgvector
   RAG (SCPSB-946), explicitly guard-railed to not affect capacity forecasting or
