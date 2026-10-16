@@ -1,0 +1,23 @@
+# Dev public entry: nginx ingress → usm-frontend:8080.
+# The frontend nginx serves the UI and proxies /api/ (and on dev, /docs) to the
+# backend, so a single root rule covers UI + API + Swagger.
+# Host is on the AWS nonprod workloads cluster wildcard; TLS is provided
+# automatically by the platform (wildcard cert at the ingress controller), so we
+# do not declare a tls secret here.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: usm-frontend
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: sip.eks-cm-wklds-nonprod-ue2.aws.corp.intranet
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: usm-frontend
+                port:
+                  number: 8080
