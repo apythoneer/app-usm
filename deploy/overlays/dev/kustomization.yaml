@@ -7,6 +7,8 @@ namespace: storage-mgt-tools-na-dev
 
 resources:
   - ../../base
+  # stable public URL: sip.eks-cm-wklds-nonprod-ue2.aws.corp.intranet (nginx class)
+  - ingress.yaml
 
 patches:
   # dev exposes the full API incl. Swagger: enable DEBUG + add the /docs nginx route.
