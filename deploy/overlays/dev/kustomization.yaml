@@ -8,6 +8,11 @@ namespace: storage-mgt-tools-na-dev
 resources:
   - ../../base
 
+patches:
+  # dev exposes the full API incl. Swagger: enable DEBUG + add the /docs nginx route.
+  - path: patch-debug.yaml
+  - path: nginx-docs.yaml
+
 labels:
   - pairs:
       app.kubernetes.io/part-of: sip

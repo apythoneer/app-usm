@@ -1,0 +1,8 @@
+# Dev-only: enable DEBUG so FastAPI mounts /docs, /redoc, /openapi.json.
+# Prod leaves DEBUG=false (base), so Swagger is not exposed there.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: usm-config
+data:
+  DEBUG: "true"
