@@ -1,0 +1,34 @@
+# Prod public entry: nginx ingress → usm-frontend:8080.
+# The frontend nginx serves the UI and proxies /api/ to the backend. Unlike dev,
+# prod leaves DEBUG=false and uses the base nginx (no /docs route), so Swagger is
+# NOT exposed — this is UI + API only.
+# Host is on the AWS prod workloads cluster wildcard. TLS uses the platform's
+# "Default Ingress Controller Certificate": we specify the tls host only, with NO
+# secretName — the controller supplies the wildcard cert automatically.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: usm-frontend
+  annotations:
+    # match the base nginx 120s proxy_read_timeout (ingress-nginx defaults to 60s),
+    # so long analytics/scheduler requests aren't 504'd at the edge.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+    # ingress-nginx caps request bodies at 1 MiB by default; raise it so large
+    # POSTs (chat context, bulk settings) aren't 413'd before reaching the backend.
+    nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - sip.eks-cm-wklds-prod-ue2.aws.corp.intranet
+  rules:
+    - host: sip.eks-cm-wklds-prod-ue2.aws.corp.intranet
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: usm-frontend
+                port:
+                  number: 8080
