@@ -17,6 +17,10 @@ metadata:
     # ingress-nginx caps request bodies at 1 MiB by default; raise it so large
     # POSTs (chat context, bulk settings) aren't 413'd before reaching the backend.
     nginx.ingress.kubernetes.io/proxy-body-size: "25m"
+    # TLS is terminated at the edge ELB and forwarded to the controller as HTTP;
+    # without this, ingress-nginx force-redirects to https on every request (because
+    # a tls host is set) and loops forever (ERR_TOO_MANY_REDIRECTS / 308).
+    nginx.ingress.kubernetes.io/ssl-redirect: "false"
 spec:
   ingressClassName: nginx
   tls:
