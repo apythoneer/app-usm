@@ -1,9 +1,11 @@
 # Dev public entry: nginx ingress → usm-frontend:8080.
 # The frontend nginx serves the UI and proxies /api/ (and on dev, /docs) to the
 # backend, so a single root rule covers UI + API + Swagger.
-# Host is on the AWS nonprod workloads cluster wildcard. TLS uses the platform's
-# "Default Ingress Controller Certificate": we specify the tls host only, with NO
-# secretName — the controller supplies the wildcard cert automatically.
+# Host is on the AWS nonprod SERVICES cluster wildcard (cm-svcs-nonprod-use2) —
+# that is where our app actually runs; the wklds wildcard points at a different
+# cluster and 404s. TLS uses the platform's "Default Ingress Controller
+# Certificate": we specify the tls host only, with NO secretName — the controller
+# supplies the wildcard cert automatically.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -19,9 +21,9 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - sip.eks-cm-wklds-nonprod-ue2.aws.corp.intranet
+        - sip.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
   rules:
-    - host: sip.eks-cm-wklds-nonprod-ue2.aws.corp.intranet
+    - host: sip.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
       http:
         paths:
           - path: /
