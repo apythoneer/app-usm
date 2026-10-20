@@ -972,6 +972,31 @@ def init_database() -> None:
         """)
 
         # ------------------------------------------------------------------
+        # usm_dictionary — semantic layer for the Text-to-SQL chatbot (additive;
+        # pure metadata ABOUT the schema, never touches the described tables).
+        # Seeded from app/services/dictionary.py. See docs/chatbot-performance.md.
+        # ------------------------------------------------------------------
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.tables
+                WHERE name='usm_dictionary' AND schema_id = SCHEMA_ID('{SCHEMA}')
+            )
+            CREATE TABLE {SCHEMA}.usm_dictionary (
+                id              INT IDENTITY(1,1) PRIMARY KEY,
+                entry_type      NVARCHAR(20)  NOT NULL,   -- 'table' | 'column'
+                table_name      NVARCHAR(128) NOT NULL,
+                column_name     NVARCHAR(128) NULL,       -- NULL for table-level entries
+                description     NVARCHAR(MAX) NOT NULL,
+                unit            NVARCHAR(50)  NULL,
+                synonyms        NVARCHAR(MAX) NULL,        -- comma-separated
+                example_values  NVARCHAR(MAX) NULL,
+                source_version  NVARCHAR(40)  NOT NULL,
+                updated_at      DATETIME2 DEFAULT GETDATE(),
+                CONSTRAINT UQ_usm_dictionary UNIQUE (table_name, column_name)
+            )
+        """)
+
+        # ------------------------------------------------------------------
         # Indexes — only created if missing
         # ------------------------------------------------------------------
         indexes = [

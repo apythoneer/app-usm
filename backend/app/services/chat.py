@@ -216,6 +216,17 @@ def build_system_prompt(question: str) -> str:
     out = _SYSTEM_PROMPT_TMPL.replace("{SCHEMA_BLOCK}", schema)
     if "{SCHEMA_BLOCK}" in out:  # placeholder survived => substitution failed
         raise RuntimeError("system prompt placeholder was not substituted")
+    # Optional schema-linking: append the most relevant data-dictionary entries.
+    # OFF by default (settings.chat_use_dictionary) so prompt output is byte-for-byte
+    # unchanged until the eval set proves this helps — the §0 regression gate.
+    if settings.chat_use_dictionary:
+        try:
+            from app.services.dictionary import retrieve_dictionary_context
+            ctx = retrieve_dictionary_context(question, k=settings.chat_dictionary_top_k)
+            if ctx:
+                out = f"{out}\n\n{ctx}"
+        except Exception as e:  # dictionary is assistive — never break chat
+            logger.warning("dictionary retrieval skipped: %s", e)
     return out
 
 _SYSTEM_PROMPT_TMPL = f"""You are a storage infrastructure analyst assistant for the Unified Storage Monitoring (USM) platform.
