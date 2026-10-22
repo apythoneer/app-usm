@@ -268,24 +268,19 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
 // ── Array row ─────────────────────────────────────────────────────────────────
 
 function ArrayRow({ array, onDblClick }: { array: ArraySummary; onDblClick: () => void }) {
-  const statusOk = array.array_status === 'ok' || array.array_status === 'normal'
+  const sc = statusClasses(array.array_status)
   return (
     <tr className="hover:bg-gray-800/40 cursor-pointer select-none transition-colors" onDoubleClick={onDblClick}>
       <td className="px-4 py-2.5 text-sm text-white">
         <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${statusOk ? 'bg-green-400' : array.array_status ? 'bg-red-400' : 'bg-gray-600'}`} />
+          <span className={`w-2 h-2 rounded-full flex-shrink-0 ${sc.dot}`} />
           <span className="truncate max-w-xs font-mono text-xs">{array.array_name}</span>
         </div>
       </td>
       <td className="px-4 py-2.5 text-sm"><VendorBadge vendor={array.vendor} /></td>
       <td className="px-4 py-2.5 text-sm text-gray-400">{array.model || '—'}</td>
       <td className="px-4 py-2.5 text-sm">
-        <span className={`capitalize text-xs px-2 py-0.5 rounded-full border ${statusOk
-          ? 'bg-green-500/10 text-green-400 border-green-500/20'
-          : array.array_status
-          ? 'bg-red-500/10 text-red-400 border-red-500/20'
-          : 'bg-gray-500/10 text-gray-500 border-gray-500/20'
-        }`}>
+        <span className={`capitalize text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}>
           {array.array_status || 'unknown'}
         </span>
       </td>
@@ -467,9 +462,15 @@ function SortHeader({ field, label, sortBy, sortDir, onSort, align = 'left' }: {
   )
 }
 
+// Single source of truth for status → colour. Case-insensitive: collectors write
+// lowercase "healthy", but the UI (and some vendors) may surface "Healthy"/"OK".
+function isHealthyStatus(status?: string): boolean {
+  const s = status?.trim().toLowerCase()
+  return s === 'ok' || s === 'normal' || s === 'healthy'
+}
+
 function statusClasses(status?: string): { dot: string; pill: string } {
-  const ok = status === 'ok' || status === 'normal' || status === 'healthy'
-  if (ok) return { dot: 'bg-green-400', pill: 'bg-green-500/10 text-green-400 border-green-500/20' }
+  if (isHealthyStatus(status)) return { dot: 'bg-green-400', pill: 'bg-green-500/10 text-green-400 border-green-500/20' }
   if (status) return { dot: 'bg-red-400', pill: 'bg-red-500/10 text-red-400 border-red-500/20' }
   return { dot: 'bg-gray-600', pill: 'bg-gray-500/10 text-gray-500 border-gray-500/20' }
 }
@@ -507,8 +508,7 @@ function ArraysTableModal({ onClose, onSelectArray }: {
       else result = result.filter(r => isCloudGroup(r.group) && getCloudProvider(r.group) === cloudFilter)
     }
     if (statusFilter) {
-      const isOk = (s?: string) => s === 'ok' || s === 'normal' || s === 'healthy'
-      result = result.filter(r => statusFilter === 'healthy' ? isOk(r.array_status) : !isOk(r.array_status))
+      result = result.filter(r => statusFilter === 'healthy' ? isHealthyStatus(r.array_status) : !isHealthyStatus(r.array_status))
     }
     if (search) {
       const q = search.toLowerCase()
