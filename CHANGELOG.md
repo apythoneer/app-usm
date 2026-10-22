@@ -11,6 +11,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+- **Chatbot data dictionary (`usm_dictionary`)** — foundation for the chatbot
+  performance program (SCPSB-946, item 1 "tag the data"). A new additive
+  `USM.usm_dictionary` table + a git-versioned seed
+  (`app/services/dictionary.py`) describing core tables/columns with units and
+  the synonyms users actually type. `build_system_prompt()` can inject the
+  most-relevant entries as schema-linking context, gated behind
+  `CHAT_USE_DICTIONARY` (**default off** — no prompt change until an eval set
+  confirms no regression to forecasting/analytics). Retrieval is keyword-based
+  today and is the drop-in seam for pgvector cosine similarity after the
+  SCPSB-1022 Postgres cutover.
+
 ### Fixed
 - **Prod-deploy ghcr image-provenance guard** (`deploy-prod.yml`) — the check now
   sends the OCI/Docker manifest `Accept` media types (ghcr serves a buildx OCI

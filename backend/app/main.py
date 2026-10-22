@@ -58,6 +58,12 @@ async def lifespan(app: FastAPI):
         # collector runs migrations; API workers just consume the ready schema.
         if settings.run_scheduler:
             init_database()
+            # Materialise the chatbot data dictionary (additive; non-fatal).
+            try:
+                from app.services.dictionary import seed_dictionary
+                seed_dictionary()
+            except Exception as e:
+                logger.warning(f"usm_dictionary seed skipped (non-fatal): {e}")
         from app.api.v1.settings import load_persisted_settings
         try:
             load_persisted_settings()

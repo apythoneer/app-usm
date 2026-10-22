@@ -205,6 +205,16 @@ class Settings(BaseSettings):
     # unhealthy — which is exactly what happened. Excess requests get a fast 503.
     chat_max_concurrent: int = Field(default=2, alias="CHAT_MAX_CONCURRENT")
 
+    # Data-dictionary schema-linking (docs/chatbot-performance.md §1).
+    # OFF by default: when true, build_system_prompt() appends the most relevant
+    # usm_dictionary entries to the prompt. Keep OFF until the eval set confirms it
+    # helps and that forecasting/analytics are unaffected (the §0 regression gate).
+    chat_use_dictionary: bool = Field(default=False, alias="CHAT_USE_DICTIONARY")
+    chat_dictionary_top_k: int = Field(default=8, alias="CHAT_DICTIONARY_TOP_K")
+    # Embeddings model for the future pgvector RAG (SCPSB-946, post SCPSB-1022).
+    # Unused today — no embeddings are computed until the Postgres cutover.
+    ollama_embed_model: str = Field(default="nomic-embed-text", alias="OLLAMA_EMBED_MODEL")
+
     # Partial-collection data-loss guard.
     #
     # Delete-then-insert collectors (hitachi/hpe/dell/oracle) DELETE an array's
