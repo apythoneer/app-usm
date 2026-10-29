@@ -1,0 +1,82 @@
+# Commvault backup-job summary pipeline, as a nightly Kubernetes CronJob.
+#
+# STAGED, NOT ACTIVE. Two things gate going live (see README.md):
+#   1. suspend: true  -> set to false once the renewable Commvault token + Secret
+#      are in place and the three egress legs are confirmed.
+#   2. The Secret `cvlt-backup-secrets` must exist in the namespace (NOT committed;
+#      created out-of-band from secret.example.yaml).
+#
+# Separate from the SIP app: own namespace-scoped CronJob, own image, own Secret.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: cvlt-backup-summary
+  namespace: storage-mgt-tools-na
+  labels:
+    app: cvlt-backup-summary
+    app.kubernetes.io/part-of: cvlt-backup
+spec:
+  # Report pulls the last 24h ("-PT24H P0D"); run once daily after the backup
+  # window. 13:00 UTC ~= early morning US. Adjust to the real backup SLA.
+  schedule: "0 13 * * *"
+  timeZone: "Etc/UTC"
+  suspend: true                 # <-- FLIP to false to go live
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1           # fail loud; a daily job re-runs tomorrow
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: cvlt-backup-summary
+          annotations:
+            # Opt out of EKS ADOT auto-instrumentation (same as the SIP pods).
+            instrumentation.opentelemetry.io/inject-python: "false"
+        spec:
+          restartPolicy: Never
+          imagePullSecrets:
+            - name: ghcr-apythoneer
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            fsGroup: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: cvlt-backup-summary
+              # Pinned to an immutable SHA tag at deploy time (see README). :latest
+              # here is a placeholder for the staged state.
+              image: ghcr.io/apythoneer/cvlt-backup-summary:latest
+              imagePullPolicy: IfNotPresent
+              # run_job.py wraps PJ's main() to record each run in cvlt_job_runs
+              # (feeds the health server's last-run panel); exit code is unchanged.
+              command: ["python", "-u", "run_job.py"]
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests: { cpu: "100m", memory: "128Mi" }
+                limits: { cpu: "500m", memory: "512Mi" }
+              volumeMounts:
+                # The script reads /home/cvadmin/.var/secrets.json verbatim — mount
+                # the Secret there so NO code change is needed.
+                - name: secrets
+                  mountPath: /home/cvadmin/.var
+                  readOnly: true
+          volumes:
+            - name: secrets
+              secret:
+                secretName: cvlt-backup-secrets
+                items:
+                  - key: secrets.json
+                    path: secrets.json
+                defaultMode: 0400

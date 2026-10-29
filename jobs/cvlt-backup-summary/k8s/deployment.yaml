@@ -1,0 +1,78 @@
+# Always-on health/status surface for the service (the nightly ETL is the CronJob).
+# Same image, different entrypoint (healthserver.py). ClusterIP service on :8080.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cvlt-backup-summary-health
+  namespace: storage-mgt-tools-na
+  labels:
+    app: cvlt-backup-summary
+    component: health
+    app.kubernetes.io/part-of: cvlt-backup
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: cvlt-backup-summary, component: health }
+  template:
+    metadata:
+      labels: { app: cvlt-backup-summary, component: health }
+      annotations:
+        instrumentation.opentelemetry.io/inject-python: "false"
+    spec:
+      imagePullSecrets:
+        - name: ghcr-apythoneer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: health
+          image: ghcr.io/apythoneer/cvlt-backup-summary:latest
+          imagePullPolicy: IfNotPresent
+          command: ["python", "-u", "healthserver.py"]
+          ports:
+            - { name: http, containerPort: 8080 }
+          env:
+            - { name: SERVICE_VERSION, value: "0.1.0" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /ping, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: { cpu: "50m", memory: "96Mi" }
+            limits: { cpu: "250m", memory: "256Mi" }
+          volumeMounts:
+            - { name: secrets, mountPath: /home/cvadmin/.var, readOnly: true }
+      volumes:
+        - name: secrets
+          secret:
+            secretName: cvlt-backup-secrets
+            items:
+              - { key: secrets.json, path: secrets.json }
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cvlt-backup-summary-health
+  namespace: storage-mgt-tools-na
+  labels: { app: cvlt-backup-summary, component: health }
+spec:
+  selector: { app: cvlt-backup-summary, component: health }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }

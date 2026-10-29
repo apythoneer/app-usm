@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Independent of the SIP app overlays (deploy/overlays/*). Apply this on its own:
+#   kubectl apply -k jobs/cvlt-backup-summary/k8s
+# The Secret is intentionally NOT listed here — create it out-of-band first.
+namespace: storage-mgt-tools-na
+
+resources:
+  - cronjob.yaml
+  - deployment.yaml   # always-on health/status server (/, /health, /status, /ping)
+
+images:
+  - name: ghcr.io/apythoneer/cvlt-backup-summary
+    newTag: latest

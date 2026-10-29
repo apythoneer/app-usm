@@ -1,0 +1,5 @@
+# Pinned, minimal — this job is intentionally separate from the SIP backend image.
+requests>=2.31.0
+# psycopg2-binary ships a prebuilt wheel, so the image needs NO gcc / postgresql-devel
+# / python3-devel build toolchain (the deps PJ hit when running it on a bare host).
+psycopg2-binary>=2.9.9
