@@ -1,0 +1,96 @@
+name: Deploy cvlt-backup-summary (AWS EKS)
+
+# Standalone deploy for PJ's Commvault backup-summary service. Kept SEPARATE from
+# the SIP app deploy (deploy-prod.yml) but reuses the same in-cluster `eks-prod`
+# runner, because a personal kubectl identity has no RBAC to write CronJobs/Services
+# in storage-mgt-tools-na — only the runner's service account does.
+#
+# Manual-only (workflow_dispatch): activation is deliberate. By default it brings up
+# the always-on health server and leaves the nightly CronJob SUSPENDED until the
+# health page shows all three connections green. Flip run_etl=true to unsuspend.
+#
+# TEMPORARY OWNERSHIP: this is a stop-gap so the service can run now. Hand off to
+# PJ/Krunal's pipeline once they have their K8s deploy structure — see
+# docs/cvlt-backup-handoff.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: "Image tag to pin (a main SHA built by ci-cvlt-backup.yml, or 'latest')"
+        required: true
+        default: "latest"
+      run_etl:
+        description: "Unsuspend the nightly ETL CronJob (false = health server only)"
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-cvlt-backup
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, eks-prod]
+    environment: production
+    env:
+      NS: storage-mgt-tools-na
+      IMG: ghcr.io/apythoneer/cvlt-backup-summary
+      TAG: ${{ github.event.inputs.image_sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Put kubectl (fetched by the runner initContainer) on PATH
+        run: |
+          echo "/tools" >> "$GITHUB_PATH"
+          /tools/kubectl version --client=true
+
+      - name: Require the credential Secret to already exist
+        run: |
+          # Contains real Commvault/Postgres/Datadog creds -> created out-of-band by
+          # someone with namespace write, never by CI. Fail early with guidance.
+          if ! kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
+            echo "::error::Secret 'cvlt-backup-secrets' is missing in $NS."
+            echo "Create it first (see jobs/cvlt-backup-summary/k8s/secret.example.yaml):"
+            echo "  kubectl -n $NS create secret generic cvlt-backup-secrets --from-file=secrets.json=/path/to/secrets.json"
+            exit 1
+          fi
+          echo "Secret present."
+
+      - name: Ensure private GHCR pull secret
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create secret docker-registry ghcr-apythoneer \
+            --docker-server=ghcr.io \
+            --docker-username=apythoneer \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply manifests (CronJob stays suspended per the manifest)
+        run: kubectl apply -k jobs/cvlt-backup-summary/k8s
+
+      - name: Pin image on both workloads
+        run: |
+          kubectl -n "$NS" set image deployment/cvlt-backup-summary-health health="$IMG:$TAG"
+          kubectl -n "$NS" set image cronjob/cvlt-backup-summary cvlt-backup-summary="$IMG:$TAG"
+
+      - name: Roll out the health server
+        run: kubectl -n "$NS" rollout status deployment/cvlt-backup-summary-health --timeout=120s
+
+      - name: Optionally unsuspend the nightly ETL
+        if: ${{ github.event.inputs.run_etl == 'true' }}
+        run: |
+          kubectl -n "$NS" patch cronjob cvlt-backup-summary -p '{"spec":{"suspend":false}}'
+          echo "CronJob unsuspended."
+
+      - name: Summary
+        if: always()
+        run: |
+          kubectl -n "$NS" get deploy,svc,cronjob -l app=cvlt-backup-summary -o wide || true
+          echo "Validate the health header:"
+          echo "  kubectl -n $NS port-forward svc/cvlt-backup-summary-health 8080:8080  # then open http://localhost:8080/"

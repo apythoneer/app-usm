@@ -12,6 +12,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **cvlt-backup-summary service** (`jobs/cvlt-backup-summary/`) — standalone,
+  separate from the SIP app. Containerises PJ's Commvault backup-job pipeline as a
+  nightly `CronJob` (Commvault report → AWS RDS `stormart` Postgres → Datadog
+  failure/resolution events; ships suspended until validated) plus an always-on
+  health service exposing `/`, `/health`, `/status`, `/ping` with live
+  Commvault/Postgres/Datadog connection checks and last-run/uptime. Own image,
+  path-filtered CI, and a manual deploy workflow on the `eks-prod` runner.
+  Temporary ownership — handoff plan in `docs/cvlt-backup-handoff.md`.
 - **Chatbot data dictionary (`usm_dictionary`)** — foundation for the chatbot
   performance program (SCPSB-946, item 1 "tag the data"). A new additive
   `USM.usm_dictionary` table + a git-versioned seed
