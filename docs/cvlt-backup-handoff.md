@@ -59,5 +59,6 @@ jobs in this same namespace via their own deploy mechanism + KeePass-brokered cr
 2. Seed `cvlt-backup-secrets` with a **fresh** Commvault `token`+`refresh_token`
    pair right before enabling (a stale refresh_token 401s on the first renew). The
    PVC persists the pair thereafter.
-3. Confirm the PVC `cvlt-backup-var` is `Bound`.
+3. PVC `cvlt-backup-var` uses `ebs-sc` (`WaitForFirstConsumer`) — it binds when the
+   first ETL pod runs, so `Pending` beforehand is expected.
 4. Then deploy with `run_etl=true` (or patch `suspend:false`).
