@@ -26,5 +26,8 @@ spec:
   resources:
     requests:
       storage: 128Mi
-  # storageClassName intentionally omitted -> uses the cluster default class.
-  # Set it explicitly here if the namespace requires a specific class.
+  # cm-svcs-prod-use2 has NO default StorageClass, so this must be explicit or the
+  # PVC stays Pending forever. ebs-sc = AWS EBS, RWO, WaitForFirstConsumer (binds
+  # when the first CronJob pod schedules — a Pending PVC with no running job is
+  # normal, not a failure). Change if the namespace standardises on another class.
+  storageClassName: ebs-sc

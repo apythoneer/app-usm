@@ -94,7 +94,8 @@ jobs:
         if: always()
         run: |
           kubectl -n "$NS" get deploy,svc,cronjob,pvc -l app=cvlt-backup-summary -o wide || true
-          echo "PVC must be Bound before the first ETL run (holds the rotating token):"
+          echo "PVC holds the rotating token; ebs-sc is WaitForFirstConsumer, so"
+          echo "Pending until the first ETL pod runs is normal (not a failure):"
           kubectl -n "$NS" get pvc cvlt-backup-var || true
           echo "Validate the health header:"
           echo "  kubectl -n $NS port-forward svc/cvlt-backup-summary-health 8080:8080  # then open http://localhost:8080/"
