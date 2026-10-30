@@ -25,6 +25,11 @@ on:
         type: boolean
         required: true
         default: false
+      smoke:
+        description: "Run a one-off Job now and show its logs (end-to-end test)"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -112,8 +117,40 @@ jobs:
       - name: Optionally unsuspend the nightly ETL
         if: ${{ github.event.inputs.run_etl == 'true' }}
         run: |
+          # NB: the "Apply manifests" step above re-applies suspend:true from the
+          # manifest on every deploy, so a deploy must set run_etl=true to KEEP the
+          # CronJob enabled — otherwise it ends suspended again.
           kubectl -n "$NS" patch cronjob cvlt-backup-summary -p '{"spec":{"suspend":false}}'
           echo "CronJob unsuspended."
+
+      - name: Smoke-test a one-off run now
+        if: ${{ github.event.inputs.smoke == 'true' }}
+        run: |
+          # A manual Job from the cronjob runs immediately (independent of suspend),
+          # so we can watch the first real ETL end-to-end instead of waiting for 13:00.
+          JOB="cvlt-smoke-$(date +%s)"
+          kubectl -n "$NS" create job "$JOB" --from=cronjob/cvlt-backup-summary
+          echo "created $JOB — polling up to 20m for completion…"
+          result=""
+          for i in $(seq 1 120); do
+            s=$(kubectl -n "$NS" get job "$JOB" -o jsonpath='{.status.succeeded}' 2>/dev/null || true)
+            f=$(kubectl -n "$NS" get job "$JOB" -o jsonpath='{.status.failed}'    2>/dev/null || true)
+            if [ "$s" = "1" ]; then result="success"; break; fi
+            if [ -n "$f" ] && [ "$f" != "0" ]; then result="failed"; break; fi
+            sleep 10
+          done
+          echo "----- pod -----"
+          kubectl -n "$NS" get pods -l job-name="$JOB" -o wide || true
+          echo "----- logs -----"
+          kubectl -n "$NS" logs "job/$JOB" --tail=300 || true
+          echo "----- rows now in stormart.cvlt_job_runs (latest) -----"
+          kubectl -n "$NS" exec deploy/cvlt-backup-summary-health -- python -c \
+            "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/status', timeout=12).read().decode())" || true
+          if [ "$result" != "success" ]; then
+            echo "::error::smoke Job $JOB did not complete successfully (result=${result:-timeout})"
+            exit 1
+          fi
+          echo "smoke Job $JOB completed successfully."
 
       - name: Summary
         if: always()
