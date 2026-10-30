@@ -97,6 +97,18 @@ jobs:
       - name: Roll out the health server
         run: kubectl -n "$NS" rollout status deployment/cvlt-backup-summary-health --timeout=120s
 
+      - name: Verify connections (/status from inside the health pod)
+        run: |
+          # Readiness (/health) already proves Commvault + Postgres (critical).
+          # /status additionally shows the non-critical Datadog leg (the one egress
+          # never confirmed from inside the cluster). exec goes via the kube API, so
+          # it works from this runner without pod-network reach to the ClusterIP.
+          POD=$(kubectl -n "$NS" get pod -l app=cvlt-backup-summary,component=health \
+                  -o jsonpath='{.items[0].metadata.name}')
+          echo "health pod: $POD"
+          kubectl -n "$NS" exec "$POD" -- python -c \
+            "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/status', timeout=12).read().decode())"
+
       - name: Optionally unsuspend the nightly ETL
         if: ${{ github.event.inputs.run_etl == 'true' }}
         run: |
