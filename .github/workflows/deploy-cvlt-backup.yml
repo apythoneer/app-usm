@@ -49,19 +49,32 @@ jobs:
           echo "/tools" >> "$GITHUB_PATH"
           /tools/kubectl version --client=true
 
-      - name: Require the credential Secret to already exist
+      - name: Ensure the credential Secret exists (one-time PVC seed)
+        env:
+          # Fresh Commvault token+refresh_token pair + pg/dd creds, as the exact
+          # secrets.json the script expects. Set this repo Actions secret before the
+          # first deploy. Injected here only to CREATE the k8s Secret once — the prod
+          # Rancher is reachable ONLY from this in-cluster runner, so the creds can't
+          # be applied from a laptop/EC2 (the nonprod EC2 cannot reach prod).
+          CVLT_SECRETS_JSON: ${{ secrets.CVLT_SECRETS_JSON }}
         run: |
-          # Contains real Commvault/Postgres/Datadog creds -> created out-of-band by
-          # someone with namespace write, never by CI. Fail early with guidance.
-          if ! kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
-            echo "::error::Secret 'cvlt-backup-secrets' is missing in $NS."
-            echo "Create it first (see jobs/cvlt-backup-summary/k8s/secret.example.yaml)."
-            echo "Seed it with a FRESH commvault token+refresh_token pair (a stale"
-            echo "refresh_token will 401 on the first renew). It seeds the PVC once."
-            echo "  kubectl -n $NS create secret generic cvlt-backup-secrets --from-file=secrets.json=/path/to/secrets.json"
+          if kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
+            # Never overwrite: the script renews the token into the PVC; the Secret is
+            # only the initial seed and may now be stale.
+            echo "Secret already present — leaving it untouched."
+          elif [ -n "$CVLT_SECRETS_JSON" ]; then
+            umask 077
+            printf '%s' "$CVLT_SECRETS_JSON" > /tmp/cvlt-secrets.json
+            kubectl -n "$NS" create secret generic cvlt-backup-secrets \
+              --from-file=secrets.json=/tmp/cvlt-secrets.json
+            shred -u /tmp/cvlt-secrets.json 2>/dev/null || rm -f /tmp/cvlt-secrets.json
+            echo "Secret created from CVLT_SECRETS_JSON (seeds the PVC on first run)."
+          else
+            echo "::error::cvlt-backup-secrets is missing and the Actions secret CVLT_SECRETS_JSON is not set."
+            echo "Set repo Settings -> Secrets and variables -> Actions -> CVLT_SECRETS_JSON"
+            echo "to a FRESH secrets.json (a stale refresh_token 401s on the first renew), then re-run."
             exit 1
           fi
-          echo "Secret present."
 
       - name: Ensure private GHCR pull secret
         env:
