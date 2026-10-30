@@ -31,9 +31,13 @@ jobs in this same namespace via their own deploy mechanism + KeePass-brokered cr
 ## Handoff checklist (do when their K8s structure is ready)
 - [ ] **Repo/image**: move `jobs/cvlt-backup-summary/` to their repo and publish the
       image under their registry (e.g. `ghcr.io/kplumen/...`); update manifest image refs.
-- [ ] **Credentials**: switch from the mounted `secrets.json` Secret to the in-cluster
-      **KeePass broker** (`http://keepass-broker:2000`) like the sibling jobs — same
-      proven `CommVault_scriptuser` / `postgres_db_creds` identities, no static token.
+- [ ] **Credentials**: current model is self-renewing — the script reads a
+      `token`+`refresh_token` pair and renews on 401, rewriting `secrets.json`. The
+      pair is seeded once from the `cvlt-backup-secrets` Secret into a **writable PVC**
+      (`cvlt-backup-var`) that persists the rotating pair across runs. If moving to the
+      **KeePass broker** (`http://keepass-broker:2000`, `CommVault_scriptuser` /
+      `postgres_db_creds`) like the sibling jobs, note the pair rotates — the broker
+      path needs write-back (or a login-per-run that mints a fresh pair), not just a read.
 - [ ] **Deploy**: retire `deploy-cvlt-backup.yml` here; their pipeline/SA applies the
       manifests. Confirm their SA can manage CronJob/Deployment/Service in the ns.
 - [ ] **CI**: retire `ci-cvlt-backup.yml` here once their build publishes the image.
@@ -52,6 +56,8 @@ jobs in this same namespace via their own deploy mechanism + KeePass-brokered cr
 
 ## Open items before enabling the nightly ETL
 1. Confirm Datadog egress green on the health page.
-2. Resolve the Commvault auth: PJ's static token will expire — prefer the KeePass
-   `CommVault_scriptuser` identity.
-3. Then deploy with `run_etl=true` (or patch `suspend:false`).
+2. Seed `cvlt-backup-secrets` with a **fresh** Commvault `token`+`refresh_token`
+   pair right before enabling (a stale refresh_token 401s on the first renew). The
+   PVC persists the pair thereafter.
+3. Confirm the PVC `cvlt-backup-var` is `Bound`.
+4. Then deploy with `run_etl=true` (or patch `suspend:false`).

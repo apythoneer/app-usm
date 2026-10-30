@@ -1,10 +1,16 @@
 # Commvault backup-job summary pipeline, as a nightly Kubernetes CronJob.
 #
-# STAGED, NOT ACTIVE. Two things gate going live (see README.md):
-#   1. suspend: true  -> set to false once the renewable Commvault token + Secret
-#      are in place and the three egress legs are confirmed.
+# STAGED, NOT ACTIVE. Three things gate going live (see README.md):
+#   1. suspend: true  -> set to false once the token/refresh pair is seeded and
+#      the three egress legs are confirmed.
 #   2. The Secret `cvlt-backup-secrets` must exist in the namespace (NOT committed;
-#      created out-of-band from secret.example.yaml).
+#      created out-of-band from secret.example.yaml, from a FRESH token+refresh).
+#   3. The PVC `cvlt-backup-var` must be bound (pvc.yaml).
+#
+# Credential flow: the init container seeds secrets.json from the Secret into the
+# PVC ONCE (only if absent), then the main container runs the script, which owns
+# the file from then on (renews + rewrites the token/refresh pair in place). The
+# PVC persists the rotating pair across runs; the Secret is only the initial seed.
 #
 # Separate from the SIP app: own namespace-scoped CronJob, own image, own Secret.
 apiVersion: batch/v1
@@ -44,9 +50,40 @@ spec:
             runAsNonRoot: true
             runAsUser: 1000
             runAsGroup: 1000
-            fsGroup: 1000
+            fsGroup: 1000          # makes the PVC group-writable by uid 1000
             seccompProfile:
               type: RuntimeDefault
+          initContainers:
+            # Seed secrets.json into the PVC ONCE. `cp` only if absent, so a token
+            # the script has since renewed in the PVC is never clobbered by the
+            # (now-stale) Secret. The Secret is the bootstrap; the PVC is truth.
+            - name: seed-secrets
+              image: ghcr.io/apythoneer/cvlt-backup-summary:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -e
+                  if [ -f /pvc/secrets.json ]; then
+                    echo "secrets.json already present in PVC — keeping renewed tokens"
+                  else
+                    cp /seed/secrets.json /pvc/secrets.json
+                    echo "seeded secrets.json into PVC from Secret"
+                  fi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                runAsUser: 1000
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: seed
+                  mountPath: /seed
+                  readOnly: true
+                - name: secrets
+                  mountPath: /pvc
           containers:
             - name: cvlt-backup-summary
               # Pinned to an immutable SHA tag at deploy time (see README). :latest
@@ -67,13 +104,18 @@ spec:
                 requests: { cpu: "100m", memory: "128Mi" }
                 limits: { cpu: "500m", memory: "512Mi" }
               volumeMounts:
-                # The script reads /home/cvadmin/.var/secrets.json verbatim — mount
-                # the Secret there so NO code change is needed.
+                # The script reads AND rewrites /home/cvadmin/.var/secrets.json
+                # (token renewal + .bak), so this mount must be WRITABLE — the PVC,
+                # not the Secret. No code change needed.
                 - name: secrets
                   mountPath: /home/cvadmin/.var
-                  readOnly: true
           volumes:
+            # Writable, persistent store the script owns (seeded once by initContainer).
             - name: secrets
+              persistentVolumeClaim:
+                claimName: cvlt-backup-var
+            # Read-only initial seed (token/refresh pair + pg/dd creds).
+            - name: seed
               secret:
                 secretName: cvlt-backup-secrets
                 items:

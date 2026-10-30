@@ -55,7 +55,9 @@ jobs:
           # someone with namespace write, never by CI. Fail early with guidance.
           if ! kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
             echo "::error::Secret 'cvlt-backup-secrets' is missing in $NS."
-            echo "Create it first (see jobs/cvlt-backup-summary/k8s/secret.example.yaml):"
+            echo "Create it first (see jobs/cvlt-backup-summary/k8s/secret.example.yaml)."
+            echo "Seed it with a FRESH commvault token+refresh_token pair (a stale"
+            echo "refresh_token will 401 on the first renew). It seeds the PVC once."
             echo "  kubectl -n $NS create secret generic cvlt-backup-secrets --from-file=secrets.json=/path/to/secrets.json"
             exit 1
           fi
@@ -91,6 +93,8 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          kubectl -n "$NS" get deploy,svc,cronjob -l app=cvlt-backup-summary -o wide || true
+          kubectl -n "$NS" get deploy,svc,cronjob,pvc -l app=cvlt-backup-summary -o wide || true
+          echo "PVC must be Bound before the first ETL run (holds the rotating token):"
+          kubectl -n "$NS" get pvc cvlt-backup-var || true
           echo "Validate the health header:"
           echo "  kubectl -n $NS port-forward svc/cvlt-backup-summary-health 8080:8080  # then open http://localhost:8080/"

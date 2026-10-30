@@ -41,29 +41,48 @@ path-filtered), own manual deploy (`.github/workflows/deploy-cvlt-backup.yml`, r
   # then open http://localhost:8080/  (or curl http://localhost:8080/status)
   ```
 
+## Token persistence (the key design point)
+The script now carries its own auth: it reads `commvault.token` **and**
+`commvault.refresh_token` from secrets.json and, on a 401, calls
+`/commandcenter/api/V4/AccessToken/Renew`, then **rewrites secrets.json** with the
+new pair (and writes a `.bak` on every import). Because the job runs daily the
+access token is essentially always expired at run time → it renews every run, and
+the **refresh_token rotates** each time. That rotating pair must survive pod
+restarts, so:
+
+- `/home/cvadmin/.var` is a **writable PVC** (`cvlt-backup-var`, see `pvc.yaml`),
+  **not** a read-only Secret mount — the script owns the file and keeps it current.
+- An **initContainer** (`seed-secrets`) copies secrets.json from the Secret into
+  the PVC **once, only if absent**, so it never clobbers a token the script has
+  since renewed. The Secret is just the bootstrap seed; the PVC is the source of truth.
+- The **health Deployment does not mount the PVC** — it mounts the read-only Secret,
+  because it only needs the (static) Postgres/Datadog creds and never renews the token.
+
 ## Staged — what gates "fire it up"
 The CronJob ships with `suspend: true`. To go live:
 
-### 1. Renewable Commvault token
-The Commvault login was stripped from the script (`# REMOVED`); it uses a static
-`ACCESS_TOKEN`. A static Authtoken **expires**, so a daily job will eventually
-401. Before enabling, decide the auth story and put the result in the Secret:
-- re-add a login step (QSDK `/Login`) that mints a fresh token each run, **or**
-- provision a long-lived Commvault API key / service account token.
-
-### 2. Create the Secret (out-of-band, never committed)
-See `k8s/secret.example.yaml`. The script reads `/home/cvadmin/.var/secrets.json`
-verbatim; the Secret is mounted there, so no code change.
+### 1. Create the seed Secret (out-of-band, never committed)
+See `k8s/secret.example.yaml`. **Seed with a FRESH token/refresh pair minted right
+before activation** — a pair that's been sitting around may have a dead
+refresh_token, and the first run's renew would 401. The access token itself may be
+expired (the first run renews it); only the refresh_token must be live.
 ```
 kubectl -n storage-mgt-tools-na create secret generic cvlt-backup-secrets \
     --from-file=secrets.json=/tmp/secrets.json
+shred -u /tmp/secrets.json
 ```
+> Re-seeding later (e.g. if the refresh_token fully dies): update the Secret, then
+> delete the PVC's file so the initContainer re-copies it —
+> `kubectl -n storage-mgt-tools-na delete pvc cvlt-backup-var` (recreated by apply),
+> or exec a one-shot pod to `rm /home/cvadmin/.var/secrets.json`.
 
-### 3. Confirm egress (three legs) — see below.
+### 2. Confirm egress (three legs) — see below.
 
-### 4. Enable
+### 3. Enable
+Prefer the manual deploy workflow (`deploy-cvlt-backup.yml`) which applies the
+manifests on the `eks-prod` runner and flips suspend. Equivalent kubectl:
 ```
-# build happens on merge via ci-cvlt-backup.yml; pin the image SHA:
+kubectl apply -k jobs/cvlt-backup-summary/k8s          # PVC + CronJob + health
 kubectl -n storage-mgt-tools-na set image cronjob/cvlt-backup-summary \
     cvlt-backup-summary=ghcr.io/apythoneer/cvlt-backup-summary:<merged-sha>
 kubectl -n storage-mgt-tools-na patch cronjob cvlt-backup-summary \
@@ -78,9 +97,9 @@ The pod needs to reach **three** destinations; they fail independently:
 
 | Leg | Target | Confidence |
 |-----|--------|------------|
-| Commvault (on-prem) | `uscomvlt1.corp.intranet:443` | **Likely OK** — the SIP pods in this same cluster already reach on-prem `usidcvsql0252.ctl.intranet` (SQL Server), so corp on-prem routing exists. Different host though — verify. |
-| Postgres (AWS cloud) | stormart `:5432` | Likely OK from the AWS cluster; confirm host + SG allows the node CIDR. |
-| Datadog (SaaS) | `api.us5.datadoghq.com:443` | **Riskiest** — needs public internet egress, which an egress-restricted cluster may block. Must test. |
+| Commvault (on-prem) | `uscomvlt1.corp.intranet:443` | **Proven** — Krunal's sibling `storage-ops-commvault-*` jobs in this same namespace complete `1/1` daily pulling this exact Commvault. |
+| Postgres (AWS cloud) | `aws-pgsql-…us-east-2.rds.amazonaws.com:5432` | **Proven** — same sibling jobs write `stormart` daily (AWS RDS, priv IP `10.168.203.75` in the prod VPC — not on-prem). |
+| Datadog (SaaS) | `api.us5.datadoghq.com:443` | **Unverified — the one open leg.** Needs public egress, which an egress-restricted cluster may block. The health page's `/status` confirms it once the Deployment is up (`GET /api/v1/validate`). |
 
 Verify from a throwaway pod in the target namespace before flipping `suspend`:
 ```
@@ -108,3 +127,6 @@ job on a node/VM that already has the needed reachability.
   including `stormart`. Qualify it to be safe.
 - TLS verification is disabled against Commvault (`verify=False`). Fine internally;
   revisit if a cert/CA becomes available.
+- Renewal persistence depends on the PVC. If the storage class is slow to bind or
+  the namespace has quota limits, the first run will block on the PVC — check
+  `kubectl -n storage-mgt-tools-na get pvc cvlt-backup-var` is `Bound`.
