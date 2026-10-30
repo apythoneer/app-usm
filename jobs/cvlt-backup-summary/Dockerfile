@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY dataDogIncidentManagement.py run_job.py healthserver.py ./
 
-# Run as non-root (matches the hardened prod securityContext). The secrets file is
-# mounted read-only at /home/cvadmin/.var/secrets.json by both workloads.
+# Run as non-root (matches the hardened prod securityContext). secrets.json lives
+# at /home/cvadmin/.var/: a writable PVC for the CronJob (the script renews tokens
+# in place), a read-only Secret for the health server (read-only, never renews).
 RUN useradd --uid 1000 --create-home cvadmin
 USER 1000
 

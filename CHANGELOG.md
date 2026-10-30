@@ -20,6 +20,9 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   Commvault/Postgres/Datadog connection checks and last-run/uptime. Own image,
   path-filtered CI, and a manual deploy workflow on the `eks-prod` runner.
   Temporary ownership — handoff plan in `docs/cvlt-backup-handoff.md`.
+  Credentials use a self-renewing Commvault `token`+`refresh_token` pair persisted
+  on a writable PVC (`cvlt-backup-var`), seeded once from a Secret by an
+  initContainer — the script renews and rewrites it in place on each 401.
 - **Chatbot data dictionary (`usm_dictionary`)** — foundation for the chatbot
   performance program (SCPSB-946, item 1 "tag the data"). A new additive
   `USM.usm_dictionary` table + a git-versioned seed

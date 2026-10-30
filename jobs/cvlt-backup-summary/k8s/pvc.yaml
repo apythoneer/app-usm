@@ -1,0 +1,30 @@
+# Writable, persistent home for /home/cvadmin/.var/secrets.json.
+#
+# WHY A PVC (not the Secret mount): the script rewrites secrets.json on every
+# Commvault token renewal (401 -> /AccessToken/Renew -> new token+refresh saved
+# back) and writes a .bak on every import. A Secret mount is read-only. And
+# because the refresh_token ROTATES on each renew, the updated pair must survive
+# pod restarts — an emptyDir would lose it and the next cold start would renew
+# with a dead token. The CronJob seeds this volume ONCE from the Secret (only if
+# the file is absent) and owns it thereafter, mirroring exactly how the script
+# maintains the file on the host today.
+#
+# Only the CronJob mounts this (RWO, reused across daily runs via Forbid
+# concurrency). The health Deployment does NOT mount it — it reads the read-only
+# Secret instead (it never renews the token).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cvlt-backup-var
+  namespace: storage-mgt-tools-na
+  labels:
+    app: cvlt-backup-summary
+    app.kubernetes.io/part-of: cvlt-backup
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 128Mi
+  # storageClassName intentionally omitted -> uses the cluster default class.
+  # Set it explicitly here if the namespace requires a specific class.

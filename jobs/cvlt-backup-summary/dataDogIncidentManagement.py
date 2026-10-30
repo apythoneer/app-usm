@@ -5,14 +5,33 @@ import base64
 import requests
 import psycopg2
 import urllib3
+import shutil
 from psycopg2.extras import execute_batch, RealDictCursor
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # =====================================================
+# log function
+# =====================================================
+
+def log(enabled, message):
+    if enabled:
+        print(
+            f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}"
+        )
+
+# =====================================================
 # cool stuff
 # =====================================================
+
+#backup Secrets
+
+shutil.copy(
+    "/home/cvadmin/.var/secrets.json",
+    "/home/cvadmin/.var/secrets.json.bak"
+)
 
 def load_secrets():
     with open("/home/cvadmin/.var/secrets.json", "r") as f:
@@ -22,6 +41,7 @@ SECRETS = load_secrets()
 
 
 ACCESS_TOKEN = SECRETS["commvault"]["token"]
+REFRESH_TOKEN = SECRETS["commvault"]["refresh_token"]
 
 PG_HOST = SECRETS["postgres"]["host"]
 PG_PORT = SECRETS["postgres"]["port"]
@@ -69,10 +89,56 @@ def get_db_connection():
     )
 
 # =====================================================
-# COMMVAULT LOGIN
+# RENEW TOKEN
 # =====================================================
 
-# REMOVED
+def renew_token(access_token, refresh_token):
+
+    url = (
+        f"{COMMVAULT_URL}"
+        "/commandcenter/api/V4/AccessToken/Renew"
+    )
+
+    payload = {
+        "accessToken": access_token,
+        "refreshToken": refresh_token
+    }
+
+    headers = {
+        "Authorization":
+            f"Bearer {access_token}",
+            "Accept": "application/json"
+    }
+
+    response = requests.post(
+        url,
+        headers=headers,
+        json=payload,
+        verify=False
+    )
+
+    log(True, response.status_code)
+    log(True, response.text)
+
+    response.raise_for_status()
+
+    data = response.json()
+
+    new_access_token = data["accessToken"]
+    new_refresh_token = data["refreshToken"]
+
+    SECRETS["commvault"]["token"] = new_access_token
+    SECRETS["commvault"]["refresh_token"] = new_refresh_token
+
+    with open("/home/cvadmin/.var/secrets.json", "w") as f:
+        json.dump(SECRETS, f, indent=4)
+
+    log(False, "Successfully updated secrets.json with renewed tokens.")
+
+    return (
+            data["accessToken"],
+            data["refreshToken"]
+    )
 
 # =====================================================
 # GET REPORT
@@ -85,6 +151,7 @@ def get_backup_report(token):
         headers={
             "Accept": "application/json",
             "Authtoken": token
+            #"Authorization" : f"Bearer {token}"
         },
         params=REPORT_PARAMS,
         verify=False
@@ -348,7 +415,7 @@ def send_failure_events():
     rows = cur.fetchall()
 
     if not rows:
-        print("No failure events found.")
+        log(True, "No failure events found.")
         return
 
     headers = {
@@ -482,7 +549,7 @@ def send_resolution_events():
 
     if not rows:
 
-        print("No resolution events found.")
+        log(True, "No resolution events found.")
         return
 
     headers = {
@@ -546,37 +613,64 @@ def send_resolution_events():
 # =====================================================
 
 def main():
+    global ACCESS_TOKEN
+    global REFRESH_TOKEN
 
-    print("Authenticating to Commvault...")
-
+    log(True, "Authenticating to Commvault...")
+    
     token = ACCESS_TOKEN
 
-    print("Getting report...")
+    log(False, "ACCESS_TOKEN:")
+    log(False, ACCESS_TOKEN)
 
-    report = get_backup_report(token)
+    log(False, "REFRESH_TOKEN:")
+    log(False, REFRESH_TOKEN)
 
-    print("Transforming report...")
+    log(True, "Getting report...")
+
+    #report = get_backup_report(token)
+    try:
+
+      report = get_backup_report(token)
+
+    except requests.exceptions.HTTPError as e:
+
+      if e.response.status_code == 401:
+
+          log(True, "401 detected. Attempting token renewal.")
+
+          new_access_token, new_refresh_token = renew_token(
+              ACCESS_TOKEN,
+              REFRESH_TOKEN 
+          )
+
+          report = get_backup_report(new_access_token)
+
+      else:
+          raise
+
+    log(True, "Transforming report...")
 
     rows = transform_report(report)
 
-    print(
+    log(True,
         f"Loaded {len(rows)} rows "
         f"from Commvault."
     )
 
-    print("Loading PostgreSQL...")
+    log(True, "Loading PostgreSQL...")
 
     load_backup_summary(rows)
 
-    print("Creating Datadog failures...")
+    log(True, "Creating Datadog failures...")
 
     send_failure_events()
 
-    print("Creating Datadog resolutions...")
+    log(True, "Creating Datadog resolutions...")
 
     send_resolution_events()
 
-    print("Complete.")
+    log(True, "Complete.")
 
 # =====================================================
 # ENTRY POINT

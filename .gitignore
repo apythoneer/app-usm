@@ -21,6 +21,9 @@ env/
 .env.*
 !.env.example
 *.env
+secrets*.json
+secrets*.json.bak
+**/secrets*.json
 
 # Node / Frontend
 node_modules/
