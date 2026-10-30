@@ -127,6 +127,8 @@ job on a node/VM that already has the needed reachability.
   including `stormart`. Qualify it to be safe.
 - TLS verification is disabled against Commvault (`verify=False`). Fine internally;
   revisit if a cert/CA becomes available.
-- Renewal persistence depends on the PVC. If the storage class is slow to bind or
-  the namespace has quota limits, the first run will block on the PVC — check
-  `kubectl -n storage-mgt-tools-na get pvc cvlt-backup-var` is `Bound`.
+- Renewal persistence depends on the PVC (`ebs-sc`, `WaitForFirstConsumer`). It
+  stays `Pending` until the first CronJob pod schedules — that's normal, not a
+  fault. If instead the first ETL pod is stuck `Pending`/`ContainerCreating`, check
+  `kubectl -n storage-mgt-tools-na get pvc cvlt-backup-var` and its events for a
+  provisioning/quota problem.
