@@ -35,6 +35,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   SCPSB-1022 Postgres cutover.
 
 ### Fixed
+- **cvlt-backup-summary ETL pod blocked by the namespace ResourceQuota** — the
+  `seed-secrets` initContainer had no `resources` block, so `storage-mgt-tools-na-rq`
+  rejected pod creation (`must specify limits.memory for: seed-secrets`) and the
+  Job never got a pod (which also left the PVC without a first consumer). Added a
+  tiny requests+limits block to the initContainer. This was the actual blocker
+  behind the ETL never running.
 - **cvlt-backup-summary PVC moved from EBS to EFS** — `ebs-sc`
   (`WaitForFirstConsumer`) never bound on the prod cluster, so the nightly ETL
   pod sat `Pending` until the Job's `activeDeadlineSeconds` killed it
