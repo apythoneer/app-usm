@@ -57,8 +57,12 @@ jobs in this same namespace via their own deploy mechanism + KeePass-brokered cr
 ## Open items before enabling the nightly ETL
 1. Confirm Datadog egress green on the health page.
 2. Seed `cvlt-backup-secrets` with a **fresh** Commvault `token`+`refresh_token`
-   pair right before enabling (a stale refresh_token 401s on the first renew). The
-   PVC persists the pair thereafter.
+   pair right before enabling. A stale pair fails hard: 401 on the report, then
+   500 / `errorCode 101` ("Unexpected access token or refresh token provided") on
+   the renew. The PVC persists the pair thereafter. **To rotate later:** update the
+   `CVLT_SECRETS_JSON` Actions secret, then run the workflow with `reseed=true` —
+   it recreates the Secret and wipes the PVC so the new pair is seeded (otherwise
+   the old file on the PVC wins).
 3. PVC `cvlt-backup-var` uses `efs-prometheus-sc` (EFS access-point, `Immediate`) —
    it binds within seconds of `apply`. (It was on `ebs-sc`/`WaitForFirstConsumer`,
    which never bound here: the ETL pod sat `Pending` until the Job deadline killed
