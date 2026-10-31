@@ -30,6 +30,11 @@ on:
         type: boolean
         required: true
         default: false
+      diag:
+        description: "Dump PVC/pod/event diagnostics (no waiting) and exit-friendly"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -114,6 +119,25 @@ jobs:
           kubectl -n "$NS" exec "$POD" -- python -c \
             "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/status', timeout=12).read().decode())"
 
+      - name: Diagnostics (PVC / pods / events) — no waiting
+        if: ${{ github.event.inputs.diag == 'true' }}
+        run: |
+          echo "===== PVC ====="
+          kubectl -n "$NS" get pvc cvlt-backup-var -o wide || true
+          kubectl -n "$NS" describe pvc cvlt-backup-var || true
+          echo "===== StorageClass ebs-sc ====="
+          kubectl get storageclass ebs-sc -o yaml | sed -n '1,40p' || true
+          echo "===== Jobs ====="
+          kubectl -n "$NS" get jobs -l app=cvlt-backup-summary -o wide || true
+          echo "===== Pods (all in ns, cvlt only) ====="
+          kubectl -n "$NS" get pods -o wide | grep -i cvlt || true
+          echo "===== describe pending cvlt pods ====="
+          for p in $(kubectl -n "$NS" get pods -o name | grep -i 'cvlt-backup-summary\|cvlt-smoke' | grep -vi health); do
+            echo "--- $p ---"; kubectl -n "$NS" describe "$p" | sed -n '/Events:/,$p' || true
+          done
+          echo "===== recent namespace events ====="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -40 || true
+
       - name: Optionally unsuspend the nightly ETL
         if: ${{ github.event.inputs.run_etl == 'true' }}
         run: |
@@ -140,7 +164,15 @@ jobs:
             sleep 10
           done
           echo "----- pod -----"
-          kubectl -n "$NS" get pods -l job-name="$JOB" -o wide || true
+          kubectl -n "$NS" get pods -l batch.kubernetes.io/job-name="$JOB" -o wide || true
+          if [ "$result" != "success" ]; then
+            echo "----- describe pod + pvc + events (diagnose non-success) -----"
+            for p in $(kubectl -n "$NS" get pods -l batch.kubernetes.io/job-name="$JOB" -o name); do
+              kubectl -n "$NS" describe "$p" | sed -n '/Events:/,$p' || true
+            done
+            kubectl -n "$NS" describe pvc cvlt-backup-var | sed -n '/Events:/,$p' || true
+            kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -25 || true
+          fi
           echo "----- logs -----"
           kubectl -n "$NS" logs "job/$JOB" --tail=300 || true
           echo "----- rows now in stormart.cvlt_job_runs (latest) -----"
