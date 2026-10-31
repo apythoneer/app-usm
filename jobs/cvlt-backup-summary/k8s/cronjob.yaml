@@ -78,6 +78,13 @@ spec:
                 runAsUser: 1000
                 capabilities:
                   drop: ["ALL"]
+              # REQUIRED by the namespace ResourceQuota (storage-mgt-tools-na-rq):
+              # every container must declare requests+limits for cpu AND memory, or
+              # pod creation is rejected ("must specify limits.memory for: seed-secrets")
+              # and the Job never gets a pod. This is a trivial `cp`, so keep it tiny.
+              resources:
+                requests: { cpu: "10m", memory: "16Mi" }
+                limits: { cpu: "50m", memory: "64Mi" }
               volumeMounts:
                 - name: seed
                   mountPath: /seed
