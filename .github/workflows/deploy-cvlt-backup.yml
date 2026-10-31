@@ -125,18 +125,30 @@ jobs:
           echo "===== PVC ====="
           kubectl -n "$NS" get pvc cvlt-backup-var -o wide || true
           kubectl -n "$NS" describe pvc cvlt-backup-var || true
-          echo "===== StorageClass ebs-sc ====="
-          kubectl get storageclass ebs-sc -o yaml | sed -n '1,40p' || true
+          echo "===== StorageClasses (full — need efs-sc params: fileSystemId / provisioningMode) ====="
+          kubectl get storageclass -o yaml || true
+          echo "===== CSI controllers (are ebs/efs provisioners actually running?) ====="
+          kubectl -n kube-system get pods -o wide | grep -iE 'ebs|efs|csi' || echo "(no ebs/efs/csi pods matched in kube-system)"
+          echo "===== Nodes + AZ topology ====="
+          kubectl get nodes -L topology.kubernetes.io/zone -o wide || true
           echo "===== Jobs ====="
           kubectl -n "$NS" get jobs -l app=cvlt-backup-summary -o wide || true
+          echo "===== describe failed/old cvlt Jobs (why did the pod go away?) ====="
+          for j in $(kubectl -n "$NS" get jobs -o name | grep -iE 'cvlt-backup-summary|cvlt-smoke'); do
+            echo "--- $j ---"
+            kubectl -n "$NS" get "$j" -o jsonpath='{.status.conditions[*].type}={.status.conditions[*].reason}: {.status.conditions[*].message}{"\n"}' || true
+            kubectl -n "$NS" describe "$j" | sed -n '/Events:/,$p' || true
+          done
           echo "===== Pods (all in ns, cvlt only) ====="
           kubectl -n "$NS" get pods -o wide | grep -i cvlt || true
-          echo "===== describe pending cvlt pods ====="
+          echo "===== describe pending cvlt pods (if any survive) ====="
           for p in $(kubectl -n "$NS" get pods -o name | grep -i 'cvlt-backup-summary\|cvlt-smoke' | grep -vi health); do
             echo "--- $p ---"; kubectl -n "$NS" describe "$p" | sed -n '/Events:/,$p' || true
           done
-          echo "===== recent namespace events ====="
-          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -40 || true
+          echo "===== namespace events mentioning volume/provision/schedule ====="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | grep -iE 'cvlt|volume|provision|schedul|FailedCreate|Deadline' | tail -40 || true
+          echo "===== recent namespace events (tail) ====="
+          kubectl -n "$NS" get events --sort-by=.lastTimestamp | tail -30 || true
 
       - name: Optionally unsuspend the nightly ETL
         if: ${{ github.event.inputs.run_etl == 'true' }}
