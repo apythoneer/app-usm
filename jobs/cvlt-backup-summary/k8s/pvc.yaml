@@ -9,9 +9,23 @@
 # the file is absent) and owns it thereafter, mirroring exactly how the script
 # maintains the file on the host today.
 #
-# Only the CronJob mounts this (RWO, reused across daily runs via Forbid
-# concurrency). The health Deployment does NOT mount it — it reads the read-only
-# Secret instead (it never renews the token).
+# WHY EFS, NOT EBS: ebs-sc on this cluster (c-5zsl4) is WaitForFirstConsumer and
+# never bound — the ETL pod stayed Pending until activeDeadlineSeconds killed it
+# (DeadlineExceeded), every run. efs-prometheus-sc is efs.csi.aws.com with
+# provisioningMode=efs-ap + volumeBindingMode=Immediate (fileSystemId
+# fs-09d715d65f1ecb44a), proven in use by Prometheus/Kubecost: it binds in
+# seconds and gives this PVC its OWN isolated EFS access point. RWX because EFS
+# is shared (functionally RWO here — only the CronJob mounts it, Forbid
+# concurrency). NB: that class is reclaimPolicy=Retain, so deleting this PVC
+# leaves the access point behind (manual cleanup).
+#
+# HANDOFF TODO: efs-prometheus-sc is borrowed (owned by monitoring). When someone
+# with cluster RBAC is available, cut over to a dedicated StorageClass
+# (cvlt-backup-efs, same efs-ap params) so the ownership reads cleanly.
+#
+# Only the CronJob mounts this (reused across daily runs via Forbid concurrency).
+# The health Deployment does NOT mount it — it reads the read-only Secret instead
+# (it never renews the token).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -22,12 +36,9 @@ metadata:
     app.kubernetes.io/part-of: cvlt-backup
 spec:
   accessModes:
-    - ReadWriteOnce
+    - ReadWriteMany
   resources:
     requests:
+      # EFS ignores capacity (elastic), but the field is required.
       storage: 128Mi
-  # cm-svcs-prod-use2 has NO default StorageClass, so this must be explicit or the
-  # PVC stays Pending forever. ebs-sc = AWS EBS, RWO, WaitForFirstConsumer (binds
-  # when the first CronJob pod schedules — a Pending PVC with no running job is
-  # normal, not a failure). Change if the namespace standardises on another class.
-  storageClassName: ebs-sc
+  storageClassName: efs-prometheus-sc

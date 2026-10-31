@@ -59,6 +59,10 @@ jobs in this same namespace via their own deploy mechanism + KeePass-brokered cr
 2. Seed `cvlt-backup-secrets` with a **fresh** Commvault `token`+`refresh_token`
    pair right before enabling (a stale refresh_token 401s on the first renew). The
    PVC persists the pair thereafter.
-3. PVC `cvlt-backup-var` uses `ebs-sc` (`WaitForFirstConsumer`) — it binds when the
-   first ETL pod runs, so `Pending` beforehand is expected.
+3. PVC `cvlt-backup-var` uses `efs-prometheus-sc` (EFS access-point, `Immediate`) —
+   it binds within seconds of `apply`. (It was on `ebs-sc`/`WaitForFirstConsumer`,
+   which never bound here: the ETL pod sat `Pending` until the Job deadline killed
+   it. The deploy workflow auto-migrates an old `ebs-sc` PVC to EFS on next run.)
+   The SC is borrowed from monitoring; cut over to a dedicated `cvlt-backup-efs`
+   SC when cluster RBAC allows.
 4. Then deploy with `run_etl=true` (or patch `suspend:false`).

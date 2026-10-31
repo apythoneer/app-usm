@@ -96,8 +96,44 @@ jobs:
             --docker-password="$GHCR_PULL_TOKEN" \
             -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Migrate the PVC off ebs-sc if needed (immutable fields)
+        run: |
+          # The PVC originally used ebs-sc (WaitForFirstConsumer), which never
+          # bound on this cluster — the ETL pod stayed Pending until the Job
+          # deadline killed it. We've repointed pvc.yaml to efs-prometheus-sc
+          # (Immediate). storageClassName/accessModes are IMMUTABLE, so `apply`
+          # can't update the existing object; delete it so apply recreates it.
+          # Guarded on the OLD class: never touch a Bound EFS PVC (it holds the
+          # renewed token). The ebs-sc PVC is unbound with no data, so this is safe.
+          CUR=$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.spec.storageClassName}' 2>/dev/null || true)
+          echo "current PVC storageClassName: ${CUR:-<none>}"
+          if [ "$CUR" = "ebs-sc" ]; then
+            echo "deleting the unbound ebs-sc PVC so it can be recreated on EFS…"
+            kubectl -n "$NS" delete pvc cvlt-backup-var --wait=true
+          else
+            echo "no migration needed."
+          fi
+
       - name: Apply manifests (CronJob stays suspended per the manifest)
         run: kubectl apply -k jobs/cvlt-backup-summary/k8s
+
+      - name: Confirm the PVC bound (EFS = Immediate)
+        run: |
+          # EFS binds in seconds; give it a short window rather than the 30-min
+          # Job deadline it used to hit on ebs-sc.
+          for i in $(seq 1 20); do
+            st=$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.status.phase}' 2>/dev/null || true)
+            echo "PVC phase: ${st:-<none>}"
+            [ "$st" = "Bound" ] && break
+            sleep 6
+          done
+          kubectl -n "$NS" get pvc cvlt-backup-var -o wide || true
+          if [ "$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.status.phase}')" != "Bound" ]; then
+            echo "::error::PVC did not bind on efs-prometheus-sc; see describe below"
+            kubectl -n "$NS" describe pvc cvlt-backup-var | sed -n '/Events:/,$p' || true
+            exit 1
+          fi
+          echo "PVC bound."
 
       - name: Pin image on both workloads
         run: |
@@ -200,8 +236,8 @@ jobs:
         if: always()
         run: |
           kubectl -n "$NS" get deploy,svc,cronjob,pvc -l app=cvlt-backup-summary -o wide || true
-          echo "PVC holds the rotating token; ebs-sc is WaitForFirstConsumer, so"
-          echo "Pending until the first ETL pod runs is normal (not a failure):"
+          echo "PVC holds the rotating token; efs-prometheus-sc is Immediate, so"
+          echo "it should be Bound right after apply (not Pending):"
           kubectl -n "$NS" get pvc cvlt-backup-var || true
           echo "Validate the health header:"
           echo "  kubectl -n $NS port-forward svc/cvlt-backup-summary-health 8080:8080  # then open http://localhost:8080/"

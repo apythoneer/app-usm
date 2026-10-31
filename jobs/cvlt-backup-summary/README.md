@@ -125,8 +125,13 @@ job on a node/VM that already has the needed reachability.
   including `stormart`. Qualify it to be safe.
 - TLS verification is disabled against Commvault (`verify=False`). Fine internally;
   revisit if a cert/CA becomes available.
-- Renewal persistence depends on the PVC (`ebs-sc`, `WaitForFirstConsumer`). It
-  stays `Pending` until the first CronJob pod schedules — that's normal, not a
-  fault. If instead the first ETL pod is stuck `Pending`/`ContainerCreating`, check
-  `kubectl -n storage-mgt-tools-na get pvc cvlt-backup-var` and its events for a
-  provisioning/quota problem.
+- Renewal persistence depends on the PVC (`efs-prometheus-sc`, EFS access-point,
+  `Immediate` binding). It should be `Bound` within seconds of `apply`. It was
+  originally on `ebs-sc` (`WaitForFirstConsumer`), which never bound on this
+  cluster — the ETL pod sat `Pending` until the 30-min Job deadline killed it
+  (`DeadlineExceeded`), so the run never happened. EFS removes that failure mode.
+  That SC is borrowed from monitoring and is `reclaimPolicy=Retain`; a dedicated
+  `cvlt-backup-efs` SC is the clean long-term home (see `pvc.yaml` HANDOFF TODO).
+  If the PVC is ever stuck `Pending`, check
+  `kubectl -n storage-mgt-tools-na describe pvc cvlt-backup-var` for a
+  provisioning error.
