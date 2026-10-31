@@ -35,6 +35,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   SCPSB-1022 Postgres cutover.
 
 ### Fixed
+- **cvlt-backup-summary PVC moved from EBS to EFS** — `ebs-sc`
+  (`WaitForFirstConsumer`) never bound on the prod cluster, so the nightly ETL
+  pod sat `Pending` until the Job's `activeDeadlineSeconds` killed it
+  (`DeadlineExceeded`) and no run ever completed. The PVC now uses
+  `efs-prometheus-sc` (EFS access-point, `Immediate` binding); `deploy-cvlt-backup.yml`
+  auto-migrates an existing unbound `ebs-sc` PVC and verifies the PVC is `Bound`
+  before proceeding.
 - **Prod-deploy ghcr image-provenance guard** (`deploy-prod.yml`) — the check now
   sends the OCI/Docker manifest `Accept` media types (ghcr serves a buildx OCI
   image index, which a bare request can't read) and is non-fatal, so it can't
