@@ -81,6 +81,15 @@ spec:
                     cp /seed/secrets.json /pvc/secrets.json
                     echo "seeded secrets.json into PVC from Secret"
                   fi
+                  # The Secret mounts read-only (0400) and `cp` preserves that mode,
+                  # so secrets.json lands read-only. The main script needs owner-write
+                  # on it: it rewrites the file on token renewal AND copies it to
+                  # secrets.json.bak at import. A stale 0400 .bak left by a prior run
+                  # makes that import-time copy fail (EACCES), crashing the job on its
+                  # 2nd+ run (first run creates .bak fresh, so only recurring runs hit
+                  # it). Normalize both to 0600 every start so renewal + backup work.
+                  chmod 0600 /pvc/secrets.json
+                  [ -f /pvc/secrets.json.bak ] && chmod 0600 /pvc/secrets.json.bak || true
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
