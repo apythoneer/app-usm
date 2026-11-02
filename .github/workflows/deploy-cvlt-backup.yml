@@ -207,7 +207,20 @@ jobs:
       - name: Roll out the health server
         # 240s, not 120s: the injected ADOT sidecars can make the OLD pod slow to
         # terminate, and the rollout waits on that even once the new pod is Ready.
-        run: kubectl -n "$NS" rollout status deployment/cvlt-backup-summary-health --timeout=240s
+        run: |
+          if ! kubectl -n "$NS" rollout status deployment/cvlt-backup-summary-health --timeout=240s; then
+            echo "::error::health rollout did not complete — diagnosing the health pod(s) below"
+            kubectl -n "$NS" get pods -l app=cvlt-backup-summary,component=health -o wide || true
+            for p in $(kubectl -n "$NS" get pods -l app=cvlt-backup-summary,component=health -o name); do
+              echo "===== describe $p (events + container statuses) ====="
+              kubectl -n "$NS" describe "$p" | sed -n '/Containers:/,$p' || true
+              echo "===== logs $p (health) ====="
+              kubectl -n "$NS" logs "$p" -c health --tail=120 || true
+              echo "===== logs $p (health, previous crash) ====="
+              kubectl -n "$NS" logs "$p" -c health --previous --tail=120 2>/dev/null || true
+            done
+            exit 1
+          fi
 
       - name: Verify connections (/status from inside the health pod)
         run: |
