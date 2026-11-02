@@ -35,6 +35,11 @@ spec:
     spec:
       backoffLimit: 1           # fail loud; a daily job re-runs tomorrow
       activeDeadlineSeconds: 1800
+      # Auto-delete the Job + its pods 30 min after finishing. Finished pods keep
+      # referencing the PVC (kubernetes.io/pvc-protection), which blocks a reseed
+      # from deleting/recreating it; this also stops old job pods accumulating.
+      # Copied into one-off `kubectl create job --from=cronjob` smoke runs too.
+      ttlSecondsAfterFinished: 1800
       template:
         metadata:
           labels:

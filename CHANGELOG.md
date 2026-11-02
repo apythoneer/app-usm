@@ -42,6 +42,16 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stale seed pair fails Commvault auth (401 on report, 500/errorCode 101 on renew).
 
 ### Fixed
+- **cvlt-backup-summary reseed deadlocked on the PVC** — the reseed PVC delete hung
+  on the `kubernetes.io/pvc-protection` finalizer (leftover completed/failed job
+  pods still referenced the claim), which `|| true` masked; `apply` then couldn't
+  recreate the `Terminating` claim, and the bound-check passed falsely because a
+  `Terminating` PVC still reports `phase=Bound`. The reseed step now deletes the
+  pinning Jobs/pods first, waits for the PVC to actually disappear (failing loudly
+  if it can't), and the bound-check also requires an empty `deletionTimestamp`.
+  Added `ttlSecondsAfterFinished: 1800` to the Job template so finished pods
+  self-clean (also curbs orphaned pods), and raised the health rollout timeout to
+  240s for slow ADOT-sidecar pod termination.
 - **cvlt-backup-summary ETL pod blocked by the namespace ResourceQuota** — the
   `seed-secrets` initContainer had no `resources` block, so `storage-mgt-tools-na-rq`
   rejected pod creation (`must specify limits.memory for: seed-secrets`) and the

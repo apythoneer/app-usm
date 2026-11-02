@@ -143,9 +143,35 @@ jobs:
           # here lets `apply` recreate it empty (EFS Immediate rebinds in ~1s) and
           # the init container seeds the fresh token from the just-recreated Secret.
           # Safe: nothing but the (now-stale) secrets.json lives here, and the
-          # health Deployment doesn't mount it.
-          echo "reseed=true — deleting PVC cvlt-backup-var so it re-seeds…"
-          kubectl -n "$NS" delete pvc cvlt-backup-var --ignore-not-found --wait=true --timeout=60s || true
+          # health Deployment doesn't mount it (it mounts the Secret read-only).
+          #
+          # CRITICAL: the PVC can't be deleted while ANY pod references it
+          # (kubernetes.io/pvc-protection finalizer) — including completed/failed
+          # ETL + smoke job pods left behind from earlier runs. Delete those FIRST,
+          # or the PVC hangs Terminating and `apply` can't recreate it. This also
+          # self-heals a PVC already stuck Terminating from a prior reseed.
+          echo "reseed=true — clearing job pods that pin the PVC…"
+          for j in $(kubectl -n "$NS" get jobs -o name 2>/dev/null | grep -E 'cvlt-smoke|cvlt-backup-summary' || true); do
+            echo "deleting $j"; kubectl -n "$NS" delete "$j" --ignore-not-found --wait=true --timeout=60s || true
+          done
+          # Any lingering ETL/smoke pods (NOT the health pod, which has component=health).
+          kubectl -n "$NS" delete pod -l app=cvlt-backup-summary,component!=health \
+            --ignore-not-found --wait=true --timeout=60s || true
+
+          echo "deleting PVC cvlt-backup-var so it re-seeds…"
+          kubectl -n "$NS" delete pvc cvlt-backup-var --ignore-not-found --wait=true --timeout=120s || true
+          # Verify it's actually GONE before apply — a Terminating PVC still reports
+          # phase=Bound, so the old masking (|| true + phase check) passed falsely.
+          for i in $(seq 1 20); do
+            kubectl -n "$NS" get pvc cvlt-backup-var >/dev/null 2>&1 || { echo "PVC removed."; break; }
+            echo "waiting for PVC to finish terminating…"; sleep 6
+          done
+          if kubectl -n "$NS" get pvc cvlt-backup-var >/dev/null 2>&1; then
+            echo "::error::PVC cvlt-backup-var is stuck Terminating (pvc-protection — a pod still references it)."
+            kubectl -n "$NS" describe pvc cvlt-backup-var | sed -n '/Events:/,$p' || true
+            kubectl -n "$NS" get pods -o wide | grep -i cvlt || true
+            exit 1
+          fi
 
       - name: Apply manifests (CronJob stays suspended per the manifest)
         run: kubectl apply -k jobs/cvlt-backup-summary/k8s
@@ -154,19 +180,24 @@ jobs:
         run: |
           # EFS binds in seconds; give it a short window rather than the 30-min
           # Job deadline it used to hit on ebs-sc.
+          # A Terminating PVC still reports phase=Bound, so also require an empty
+          # deletionTimestamp — otherwise a stuck-deleting claim passes falsely.
           for i in $(seq 1 20); do
             st=$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.status.phase}' 2>/dev/null || true)
-            echo "PVC phase: ${st:-<none>}"
-            [ "$st" = "Bound" ] && break
+            dt=$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)
+            echo "PVC phase: ${st:-<none>} deletionTimestamp: ${dt:-<none>}"
+            [ "$st" = "Bound" ] && [ -z "$dt" ] && break
             sleep 6
           done
           kubectl -n "$NS" get pvc cvlt-backup-var -o wide || true
-          if [ "$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.status.phase}')" != "Bound" ]; then
-            echo "::error::PVC did not bind on efs-prometheus-sc; see describe below"
+          st=$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.status.phase}' 2>/dev/null || true)
+          dt=$(kubectl -n "$NS" get pvc cvlt-backup-var -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null || true)
+          if [ "$st" != "Bound" ] || [ -n "$dt" ]; then
+            echo "::error::PVC not healthy on efs-prometheus-sc (phase=${st:-none}, deleting=${dt:-no}); see describe below"
             kubectl -n "$NS" describe pvc cvlt-backup-var | sed -n '/Events:/,$p' || true
             exit 1
           fi
-          echo "PVC bound."
+          echo "PVC bound (not terminating)."
 
       - name: Pin image on both workloads
         run: |
@@ -174,7 +205,9 @@ jobs:
           kubectl -n "$NS" set image cronjob/cvlt-backup-summary cvlt-backup-summary="$IMG:$TAG"
 
       - name: Roll out the health server
-        run: kubectl -n "$NS" rollout status deployment/cvlt-backup-summary-health --timeout=120s
+        # 240s, not 120s: the injected ADOT sidecars can make the OLD pod slow to
+        # terminate, and the rollout waits on that even once the new pod is Ready.
+        run: kubectl -n "$NS" rollout status deployment/cvlt-backup-summary-health --timeout=240s
 
       - name: Verify connections (/status from inside the health pod)
         run: |
