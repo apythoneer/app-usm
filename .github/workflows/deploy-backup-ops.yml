@@ -1,14 +1,15 @@
-name: Deploy backup-ops-mockup (dev)
+name: Deploy backup-ops (AWS EKS prod)
 
-# Manual showcase deploy. Runs on the corp-network self-hosted runner (the only
-# thing that reaches the AWS nonprod Rancher API), deploys the standalone mockup
-# into the dev namespace, and exposes it at
-#   https://backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+# Showcase web app for the SIP Backup Operations view. Runs in the PROD namespace
+# (the only place that reaches the stormart RDS), on the same in-cluster eks-prod
+# runner as the cvlt-backup-summary deploy — a personal kubectl identity has no
+# RBAC to write Deployments/Ingress in storage-mgt-tools-na. Reuses the pipeline's
+# cvlt-backup-secrets (Postgres creds, mounted read-only); it only runs SELECTs.
 on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: "Image tag to pin (a CI-built commit SHA, or 'latest')"
+        description: "Image tag to pin (a main SHA built by ci-backup-ops.yml, or 'latest')"
         required: true
         default: "latest"
 
@@ -21,14 +22,20 @@ concurrency:
 
 jobs:
   deploy:
-    runs-on: [self-hosted, ec2-dev]
+    runs-on: [self-hosted, eks-prod]
+    environment: production
     env:
-      NS: storage-mgt-tools-na-dev
+      NS: storage-mgt-tools-na
       IMAGE: ghcr.io/apythoneer/backup-ops-mockup
       TAG: ${{ github.event.inputs.image_tag }}
-      URL: https://backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+      URL: https://backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet
     steps:
       - uses: actions/checkout@v4
+
+      - name: Put kubectl (fetched by the runner initContainer) on PATH
+        run: |
+          echo "/tools" >> "$GITHUB_PATH"
+          /tools/kubectl version --client=true
 
       - name: Ensure private GHCR pull secret
         env:
@@ -40,17 +47,42 @@ jobs:
             --docker-password="$GHCR_PULL_TOKEN" \
             -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
 
+      - name: Require the Postgres creds Secret (shared with cvlt-backup-summary)
+        run: |
+          if ! kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
+            echo "::error::cvlt-backup-secrets not found in $NS — deploy cvlt-backup-summary first (it seeds the Postgres creds this app reuses)."
+            exit 1
+          fi
+          echo "cvlt-backup-secrets present — reusing its postgres block (read-only)."
+
       - name: Apply manifests
         run: kubectl apply -k jobs/backup-ops-mockup/k8s
 
       - name: Pin image + roll out
         run: |
           kubectl -n "$NS" set image deployment/backup-ops-mockup backup-ops-mockup="$IMAGE:$TAG"
-          kubectl -n "$NS" rollout status deployment/backup-ops-mockup --timeout=120s
+          kubectl -n "$NS" rollout status deployment/backup-ops-mockup --timeout=150s
+
+      - name: Verify the live query works from inside the pod
+        run: |
+          POD=$(kubectl -n "$NS" get pod -l app=backup-ops-mockup -o jsonpath='{.items[0].metadata.name}')
+          echo "pod: $POD"
+          kubectl -n "$NS" exec "$POD" -c backup-ops-mockup -- python - <<'PY'
+          import json, sys, urllib.request, urllib.error
+          try:
+              r = urllib.request.urlopen("http://localhost:8080/api/jobs?window=1&limit=1", timeout=15)
+              d = json.load(r)
+              print("OK /api/jobs: total=%s clients=%s statuses=%s"
+                    % (d.get("total"), d.get("clients"), list((d.get("by_status") or {}).keys())))
+          except urllib.error.HTTPError as e:
+              print("API returned error:", e.code, e.read().decode()[:300]); sys.exit(1)
+          except Exception as e:
+              print("verify failed:", type(e).__name__, e); sys.exit(1)
+          PY
 
       - name: Summary
         if: always()
         run: |
-          echo "### Backup Ops mockup" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Backup Ops (live)" >> "$GITHUB_STEP_SUMMARY"
           echo "URL: $URL" >> "$GITHUB_STEP_SUMMARY"
           kubectl -n "$NS" get deploy,svc,ingress,pods -l app=backup-ops-mockup -o wide || true

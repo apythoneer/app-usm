@@ -7,9 +7,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <style>
-  html, body { min-height: 100%; }
-  img { max-width: 100%; }
-  [hidden] { display: none !important; }
   /* Layout: sticky top bar -> filter row -> KPI tiles -> status donut + workload bars -> job table.
      Infra-ops treatment: IBM Plex Sans, blue accent, FIXED status palette for job state. */
   :root {
@@ -26,7 +23,6 @@
     --accent:      #2a78d6;
     --accent-ink:  #1c5cab;
     --accent-weak: #e7f0fc;
-    /* status palette — fixed, identical in both themes */
     --st-good:     #0ca30c;
     --st-warn:     #d9960a;
     --st-serious:  #ec835a;
@@ -74,7 +70,9 @@
   }
 
   * { box-sizing: border-box; }
-  html, body { margin: 0; }
+  html, body { margin: 0; min-height: 100%; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
   body {
     background: var(--page);
     color: var(--fg);
@@ -95,7 +93,6 @@
   h1, h2, h3 { margin: 0; font-weight: 600; text-wrap: balance; }
   .tnum { font-variant-numeric: tabular-nums; }
 
-  /* ---- header ---- */
   header {
     position: sticky; top: env(safe-area-inset-top, 0px); z-index: 20;
     background: var(--surface); border-bottom: 1px solid var(--border);
@@ -115,9 +112,10 @@
     display: flex; align-items: center; gap: 7px; color: var(--muted);
     font-size: 11.5px; white-space: nowrap;
   }
-  .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--st-good); flex: none;
-    box-shadow: 0 0 0 0 rgba(12,163,12,.5); }
-  @media (prefers-reduced-motion: no-preference) { .dot-live { animation: pulse 2.4s infinite; } }
+  .dot-live { width: 7px; height: 7px; border-radius: 50%; background: var(--st-good); flex: none; }
+  .dot-live.stale { background: var(--muted); }
+  .dot-live.err { background: var(--st-critical); }
+  @media (prefers-reduced-motion: no-preference) { .dot-live:not(.stale):not(.err) { animation: pulse 2.4s infinite; } }
   @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(12,163,12,.45)} 70%{box-shadow:0 0 0 6px rgba(12,163,12,0)} 100%{box-shadow:0 0 0 0 rgba(12,163,12,0)} }
   .src code { font-family: "IBM Plex Mono", ui-monospace, monospace; color: var(--fg-2); font-size: 11px; }
   .iconbtn {
@@ -125,13 +123,7 @@
     width: 34px; height: 34px; border-radius: 8px; cursor: pointer; display: grid; place-items: center; flex: none;
   }
   .iconbtn:hover { color: var(--fg); border-color: var(--muted); }
-  .mock {
-    font-size: 10.5px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
-    color: var(--accent-ink); background: var(--accent-weak); border: 1px solid var(--border-2);
-    padding: 3px 8px; border-radius: 999px; white-space: nowrap;
-  }
 
-  /* ---- filter bar ---- */
   .filters { display: flex; align-items: flex-end; gap: 16px 20px; flex-wrap: wrap; padding-block: 16px 6px; }
   .field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   .field > label { font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); }
@@ -156,7 +148,6 @@
   .chip[aria-pressed="false"] { opacity: .5; }
   .chip:hover { border-color: var(--muted); }
 
-  /* ---- KPI tiles ---- */
   .kpis { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; padding-block: 12px; }
   .tile { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); padding: 13px 14px; box-shadow: var(--shadow); min-width: 0; }
   .tile .k { font-size: 11px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 5px; }
@@ -164,9 +155,7 @@
   .tile .s { font-size: 11.5px; color: var(--fg-2); margin-top: 2px; }
   .tile.alert .v { color: var(--st-critical); }
   .tile .v small { font-size: 14px; font-weight: 500; color: var(--muted); }
-  .flag { color: var(--accent-ink); cursor: help; font-weight: 700; }
 
-  /* ---- panels ---- */
   .grid2 { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); gap: 12px; padding-bottom: 12px; }
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); min-width: 0; }
   .panel > .ph { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 14px 16px 2px; }
@@ -174,7 +163,6 @@
   .panel .ph .sub { font-size: 11.5px; color: var(--muted); }
   .panel .pb { padding: 12px 16px 16px; }
 
-  /* donut */
   .donut-wrap { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .donut { position: relative; width: 168px; height: 168px; flex: none; }
   .donut svg { display: block; transform: rotate(-90deg); }
@@ -191,18 +179,15 @@
   .legend .ct { font-variant-numeric: tabular-nums; font-weight: 600; }
   .legend .pc { color: var(--muted); font-variant-numeric: tabular-nums; width: 42px; text-align: right; }
 
-  /* workload bars */
   .bars { display: flex; flex-direction: column; gap: 9px; }
   .bar { display: grid; grid-template-columns: 116px 1fr auto; align-items: center; gap: 10px; }
   .bar .wl { font-size: 12.5px; color: var(--fg-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .bar .track { height: 16px; background: var(--surface-2); border-radius: 4px; overflow: hidden; position: relative; }
   .bar .fill { height: 100%; background: var(--accent); border-radius: 4px; min-width: 2px; }
-  .bar .fill.fail { background: var(--st-critical); }
   .bar .meta { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--fg-2); white-space: nowrap; }
   .bar .meta .f { color: var(--st-critical); font-weight: 600; margin-left: 6px; }
 
-  /* ---- table ---- */
-  .tablecard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 18px; }
+  .tablecard { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); box-shadow: var(--shadow); overflow: hidden; margin-bottom: 26px; }
   .tabhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 14px 16px; flex-wrap: wrap; }
   .tabhead h2 { font-size: 13.5px; }
   .tabhead .count { font-size: 12px; color: var(--muted); }
@@ -224,12 +209,8 @@
     padding: 3px 9px 3px 7px; border-radius: 999px; color: var(--pc); background: color-mix(in srgb, var(--pc) 13%, transparent); }
   .pill .d { width: 6px; height: 6px; border-radius: 50%; background: var(--pc); flex: none; }
   .empty { padding: 34px 16px; text-align: center; color: var(--muted); }
+  .empty.err { color: var(--st-critical); }
 
-  footer { color: var(--muted); font-size: 11.5px; padding-bottom: 26px; }
-  footer p { margin: 4px 0; }
-  footer code { font-family: "IBM Plex Mono", ui-monospace, monospace; color: var(--fg-2); }
-
-  /* tooltip */
   #tip { position: fixed; z-index: 50; pointer-events: none; opacity: 0; transition: opacity .1s;
     background: var(--fg); color: var(--page); font-size: 11.5px; line-height: 1.5; padding: 7px 9px; border-radius: 7px;
     box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: 240px; }
@@ -261,11 +242,10 @@
         <div class="crumb">Storage Intelligence Platform · <b>Backup Operations</b></div>
       </div>
     </div>
-    <span class="mock" title="This screen renders seeded sample rows, not live data.">Mockup · sample data</span>
     <div class="spacer"></div>
     <div class="src">
-      <span class="dot-live" aria-hidden="true"></span>
-      <span>updated 4m ago · <code>stormart.cvlt_backupjobsummary</code></span>
+      <span class="dot-live stale" id="dot" aria-hidden="true"></span>
+      <span id="srcline">connecting… · <code>stormart.cvlt_backupjobsummary</code></span>
     </div>
     <button class="iconbtn" id="theme" title="Toggle light / dark" aria-label="Toggle theme">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
@@ -302,7 +282,7 @@
       <div class="pb donut-wrap">
         <div class="donut">
           <svg width="168" height="168" viewBox="0 0 168 168" id="donut" role="img" aria-label="Job status breakdown"></svg>
-          <div class="ctr"><b class="tnum" id="donut-total">0</b><span>jobs</span></div>
+          <div class="ctr"><b class="tnum" id="donut-total">—</b><span>jobs</span></div>
         </div>
         <div class="legend" id="legend"></div>
       </div>
@@ -325,12 +305,6 @@
       </table>
     </div>
   </div>
-
-  <footer>
-    <p>Mockup of the first <b>Backup Operations</b> capability for SIP. Source of record: <code>stormart.cvlt_backupjobsummary</code>, loaded by the <code>cvlt-backup-summary</code> pipeline (hourly, 07:00–15:00 MT).</p>
-    <p><span class="flag">†</span> <b>Data protected</b> is derived from <code>size_of_application_gb</code> — source magnitudes look byte-scaled, so units are pending confirmation with PJ before this is trusted as TB/GB.</p>
-    <p>Figures above are seeded sample rows for layout review, not production numbers.</p>
-  </footer>
 </main>
 
 <div id="tip" role="status"></div>
@@ -338,7 +312,6 @@
 <script>
 "use strict";
 (function () {
-  // ---------- theme toggle (per-viewer convenience only) ----------
   var root = document.documentElement;
   try { var sv = localStorage.getItem("bo-theme"); if (sv) root.setAttribute("data-theme", sv); } catch (e) {}
   document.getElementById("theme").addEventListener("click", function () {
@@ -348,233 +321,223 @@
     try { localStorage.setItem("bo-theme", next); } catch (e) {}
   });
 
-  // ---------- seeded RNG so the mockup is stable across reloads ----------
-  function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;var t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
-  var rnd = mulberry32(20261102);
-  function pick(arr){ return arr[Math.floor(rnd()*arr.length)]; }
-  function wpick(items){ var r=rnd(), a=0; for(var i=0;i<items.length;i++){ a+=items[i][1]; if(r<a) return items[i][0]; } return items[items.length-1][0]; }
-
-  // ---------- reference data ----------
-  var CLIENTS = [
-    ["VMW-ESX-CL1","Virtual Server","VSA"],["VMW-ESX-CL2","Virtual Server","VSA"],
-    ["VMW-ESX-CL3","Virtual Server","VSA"],["SQLPROD-01","SQL Server","SQL Server"],
-    ["SQLPROD-02","SQL Server","SQL Server"],["SQLDW-01","SQL Server","SQL Server"],
-    ["ORA-RAC-01","Oracle","Oracle"],["ORA-ERP-02","Oracle","Oracle"],
-    ["EXCH-DAG-01","Exchange","Exchange DAG"],["EXCH-DAG-02","Exchange","Exchange DAG"],
-    ["FILESRV-NA-01","File System","File System"],["FILESRV-NA-02","File System","File System"],
-    ["FILESRV-EU-01","File System","File System"],["NAS-NETAPP-01","NAS","NDMP"],
-    ["NAS-NETAPP-02","NAS","NDMP"],["SAP-HANA-01","SAP HANA","HANA"],
-    ["AD-DC-01","Active Directory","AD"],["SPFARM-01","SharePoint","SharePoint"],
-    ["LINUX-APP-07","File System","File System"],["HYPERV-CL3","Virtual Server","Hyper-V"],
-    ["DB2-WH-01","DB2","DB2"],["PGSQL-OPS-01","PostgreSQL","PostgreSQL"]
-  ];
   var STATUS = {
-    "Completed":             { c:"var(--st-good)",     hex:"#0ca30c", key:"Completed" },
-    "Completed with errors": { c:"var(--st-warn)",     hex:"#d9960a", key:"Completed with errors" },
-    "Partial Success":       { c:"var(--st-serious)",  hex:"#ec835a", key:"Partial Success" },
-    "Failed":                { c:"var(--st-critical)", hex:"#d03b3b", key:"Failed" },
-    "Running":               { c:"var(--st-info)",     hex:"#2a78d6", key:"Running" },
-    "Committed":             { c:"var(--st-neutral)",  hex:"#8a8880", key:"Committed" }
+    "Completed":             { hex:"#0ca30c" },
+    "Completed with errors": { hex:"#d9960a" },
+    "Partial Success":       { hex:"#ec835a" },
+    "Failed":                { hex:"#d03b3b" },
+    "Running":               { hex:"#2a78d6" },
+    "Committed":             { hex:"#8a8880" }
   };
   var STATUS_ORDER = ["Completed","Completed with errors","Partial Success","Failed","Running","Committed"];
-  var FAILS = ["Agent not reachable (network)","VSA snapshot quiesce timeout","Media mount failed on MediaAgent",
-    "SQL VDI error 0x80770003","Insufficient space on disk library","CIFS share offline — source read error",
-    "Credentials rejected by client","Backup aborted — service restart"];
-  var WARNS = ["4 files skipped (in use)","1 VM datastore unreachable","mailbox quota warning","sparse file warnings"];
 
-  // ---------- generate jobs over last 30 days, weighted recent ----------
-  var DAY = 86400000, NOW = Date.now(), N = 9000, jobs = [];
-  for (var i = 0; i < N; i++) {
-    var off = Math.pow(rnd(), 1.28) * 30 * DAY;         // ms ago, clustered toward now
-    var start = NOW - off;
-    var cl = pick(CLIENTS);
-    var running = off < 2 * 3600000 && rnd() < 0.55;
-    var status = running ? "Running" : wpick([
-      ["Completed", 0.958], ["Completed with errors", 0.016], ["Failed", 0.013],
-      ["Partial Success", 0.006], ["Committed", 0.007]
-    ]);
-    var sizeGB = Math.round((Math.pow(rnd(), 2.1) * 1900 + rnd() * 6) * 10) / 10;
-    var durMin = running ? Math.round((off / 60000)) : Math.max(1, Math.round(2 + Math.pow(rnd(), 1.6) * 210));
-    var reason = status === "Failed" ? pick(FAILS)
-               : status === "Completed with errors" ? pick(WARNS)
-               : status === "Partial Success" ? pick(WARNS) : "";
-    jobs.push({
-      jobId: 4800000 + i, client: cl[0], workload: cl[1], agent: cl[2],
-      start: start, end: running ? null : start + durMin * 60000,
-      durMin: durMin, sizeGB: sizeGB, status: status, reason: reason
-    });
-  }
-
-  // ---------- helpers ----------
-  function fmtInt(n){ return n.toLocaleString("en-US"); }
-  function fmtData(gb){
-    if (gb >= 1024*1024) return (gb/1048576).toFixed(2) + " PB";
-    if (gb >= 1024) return (gb/1024).toFixed(1) + " TB";
-    return (gb<10?gb.toFixed(1):Math.round(gb).toString()) + " GB";
-  }
-  function fmtDur(m){ if(m>=60){ var h=Math.floor(m/60); return h+"h "+(m%60)+"m"; } return m+"m"; }
-  function fmtTime(ts){
-    var d = new Date(ts), now = new Date(NOW);
-    var sameDay = d.toDateString() === now.toDateString();
-    var t = d.toLocaleTimeString("en-US",{hour:"2-digit",minute:"2-digit"});
-    if (sameDay) return "Today " + t;
-    var yd = new Date(NOW - DAY); if (d.toDateString()===yd.toDateString()) return "Yest " + t;
-    return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) + " " + t;
-  }
-
-  // ---------- filter state ----------
   var state = { days: 1, client: "", status: {} };
   STATUS_ORDER.forEach(function(s){ state.status[s] = true; });
 
-  // client datalist
-  var dl = document.getElementById("clients");
-  CLIENTS.map(function(c){return c[0];}).sort().forEach(function(n){ var o=document.createElement("option"); o.value=n; dl.appendChild(o); });
-
-  // status chips
   var chipWrap = document.getElementById("f-status");
   STATUS_ORDER.forEach(function(s){
     var b = document.createElement("button");
-    b.className = "chip"; b.type="button"; b.setAttribute("aria-pressed","true");
-    b.style.setProperty("--c", STATUS[s].c);
+    b.className = "chip"; b.type = "button"; b.setAttribute("aria-pressed","true");
+    b.style.setProperty("--c", STATUS[s].hex);
     b.innerHTML = '<span class="sw"></span>' + s;
     b.addEventListener("click", function(){
       state.status[s] = !state.status[s];
-      b.setAttribute("aria-pressed", state.status[s] ? "true":"false");
-      render();
+      b.setAttribute("aria-pressed", state.status[s] ? "true" : "false");
+      load();
     });
     chipWrap.appendChild(b);
   });
-  document.getElementById("f-range").addEventListener("change", function(e){ state.days = +e.target.value; render(); });
-  document.getElementById("f-client").addEventListener("input", function(e){ state.client = e.target.value.trim().toLowerCase(); render(); });
+  document.getElementById("f-range").addEventListener("change", function(e){ state.days = +e.target.value; load(); });
+  var cliTimer;
+  document.getElementById("f-client").addEventListener("input", function(e){
+    state.client = e.target.value.trim();
+    clearTimeout(cliTimer); cliTimer = setTimeout(load, 300);
+  });
 
-  function current(){
-    var cut = NOW - state.days * DAY;
-    return jobs.filter(function(j){
-      if (j.start < cut) return false;
-      if (!state.status[j.status]) return false;
-      if (state.client && j.client.toLowerCase().indexOf(state.client) < 0) return false;
-      return true;
-    });
+  function fmtInt(n){ return (n == null ? 0 : n).toLocaleString("en-US"); }
+  function fmtData(gb){
+    gb = gb || 0;
+    if (gb >= 1024*1024) return (gb/1048576).toFixed(2) + " PB";
+    if (gb >= 1024) return (gb/1024).toFixed(1) + " TB";
+    return (gb < 10 ? gb.toFixed(1) : Math.round(gb).toString()) + " GB";
+  }
+  function fmtDur(m){ if (m == null) return "—"; m = Math.round(m); if (m >= 60) { return Math.floor(m/60) + "h " + (m%60) + "m"; } return m + "m"; }
+  function fmtTime(iso){
+    if (!iso) return "—";
+    var d = new Date(iso); if (isNaN(d)) return iso;
+    var now = new Date();
+    var t = d.toLocaleTimeString("en-US", {hour:"2-digit", minute:"2-digit"});
+    if (d.toDateString() === now.toDateString()) return "Today " + t;
+    var yd = new Date(Date.now() - 86400000);
+    if (d.toDateString() === yd.toDateString()) return "Yest " + t;
+    return d.toLocaleDateString("en-US", {month:"short", day:"numeric"}) + " " + t;
+  }
+  function ago(iso){
+    if (!iso) return "just now";
+    var s = Math.max(0, (Date.now() - new Date(iso).getTime())/1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.floor(s/60) + "m ago";
+    return Math.floor(s/3600) + "h ago";
   }
 
-  // ---------- sorting ----------
-  var sort = { key: "start", dir: -1 };
+  var sort = { key: "start_time", dir: -1 };
   var COLS = [
-    {k:"client",  t:"Client"},    {k:"workload", t:"Workload"}, {k:"start", t:"Start"},
-    {k:"durMin",  t:"Duration", num:true}, {k:"sizeGB", t:"Data", num:true},
-    {k:"status",  t:"Status"},    {k:"reason", t:"Failure reason"}
+    {k:"client_name", t:"Client"}, {k:"workload", t:"Workload"}, {k:"start_time", t:"Start"},
+    {k:"duration_mins", t:"Duration", num:true}, {k:"size_of_application_gb", t:"Data", num:true},
+    {k:"job_status", t:"Status"}, {k:"failure_reason", t:"Failure reason"}
   ];
 
-  // ---------- render ----------
   var tip = document.getElementById("tip");
   function showTip(html, x, y){ tip.innerHTML = html; tip.style.opacity = 1; moveTip(x,y); }
-  function moveTip(x,y){ var w=tip.offsetWidth; tip.style.left = Math.min(x+14, innerWidth-w-8)+"px"; tip.style.top=(y+16)+"px"; }
+  function moveTip(x,y){ var w = tip.offsetWidth; tip.style.left = Math.min(x+14, innerWidth-w-8)+"px"; tip.style.top = (y+16)+"px"; }
   function hideTip(){ tip.style.opacity = 0; }
 
-  function render(){
-    var rows = current();
-    var total = rows.length;
+  function setSrc(kind, text){
+    var dot = document.getElementById("dot");
+    dot.className = "dot-live" + (kind === "ok" ? "" : kind === "err" ? " err" : " stale");
+    document.getElementById("srcline").innerHTML = text + ' · <code>stormart.cvlt_backupjobsummary</code>';
+  }
 
-    // counts
-    var byStatus = {}, byWorkload = {}, wlFail = {}, clients = {}, dataSum = 0, failed = 0, errs = 0, done = 0;
-    STATUS_ORDER.forEach(function(s){ byStatus[s]=0; });
-    rows.forEach(function(j){
-      byStatus[j.status]++; clients[j.client]=1; dataSum += j.sizeGB;
-      byWorkload[j.workload] = (byWorkload[j.workload]||0)+1;
-      if (j.status==="Failed"){ failed++; wlFail[j.workload]=(wlFail[j.workload]||0)+1; }
-      if (j.status==="Completed with errors" || j.status==="Partial Success") errs++;
-      if (j.status==="Completed") done++;
-    });
+  var curRows = [];
+
+  function load(){
+    var statuses = STATUS_ORDER.filter(function(s){ return state.status[s]; });
+    var allOn = statuses.length === STATUS_ORDER.length;
+    var p = new URLSearchParams();
+    p.set("window", String(state.days));
+    if (state.client) p.set("client", state.client);
+    if (!allOn) p.set("status", statuses.join(","));
+    document.getElementById("tab-count").textContent = "loading…";
+    setSrc("stale", "refreshing…");
+    fetch("/api/jobs?" + p.toString(), { headers: { "Accept": "application/json" } })
+      .then(function(r){ return r.json().then(function(j){ return { ok: r.ok, status: r.status, j: j }; }); })
+      .then(function(res){
+        if (!res.ok || (res.j && res.j.error)) throw new Error((res.j && res.j.error) || ("HTTP " + res.status));
+        renderAll(res.j);
+      })
+      .catch(function(err){ renderError(err.message); });
+  }
+
+  function renderError(msg){
+    setSrc("err", "query failed");
+    document.getElementById("kpis").innerHTML = "";
+    document.getElementById("donut").innerHTML = "";
+    document.getElementById("donut-total").textContent = "—";
+    document.getElementById("legend").innerHTML = "";
+    document.getElementById("bars").innerHTML = "";
+    document.getElementById("tab-count").textContent = "";
+    document.getElementById("tbody").innerHTML =
+      '<tr><td colspan="7" class="empty err">Could not load live data: ' + String(msg).replace(/</g,"&lt;") + '</td></tr>';
+  }
+
+  function renderAll(d){
+    setSrc("ok", "updated " + ago(d.generated_at));
+    var total = d.total || 0;
+    var bs = d.by_status || {};
+    var done = bs["Completed"] || 0;
+    var failed = bs["Failed"] || 0;
+    var errs = (bs["Completed with errors"] || 0) + (bs["Partial Success"] || 0);
     var succ = total ? (done/total*100) : 0;
 
-    // KPIs
     var kpis = [
       {k:"Total jobs", v:fmtInt(total), s:"in window"},
       {k:"Success rate", v:succ.toFixed(1)+'<small>%</small>', s:fmtInt(done)+" completed clean"},
       {k:"Failed", v:fmtInt(failed), s:(total?(failed/total*100).toFixed(1):0)+"% of runs", alert: failed>0},
       {k:"With warnings", v:fmtInt(errs), s:"errors / partial"},
-      {k:'Data protected <span class="flag" title="units pending confirmation">&dagger;</span>', v:fmtData(dataSum), s:"sum of application size"},
-      {k:"Clients", v:fmtInt(Object.keys(clients).length), s:"distinct, covered"}
+      {k:"Data protected", v:fmtData(d.data_gb), s:"sum of application size"},
+      {k:"Clients", v:fmtInt(d.clients), s:"distinct, covered"}
     ];
     document.getElementById("kpis").innerHTML = kpis.map(function(t){
       return '<div class="tile'+(t.alert?' alert':'')+'"><div class="k">'+t.k+'</div><div class="v tnum">'+t.v+'</div><div class="s">'+t.s+'</div></div>';
     }).join("");
 
     // donut
-    var present = STATUS_ORDER.filter(function(s){ return byStatus[s] > 0; });
+    var present = STATUS_ORDER.filter(function(s){ return (bs[s] || 0) > 0; });
     var svg = document.getElementById("donut"), C = 2*Math.PI*66, cum = 0;
     svg.innerHTML = '<circle cx="84" cy="84" r="66" fill="none" stroke="var(--grid)" stroke-width="18"/>';
     present.forEach(function(s){
-      var f = byStatus[s]/total;
+      var f = bs[s]/total;
       var seg = document.createElementNS("http://www.w3.org/2000/svg","circle");
       seg.setAttribute("class","seg"); seg.setAttribute("cx",84); seg.setAttribute("cy",84); seg.setAttribute("r",66);
       seg.setAttribute("fill","none"); seg.setAttribute("stroke",STATUS[s].hex); seg.setAttribute("stroke-width",18);
       seg.setAttribute("stroke-dasharray", Math.max(0,f*C-2).toFixed(2)+" "+C.toFixed(2));
       seg.setAttribute("stroke-dashoffset", (-cum*C).toFixed(2));
-      var pc = (f*100);
+      var pc = f*100;
       seg.addEventListener("pointerenter", function(e){ seg.setAttribute("stroke-width",22); hot(s,true);
-        showTip('<b>'+s+'</b><br><span class="tnum">'+fmtInt(byStatus[s])+'</span> jobs · <span class="tnum">'+pc.toFixed(1)+'%</span>', e.clientX, e.clientY); });
+        showTip('<b>'+s+'</b><br><span class="tnum">'+fmtInt(bs[s])+'</span> jobs · <span class="tnum">'+pc.toFixed(1)+'%</span>', e.clientX, e.clientY); });
       seg.addEventListener("pointermove", function(e){ moveTip(e.clientX,e.clientY); });
       seg.addEventListener("pointerleave", function(){ seg.setAttribute("stroke-width",18); hot(s,false); hideTip(); });
       svg.appendChild(seg);
       cum += f;
     });
     document.getElementById("donut-total").textContent = fmtInt(total);
-    document.getElementById("donut-sub").textContent = succ.toFixed(1) + "% clean";
-
-    // legend
+    document.getElementById("donut-sub").textContent = total ? succ.toFixed(1) + "% clean" : "";
     document.getElementById("legend").innerHTML = present.map(function(s){
       return '<div class="row" data-s="'+s+'"><span class="sw" style="background:'+STATUS[s].hex+'"></span>'+
-        '<span class="lb">'+s+'</span><span class="ct tnum">'+fmtInt(byStatus[s])+'</span>'+
-        '<span class="pc tnum">'+(byStatus[s]/total*100).toFixed(1)+'%</span></div>';
-    }).join("") || '<div class="pc">no jobs</div>';
-    function hot(s, on){ var r=document.querySelector('.legend .row[data-s="'+CSS.escape(s)+'"]'); if(r) r.classList.toggle("hot",on); }
+        '<span class="lb">'+s+'</span><span class="ct tnum">'+fmtInt(bs[s])+'</span>'+
+        '<span class="pc tnum">'+(bs[s]/total*100).toFixed(1)+'%</span></div>';
+    }).join("") || '<div class="pc" style="color:var(--muted)">no jobs</div>';
+    function hot(s, on){ var r = document.querySelector('.legend .row[data-s="'+CSS.escape(s)+'"]'); if (r) r.classList.toggle("hot", on); }
 
-    // workload bars (single hue, failed overlay)
-    var wls = Object.keys(byWorkload).sort(function(a,b){ return byWorkload[b]-byWorkload[a]; }).slice(0,7);
-    var wlMax = wls.reduce(function(m,w){ return Math.max(m, byWorkload[w]); }, 1);
-    document.getElementById("bars").innerHTML = wls.map(function(w){
-      var n = byWorkload[w], f = wlFail[w]||0;
-      var pct = (n/wlMax*100);
-      return '<div class="bar"><span class="wl" title="'+w+'">'+w+'</span>'+
+    // workload bars
+    var wl = d.by_workload || [];
+    var wlMax = wl.reduce(function(m,x){ return Math.max(m, x.n); }, 1);
+    document.getElementById("bars").innerHTML = wl.map(function(x){
+      var pct = x.n/wlMax*100;
+      return '<div class="bar"><span class="wl" title="'+(x.workload||"—")+'">'+(x.workload||"—")+'</span>'+
         '<div class="track"><div class="fill" style="width:'+pct.toFixed(1)+'%"></div></div>'+
-        '<span class="meta tnum">'+fmtInt(n)+(f?'<span class="f">'+f+' failed</span>':'')+'</span></div>';
+        '<span class="meta tnum">'+fmtInt(x.n)+(x.failed?'<span class="f">'+x.failed+' failed</span>':'')+'</span></div>';
     }).join("") || '<div class="pc" style="color:var(--muted)">no jobs in window</div>';
 
-    // table head
+    curRows = d.rows || [];
+    renderTable(total);
+  }
+
+  function renderTable(total){
     document.getElementById("thead").innerHTML = COLS.map(function(c){
-      var ar = sort.key===c.k ? '<span class="ar">'+(sort.dir<0?"▼":"▲")+'</span>' : '';
+      var ar = sort.key === c.k ? '<span class="ar">'+(sort.dir<0?"▼":"▲")+'</span>' : '';
       return '<th'+(c.num?' style="text-align:right"':'')+'><button data-k="'+c.k+'">'+c.t+ar+'</button></th>';
     }).join("");
     document.querySelectorAll("#thead button").forEach(function(b){
-      b.addEventListener("click", function(){ var k=b.dataset.k; if(sort.key===k) sort.dir*=-1; else { sort.key=k; sort.dir = (k==="start"||k==="durMin"||k==="sizeGB")?-1:1; } render(); });
+      b.addEventListener("click", function(){
+        var k = b.dataset.k;
+        if (sort.key === k) sort.dir *= -1;
+        else { sort.key = k; sort.dir = (k==="start_time"||k==="duration_mins"||k==="size_of_application_gb") ? -1 : 1; }
+        renderTable(total);
+      });
     });
 
-    // table body (sorted, capped)
-    var sorted = rows.slice().sort(function(a,b){
-      var k=sort.key, va=a[k], vb=b[k];
-      if (k==="reason"||k==="client"||k==="workload"||k==="status"){ va=(va||"").toString(); vb=(vb||"").toString(); return va.localeCompare(vb)*sort.dir; }
-      return (va-vb)*sort.dir;
+    var rows = curRows.slice().sort(function(a,b){
+      var k = sort.key, va = a[k], vb = b[k];
+      if (k === "start_time") { return ((new Date(va)) - (new Date(vb))) * sort.dir; }
+      if (k === "duration_mins" || k === "size_of_application_gb") { return ((va||0)-(vb||0)) * sort.dir; }
+      return String(va||"").localeCompare(String(vb||"")) * sort.dir;
     });
-    var CAP = 50, shown = sorted.slice(0, CAP);
-    document.getElementById("tab-count").textContent = total ? ("showing "+shown.length+" of "+fmtInt(total)) : "";
+
+    document.getElementById("tab-count").textContent = total ? ("showing " + rows.length + " of " + fmtInt(total)) : "";
     var tb = document.getElementById("tbody");
-    if (!shown.length){ tb.innerHTML = '<tr><td colspan="7" class="empty">No jobs match these filters.</td></tr>'; return; }
-    tb.innerHTML = shown.map(function(j){
-      var st = STATUS[j.status];
+    if (!rows.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">No jobs match these filters.</td></tr>'; return; }
+    tb.innerHTML = rows.map(function(j){
+      var st = STATUS[j.job_status] || { hex: "#8a8880" };
+      var running = j.job_status === "Running" || !j.end_time;
       return '<tr>'+
-        '<td><div class="client">'+j.client+'</div><div class="agent">'+j.agent+'</div></td>'+
-        '<td>'+j.workload+'</td>'+
-        '<td class="num">'+fmtTime(j.start)+'</td>'+
-        '<td class="num" style="text-align:right">'+(j.end?fmtDur(j.durMin):'<span style="color:var(--st-info)">running</span>')+'</td>'+
-        '<td class="num" style="text-align:right">'+fmtData(j.sizeGB)+'</td>'+
-        '<td><span class="pill" style="--pc:'+st.hex+'"><span class="d"></span>'+j.status+'</span></td>'+
-        '<td class="reason">'+(j.reason||'<span style="color:var(--muted)">—</span>')+'</td>'+
+        '<td><div class="client">'+(j.client_name||"—")+'</div><div class="agent">'+(j.agent||"")+(j.subclient?' · '+j.subclient:'')+'</div></td>'+
+        '<td>'+(j.workload||"—")+'</td>'+
+        '<td class="num">'+fmtTime(j.start_time)+'</td>'+
+        '<td class="num" style="text-align:right">'+(running ? '<span style="color:var(--st-info)">running</span>' : fmtDur(j.duration_mins))+'</td>'+
+        '<td class="num" style="text-align:right">'+fmtData(j.size_of_application_gb)+'</td>'+
+        '<td><span class="pill" style="--pc:'+st.hex+'"><span class="d"></span>'+(j.job_status||"—")+'</span></td>'+
+        '<td class="reason">'+(j.failure_reason ? String(j.failure_reason).replace(/</g,"&lt;") : '<span style="color:var(--muted)">—</span>')+'</td>'+
       '</tr>';
     }).join("");
+
+    // refresh client datalist from what came back
+    var seen = {}, names = [];
+    curRows.forEach(function(j){ if (j.client_name && !seen[j.client_name]) { seen[j.client_name]=1; names.push(j.client_name); } });
+    document.getElementById("clients").innerHTML = names.sort().map(function(n){ return '<option value="'+n+'">'; }).join("");
   }
 
-  render();
+  load();
 })();
 </script>
 </body>

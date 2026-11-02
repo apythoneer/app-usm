@@ -12,16 +12,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
-- **backup-ops-mockup** (`jobs/backup-ops-mockup/`) — a standalone, on-network
-  showcase of the first SIP **Backup Operations** view: KPI tiles, a job-status
-  donut, a jobs-by-workload panel, and a filterable/sortable job table, served as a
-  single static page by a rootless-nginx image. Separate from the SIP app (own
-  image `ghcr.io/apythoneer/backup-ops-mockup`, own path-filtered CI, own manual
-  deploy to the dev namespace `storage-mgt-tools-na-dev`) and exposed at
-  `backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet` so it can be demoed on the
-  corp network. Numbers are seeded sample data; layout mirrors the real
-  `stormart.cvlt_backupjobsummary` model and flags the `size_of_application_gb`
-  units question in-page.
+- **backup-ops** (`jobs/backup-ops-mockup/`) — a standalone, on-network **Backup
+  Operations** view for SIP (the platform's first Backup Operations capability):
+  KPI tiles, a job-status donut, a jobs-by-workload panel, and a
+  filterable/sortable job table. A small Python read-only web app (stdlib HTTP
+  server) serving the page plus `/api/jobs` — **live, SELECT-only** queries over
+  `stormart.cvlt_backupjobsummary`. Runs in the prod namespace
+  `storage-mgt-tools-na` next to `cvlt-backup-summary` (the only place `stormart`
+  is reachable), reusing that pipeline's Postgres creds read-only. Separate from
+  the SIP app: own image `ghcr.io/apythoneer/backup-ops-mockup`, own path-filtered
+  CI, own manual deploy on the `eks-prod` runner, exposed at
+  `backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet` so it can be demoed on the
+  corp network (claude.ai is blocked).
 - **cvlt-backup-summary service** (`jobs/cvlt-backup-summary/`) — standalone,
   separate from the SIP app. Containerises PJ's Commvault backup-job pipeline as a
   nightly `CronJob` (Commvault report → AWS RDS `stormart` Postgres → Datadog
