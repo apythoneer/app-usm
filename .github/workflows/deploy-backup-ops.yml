@@ -67,7 +67,9 @@ jobs:
         run: |
           POD=$(kubectl -n "$NS" get pod -l app=backup-ops-mockup -o jsonpath='{.items[0].metadata.name}')
           echo "pod: $POD"
-          kubectl -n "$NS" exec "$POD" -c backup-ops-mockup -- python - <<'PY'
+          # -i is REQUIRED so the heredoc is piped to the pod's `python -`; without it
+          # kubectl discards stdin, python runs an empty program, and the check is a no-op.
+          kubectl -n "$NS" exec -i "$POD" -c backup-ops-mockup -- python - <<'PY'
           import json, sys, urllib.request, urllib.error
           try:
               r = urllib.request.urlopen("http://localhost:8080/api/jobs?window=1&limit=1", timeout=15)
