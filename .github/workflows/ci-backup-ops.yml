@@ -1,0 +1,59 @@
+name: CI (backup-ops-mockup)
+
+# Standalone static showcase image. Path-filtered so it only runs when the mockup
+# changes — it never touches the SIP app images or the cvlt-backup image.
+on:
+  pull_request:
+    paths: ["jobs/backup-ops-mockup/**", ".github/workflows/ci-backup-ops.yml"]
+  push:
+    branches: [main]
+    paths: ["jobs/backup-ops-mockup/**", ".github/workflows/ci-backup-ops.yml"]
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-backup-ops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/apythoneer/backup-ops-mockup
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sanity-check the page
+        run: |
+          f=jobs/backup-ops-mockup/index.html
+          grep -qi '<!doctype html>' "$f" || { echo "::error::missing doctype"; exit 1; }
+          grep -q '</html>' "$f"          || { echo "::error::unterminated document"; exit 1; }
+          # the inline script must parse
+          node -e 'const fs=require("fs");const h=fs.readFileSync("'"$f"'","utf8");const m=[...h.matchAll(/<script>([\s\S]*?)<\/script>/g)];new Function(m[m.length-1][1]);console.log("page OK")'
+
+  build-push:
+    needs: [check]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build & push
+        uses: docker/build-push-action@v6
+        with:
+          context: jobs/backup-ops-mockup
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
