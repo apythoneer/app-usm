@@ -22,10 +22,15 @@ metadata:
     app: cvlt-backup-summary
     app.kubernetes.io/part-of: cvlt-backup
 spec:
-  # Report pulls the last 24h ("-PT24H P0D"); run once daily after the backup
-  # window. 13:00 UTC ~= early morning US. Adjust to the real backup SLA.
-  schedule: "0 13 * * *"
-  timeZone: "Etc/UTC"
+  # Report pulls the last 24h ("-PT24H P0D"). Runs hourly across the business day
+  # (07:00-15:00 Mountain, 9 runs) rather than overnight: the backup window is at
+  # night, where jobs are allowed to fail and auto-retry, so evaluating/ticketing
+  # then would be noisy. Hourly daytime runs catch the settled end-state.
+  # NOTE: the 24h lookback means each run re-ingests the same rolling window, so
+  # the INSERT into cvlt_backupjobsummary MUST upsert on job_id (confirm w/ PJ)
+  # or hourly runs will pile up duplicates.
+  schedule: "0 7-15 * * *"
+  timeZone: "America/Denver"
   suspend: true                 # <-- FLIP to false to go live
   concurrencyPolicy: Forbid
   startingDeadlineSeconds: 600
