@@ -40,6 +40,11 @@ on:
         type: boolean
         required: true
         default: false
+      inspect:
+        description: "Read-only: dump what the ETL has captured in stormart (job runs, row counts, latest jobs, DD events)"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -233,6 +238,50 @@ jobs:
           echo "health pod: $POD"
           kubectl -n "$NS" exec "$POD" -- python -c \
             "import urllib.request; print(urllib.request.urlopen('http://localhost:8080/status', timeout=12).read().decode())"
+
+      - name: Inspect captured data in stormart (read-only)
+        if: ${{ github.event.inputs.inspect == 'true' }}
+        run: |
+          # Read-only snapshot of what the ETL has landed. Runs inside the health
+          # pod (it already has psycopg2 + the Secret mounted read-only), via the
+          # kube API, so no pod-network reach to Postgres is needed from the runner.
+          kubectl -n "$NS" exec -i deploy/cvlt-backup-summary-health -c health -- python - <<'PY'
+          import json, psycopg2
+          from psycopg2.extras import RealDictCursor
+          s = json.load(open("/home/cvadmin/.var/secrets.json"))["postgres"]
+          conn = psycopg2.connect(host=s["host"], port=s["port"], dbname=s["database"],
+                                  user=s["user"], password=s["password"], connect_timeout=6)
+          cur = conn.cursor(cursor_factory=RealDictCursor)
+          def q(title, sql):
+              print("\n==== %s ====" % title)
+              try:
+                  cur.execute(sql)
+                  rows = cur.fetchall()
+                  if not rows:
+                      print("(no rows)")
+                  for r in rows:
+                      print(dict(r))
+              except Exception as e:
+                  conn.rollback()
+                  print("query failed: %s: %s" % (type(e).__name__, e))
+          q("ETL runs (last 5)",
+            "SELECT id, started_at, finished_at, status, error, host "
+            "FROM stormart.cvlt_job_runs ORDER BY started_at DESC LIMIT 5")
+          q("backup summary — totals",
+            "SELECT count(*) AS rows, count(DISTINCT client_name) AS clients, "
+            "min(start_time) AS oldest, max(start_time) AS newest "
+            "FROM stormart.cvlt_backupjobsummary")
+          q("backup summary — by job_status",
+            "SELECT job_status, count(*) AS n FROM stormart.cvlt_backupjobsummary "
+            "GROUP BY job_status ORDER BY n DESC LIMIT 15")
+          q("backup summary — latest 5 jobs",
+            "SELECT job_id, client_name, workload, agent, start_time, end_time, "
+            "duration_mins, size_of_application_gb, job_status "
+            "FROM stormart.cvlt_backupjobsummary ORDER BY start_time DESC LIMIT 5")
+          q("datadog events — total",
+            "SELECT count(*) AS n FROM stormart.cvlt_datadog_events")
+          conn.close()
+          PY
 
       - name: Diagnostics (PVC / pods / events) — no waiting
         if: ${{ github.event.inputs.diag == 'true' }}
