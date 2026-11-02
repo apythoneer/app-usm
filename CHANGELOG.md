@@ -51,6 +51,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `cvlt_backupjobsummary` INSERT must upsert on `job_id`; flagged for PJ.)
 
 ### Fixed
+- **cvlt-backup-summary ETL crashed on every run after the first** — the credential
+  Secret mounts read-only (`0400`) and the init container's `cp` preserves that
+  mode, so `secrets.json` lands on the PVC read-only. The pipeline script backs it
+  up to `secrets.json.bak` at import time; the first run creates `.bak` fresh (fine)
+  but it inherits `0400`, so the second run's `shutil.copy` can't overwrite the
+  read-only `.bak` and the job dies with `PermissionError` before doing any work
+  (and a token renewal, which rewrites `secrets.json`, would fail the same way).
+  Only surfaced now because every prior successful run was the first on a freshly
+  seeded PVC. The `seed-secrets` init container now `chmod 0600`s `secrets.json`
+  (and any existing `.bak`) every start. Without this the new hourly CronJob would
+  succeed once then fail the rest of the day.
 - **cvlt-backup-summary health endpoint 500'd once a run was recorded** — `last_run`
   surfaces `EXTRACT(EPOCH …) AS duration_s`, a psycopg2 `Decimal`, which
   `json.dumps` can't serialize; `/health` therefore threw before responding and the
