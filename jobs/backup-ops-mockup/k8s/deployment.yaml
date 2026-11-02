@@ -1,6 +1,7 @@
-# Backup Operations mockup — one rootless-nginx pod serving a single static page.
-# Deliberately separate from the SIP app (own image, own ingress): a throwaway
-# showcase target that is reachable on the corp network, unlike a claude.ai link.
+# Backup Operations showcase — one read-only web pod (serves the page + /api/jobs
+# over stormart). Runs in the PROD namespace next to cvlt-backup-summary so it
+# reuses that pipeline's Postgres creds (mounted read-only) and proven network path.
+# Deliberately separate from the SIP app and from the cvlt-backup CronJob.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,7 +17,6 @@ spec:
     metadata:
       labels: { app: backup-ops-mockup }
       annotations:
-        # No app runtime to trace; skip ADOT auto-instrumentation (as the SIP frontend does).
         instrumentation.opentelemetry.io/inject-python: "false"
         instrumentation.opentelemetry.io/inject-java: "false"
         instrumentation.opentelemetry.io/inject-nodejs: "false"
@@ -24,12 +24,22 @@ spec:
     spec:
       imagePullSecrets:
         - name: ghcr-apythoneer
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: backup-ops-mockup
           # Pinned to an immutable SHA tag at deploy time; :latest is the staged placeholder.
           image: ghcr.io/apythoneer/backup-ops-mockup:latest
           ports:
             - containerPort: 8080
+          env:
+            - name: SECRETS_PATH
+              value: /var/secrets/secrets.json
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 3
@@ -38,15 +48,36 @@ spec:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 8
             periodSeconds: 30
-          # Declared so a namespace ResourceQuota (if present) admits the pod.
+          # Required by the namespace ResourceQuota (requests+limits for cpu AND memory).
           resources:
-            requests: { cpu: "25m", memory: "32Mi" }
-            limits: { cpu: "150m", memory: "96Mi" }
+            requests: { cpu: "50m", memory: "96Mi" }
+            limits: { cpu: "300m", memory: "256Mi" }
           securityContext:
             allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
             runAsNonRoot: true
+            runAsUser: 1000
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            # Postgres creds only — read-only. Reuses the pipeline's Secret so no new
+            # credential is introduced; the app reads just the "postgres" block.
+            - name: secrets
+              mountPath: /var/secrets
+              readOnly: true
+            # readOnlyRootFilesystem: give the process a scratch /tmp.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: secrets
+          secret:
+            secretName: cvlt-backup-secrets
+            items:
+              - key: secrets.json
+                path: secrets.json
+            defaultMode: 0400
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

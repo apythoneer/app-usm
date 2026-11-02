@@ -1,50 +1,63 @@
 # backup-ops-mockup
 
-A standalone, on-network showcase of the SIP **Backup Operations** view — the first
-Backup Operations capability for the platform. It exists because the design artifact
-lives on `claude.ai`, which the corp network blocks; this serves the same page from a
-corporate URL so it can be demoed to PJ and others.
+A standalone, on-network **Backup Operations** view for SIP — the first Backup
+Operations capability for the platform. It exists because the design artifact lives
+on `claude.ai`, which the corp network blocks; this serves the same view from a
+corporate URL.
 
-It is **not** the SIP app and not wired into `deploy/overlays/*`. One rootless-nginx
-pod serving one static HTML page, with its own image, CI, and ingress.
+It is **not** the SIP app and not wired into `deploy/overlays/*`. One small
+read-only web pod: a Python stdlib HTTP server (`app.py`) that serves one page and a
+JSON API over `stormart.cvlt_backupjobsummary`.
 
-## What it shows
+## Live data
 
-`index.html` is a self-contained page (no build step, no external JS libraries — only
-Google Fonts): KPI tiles, a job-status donut, a jobs-by-workload bar panel, and a
-filterable/sortable job table. Filters (window / client / status) run live over a
-**seeded sample dataset** generated in-page, so the numbers are stable across reloads
-and are clearly labelled as sample data, not production figures.
+It runs in the **prod** namespace (`storage-mgt-tools-na`) next to
+`cvlt-backup-summary`, because that is the only place the `stormart` RDS is
+reachable. It reuses that pipeline's `cvlt-backup-secrets` Secret (the `postgres`
+block only, mounted read-only) and issues **SELECT-only** queries.
 
-The layout mirrors the real data model of `stormart.cvlt_backupjobsummary` (client,
-workload, agent, start/end, duration, size, job_status, failure_reason) so it doubles
-as the spec for the eventual SIP React page.
+- `GET /` — the page (`index.html`): KPI tiles, a job-status donut, a
+  jobs-by-workload panel, and a filterable/sortable job table.
+- `GET /api/jobs?window=<days>&client=<substr>&status=<csv>&limit=<n>` — aggregates
+  (totals, status breakdown, by-workload) plus the most recent rows for the current
+  filters. `window` is clamped 1..90; everything is parameterized.
+- `GET /healthz` — liveness (no DB call); used by the probes.
 
-> Two data caveats are surfaced in the page itself: `size_of_application_gb` looks
-> byte-scaled (units pending confirmation with PJ), and the figures are sample data.
+The page fetches `/api/jobs` on load and on every filter change (window / client /
+status), so all numbers are live.
+
+> Note on `size_of_application_gb`: the page renders it as the column name implies.
+> Source magnitudes still look byte-scaled, so "Data protected" may read large until
+> units are confirmed with PJ — this is a data question, not a display bug.
 
 ## Deploy
 
-- **Image:** `ghcr.io/apythoneer/backup-ops-mockup` — built and pushed by
-  `.github/workflows/ci-backup-ops.yml` on pushes to `main` that touch this directory
-  (tags `:<sha>` and `:latest`).
-- **Target:** dev namespace `storage-mgt-tools-na-dev` on the AWS nonprod services
-  cluster, via `.github/workflows/deploy-backup-ops.yml` (manual `workflow_dispatch`,
-  on the `ec2-dev` self-hosted runner — the only vantage that reaches the nonprod
-  Rancher API).
-- **URL:** <https://backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet> — on the
-  `*.eks-cm-svcs-nonprod-ue2.aws.corp.intranet` wildcard, TLS from the default ingress
-  controller cert (same recipe as the SIP dev ingress).
+- **Image:** `ghcr.io/apythoneer/backup-ops-mockup` — built by
+  `.github/workflows/ci-backup-ops.yml` on pushes to `main` touching this directory
+  (tags `:<sha>`, `:latest`).
+- **Target:** prod ns `storage-mgt-tools-na`, via
+  `.github/workflows/deploy-backup-ops.yml` (manual `workflow_dispatch`, on the
+  `eks-prod` in-cluster runner — the only vantage that reaches prod Rancher and
+  stormart). The deploy verifies `/api/jobs` actually returns data from inside the
+  pod before finishing.
+- **URL:** <https://backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet> — on the
+  `*.eks-cm-svcs-prod-ue2.aws.corp.intranet` wildcard, TLS from the default ingress
+  controller cert (same recipe as the SIP ingress).
 
 ```
 # after CI has built an image from main:
-#   Actions → "Deploy backup-ops-mockup (dev)" → Run workflow → image_tag = latest (or a SHA)
+#   Actions → "Deploy backup-ops (AWS EKS prod)" → Run workflow → image_tag = latest (or a SHA)
 ```
 
 ## Teardown
 
 ```
-kubectl -n storage-mgt-tools-na-dev delete -k jobs/backup-ops-mockup/k8s
+kubectl -n storage-mgt-tools-na delete -k jobs/backup-ops-mockup/k8s
 ```
 
-Nothing else references these objects, so the delete is clean.
+Nothing else references these objects (the `cvlt-backup-secrets` Secret is owned by
+the pipeline and is left intact), so the delete is clean.
+
+> The earlier **dev** instance (static, sample data, in `storage-mgt-tools-na-dev`)
+> is superseded by this live prod app and can be removed with
+> `kubectl -n storage-mgt-tools-na-dev delete deploy/svc/ingress backup-ops-mockup`.

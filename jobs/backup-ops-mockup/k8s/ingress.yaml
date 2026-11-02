@@ -1,8 +1,9 @@
-# Public entry for the showcase. Same recipe as the SIP dev ingress:
-#  - host on the AWS nonprod SERVICES cluster wildcard (cm-svcs-nonprod-ue2) —
-#    the wklds wildcard points at a different cluster and 404s.
+# Public entry for the showcase. Same recipe as the SIP ingress:
+#  - host on the AWS PROD SERVICES cluster wildcard (cm-svcs-prod-ue2) — that is
+#    where stormart is reachable, so the app runs there; the wklds wildcard points
+#    at a different cluster and 404s.
 #  - TLS host-only, NO secretName: the platform's "Default Ingress Controller
-#    Certificate" supplies the wildcard cert for *.eks-cm-svcs-nonprod-ue2…
+#    Certificate" supplies the wildcard cert for *.eks-cm-svcs-prod-ue2…
 #  - ssl-redirect false: TLS terminates at the edge ELB and is forwarded as HTTP;
 #    without this, ingress-nginx loops on 308 redirects to https.
 apiVersion: networking.k8s.io/v1
@@ -11,13 +12,14 @@ metadata:
   name: backup-ops-mockup
   annotations:
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
 spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+        - backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet
   rules:
-    - host: backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+    - host: backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet
       http:
         paths:
           - path: /
