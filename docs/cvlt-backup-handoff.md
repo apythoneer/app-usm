@@ -1,5 +1,11 @@
 # cvlt-backup-summary — ownership & handoff plan
 
+> For the whole Backup Operations effort (this pipeline **and** the live
+> `backup-ops` view, the vantage map, the gotchas, the `stormart` data findings, the
+> runbook, and the open questions for PJ), see
+> **[docs/backup-operations.md](backup-operations.md)**. This file stays focused on
+> the ownership/handoff plan for the pipeline specifically.
+
 ## What this is
 A standalone service wrapping PJ's `dataDogIncidentManagement.py` (Commvault
 backup-job report → AWS RDS `stormart` Postgres → Datadog failure/resolution
