@@ -1,0 +1,56 @@
+name: Deploy backup-ops-mockup (dev)
+
+# Manual showcase deploy. Runs on the corp-network self-hosted runner (the only
+# thing that reaches the AWS nonprod Rancher API), deploys the standalone mockup
+# into the dev namespace, and exposes it at
+#   https://backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to pin (a CI-built commit SHA, or 'latest')"
+        required: true
+        default: "latest"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-backup-ops
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, ec2-dev]
+    env:
+      NS: storage-mgt-tools-na-dev
+      IMAGE: ghcr.io/apythoneer/backup-ops-mockup
+      TAG: ${{ github.event.inputs.image_tag }}
+      URL: https://backup-ops.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure private GHCR pull secret
+        env:
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create secret docker-registry ghcr-apythoneer \
+            --docker-server=ghcr.io \
+            --docker-username=apythoneer \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            -n "$NS" --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Apply manifests
+        run: kubectl apply -k jobs/backup-ops-mockup/k8s
+
+      - name: Pin image + roll out
+        run: |
+          kubectl -n "$NS" set image deployment/backup-ops-mockup backup-ops-mockup="$IMAGE:$TAG"
+          kubectl -n "$NS" rollout status deployment/backup-ops-mockup --timeout=120s
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "### Backup Ops mockup" >> "$GITHUB_STEP_SUMMARY"
+          echo "URL: $URL" >> "$GITHUB_STEP_SUMMARY"
+          kubectl -n "$NS" get deploy,svc,ingress,pods -l app=backup-ops-mockup -o wide || true

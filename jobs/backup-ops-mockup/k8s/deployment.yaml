@@ -1,0 +1,60 @@
+# Backup Operations mockup — one rootless-nginx pod serving a single static page.
+# Deliberately separate from the SIP app (own image, own ingress): a throwaway
+# showcase target that is reachable on the corp network, unlike a claude.ai link.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backup-ops-mockup
+  labels:
+    app: backup-ops-mockup
+    app.kubernetes.io/part-of: backup-ops-mockup
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: backup-ops-mockup }
+  template:
+    metadata:
+      labels: { app: backup-ops-mockup }
+      annotations:
+        # No app runtime to trace; skip ADOT auto-instrumentation (as the SIP frontend does).
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+    spec:
+      imagePullSecrets:
+        - name: ghcr-apythoneer
+      containers:
+        - name: backup-ops-mockup
+          # Pinned to an immutable SHA tag at deploy time; :latest is the staged placeholder.
+          image: ghcr.io/apythoneer/backup-ops-mockup:latest
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+            periodSeconds: 15
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 8
+            periodSeconds: 30
+          # Declared so a namespace ResourceQuota (if present) admits the pod.
+          resources:
+            requests: { cpu: "25m", memory: "32Mi" }
+            limits: { cpu: "150m", memory: "96Mi" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backup-ops-mockup
+  labels:
+    app: backup-ops-mockup
+spec:
+  selector: { app: backup-ops-mockup }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
