@@ -26,9 +26,11 @@ spec:
   # (07:00-15:00 Mountain, 9 runs) rather than overnight: the backup window is at
   # night, where jobs are allowed to fail and auto-retry, so evaluating/ticketing
   # then would be noisy. Hourly daytime runs catch the settled end-state.
-  # NOTE: the 24h lookback means each run re-ingests the same rolling window, so
-  # the INSERT into cvlt_backupjobsummary MUST upsert on job_id (confirm w/ PJ)
-  # or hourly runs will pile up duplicates.
+  # NOTE: the 24h lookback means each run re-ingests the same rolling window, but
+  # that's safe — the INSERT is `ON CONFLICT (data_source, job_id) DO NOTHING`, so
+  # re-pulled jobs are skipped (no duplicate rows). Confirmed w/ PJ + code 2026-11-02.
+  # (DO NOTHING never UPDATEs a row, so a job that changes after first capture isn't
+  # refreshed — fine for this settled-daytime window. See docs/backup-operations.md.)
   schedule: "0 7-15 * * *"
   timeZone: "America/Denver"
   suspend: true                 # <-- FLIP to false to go live
