@@ -35,6 +35,11 @@ on:
         type: boolean
         required: true
         default: false
+      reseed:
+        description: "Rotate creds: recreate the Secret from CVLT_SECRETS_JSON and wipe the PVC so it re-seeds (use after updating the Actions secret with a FRESH token+refresh pair)"
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -67,10 +72,26 @@ jobs:
           # Rancher is reachable ONLY from this in-cluster runner, so the creds can't
           # be applied from a laptop/EC2 (the nonprod EC2 cannot reach prod).
           CVLT_SECRETS_JSON: ${{ secrets.CVLT_SECRETS_JSON }}
+          RESEED: ${{ github.event.inputs.reseed }}
         run: |
-          if kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
+          if [ "$RESEED" = "true" ]; then
+            # Credential rotation: force the Secret to match the (freshly updated)
+            # CVLT_SECRETS_JSON. Pairs with the PVC-wipe step below so the init
+            # container re-seeds the new token. Requires CVLT_SECRETS_JSON be set.
+            if [ -z "$CVLT_SECRETS_JSON" ]; then
+              echo "::error::reseed=true but CVLT_SECRETS_JSON is not set. Update the Actions secret with a FRESH token+refresh pair first."
+              exit 1
+            fi
+            echo "reseed=true — recreating cvlt-backup-secrets from CVLT_SECRETS_JSON."
+            kubectl -n "$NS" delete secret cvlt-backup-secrets --ignore-not-found
+            umask 077
+            printf '%s' "$CVLT_SECRETS_JSON" > /tmp/cvlt-secrets.json
+            kubectl -n "$NS" create secret generic cvlt-backup-secrets \
+              --from-file=secrets.json=/tmp/cvlt-secrets.json
+            shred -u /tmp/cvlt-secrets.json 2>/dev/null || rm -f /tmp/cvlt-secrets.json
+          elif kubectl -n "$NS" get secret cvlt-backup-secrets >/dev/null 2>&1; then
             # Never overwrite: the script renews the token into the PVC; the Secret is
-            # only the initial seed and may now be stale.
+            # only the initial seed and may now be stale. (Use reseed=true to rotate.)
             echo "Secret already present — leaving it untouched."
           elif [ -n "$CVLT_SECRETS_JSON" ]; then
             umask 077
@@ -113,6 +134,18 @@ jobs:
           else
             echo "no migration needed."
           fi
+
+      - name: Wipe the PVC on reseed (so the init container re-seeds fresh creds)
+        if: ${{ github.event.inputs.reseed == 'true' }}
+        run: |
+          # The init container only seeds secrets.json if ABSENT, so a stale token
+          # already on the PVC would survive a Secret rotation. Deleting the PVC
+          # here lets `apply` recreate it empty (EFS Immediate rebinds in ~1s) and
+          # the init container seeds the fresh token from the just-recreated Secret.
+          # Safe: nothing but the (now-stale) secrets.json lives here, and the
+          # health Deployment doesn't mount it.
+          echo "reseed=true — deleting PVC cvlt-backup-var so it re-seeds…"
+          kubectl -n "$NS" delete pvc cvlt-backup-var --ignore-not-found --wait=true --timeout=60s || true
 
       - name: Apply manifests (CronJob stays suspended per the manifest)
         run: kubectl apply -k jobs/cvlt-backup-summary/k8s

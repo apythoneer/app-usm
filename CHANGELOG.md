@@ -34,6 +34,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   today and is the drop-in seam for pgvector cosine similarity after the
   SCPSB-1022 Postgres cutover.
 
+### Added
+- **cvlt-backup-summary credential rotation** — `deploy-cvlt-backup.yml` gained a
+  `reseed` input that recreates the `cvlt-backup-secrets` Secret from a freshly
+  updated `CVLT_SECRETS_JSON` and wipes the PVC so the init container re-seeds the
+  new token+refresh pair (the PVC otherwise keeps the old file). Needed because a
+  stale seed pair fails Commvault auth (401 on report, 500/errorCode 101 on renew).
+
 ### Fixed
 - **cvlt-backup-summary ETL pod blocked by the namespace ResourceQuota** — the
   `seed-secrets` initContainer had no `resources` block, so `storage-mgt-tools-na-rq`
