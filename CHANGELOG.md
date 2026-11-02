@@ -42,6 +42,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stale seed pair fails Commvault auth (401 on report, 500/errorCode 101 on renew).
 
 ### Fixed
+- **cvlt-backup-summary health endpoint 500'd once a run was recorded** — `last_run`
+  surfaces `EXTRACT(EPOCH …) AS duration_s`, a psycopg2 `Decimal`, which
+  `json.dumps` can't serialize; `/health` therefore threw before responding and the
+  health pod stayed `0/1` NotReady (blocking the deploy) the moment the first row
+  landed in `cvlt_job_runs` — not a credential/secret problem. Cast `duration_s` to
+  float and added a `json.dumps` default that coerces `Decimal`/`datetime` so the
+  health endpoint can never 500 on serialization again.
 - **cvlt-backup-summary reseed deadlocked on the PVC** — the reseed PVC delete hung
   on the `kubernetes.io/pvc-protection` finalizer (leftover completed/failed job
   pods still referenced the claim), which `|| true` masked; `apply` then couldn't

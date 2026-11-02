@@ -115,7 +115,10 @@ def last_run(secrets):
             "status": row["status"],
             "started_at": _iso(row["started_at"]),
             "finished_at": _iso(row["finished_at"]),
-            "duration_s": round(row["duration_s"], 1) if row["duration_s"] else None,
+            # EXTRACT(EPOCH ...) comes back as a psycopg2 Decimal; cast to float so
+            # it's JSON-serializable (a raw Decimal makes json.dumps throw, which
+            # used to 500 /health and keep the pod permanently NotReady).
+            "duration_s": float(round(row["duration_s"], 1)) if row["duration_s"] is not None else None,
             "error": row["error"],
             "host": row["host"],
             "summary_rows": total,
@@ -130,6 +133,18 @@ def _ms(t0):
 
 def _iso(dt):
     return dt.isoformat() if dt else None
+
+
+def _json_default(o):
+    """Fallback for json.dumps so the health endpoint never 500s on a stray type
+    (e.g. a psycopg2 Decimal or a datetime slipping through). Health must always
+    be able to answer the probe."""
+    from decimal import Decimal
+    if isinstance(o, Decimal):
+        return float(o)
+    if isinstance(o, datetime):
+        return o.isoformat()
+    return str(o)
 
 
 # --------------------------------------------------------------- aggregate
@@ -235,7 +250,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path in ("/health", "/status"):
             ok, status = build_status()
             code = 200 if (path == "/status" or ok) else 503
-            self._send(code, json.dumps(status, indent=2))
+            self._send(code, json.dumps(status, indent=2, default=_json_default))
         elif path == "/":
             self._send(200, PAGE, "text/html; charset=utf-8")
         else:
