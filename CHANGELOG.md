@@ -41,6 +41,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   new token+refresh pair (the PVC otherwise keeps the old file). Needed because a
   stale seed pair fails Commvault auth (401 on report, 500/errorCode 101 on renew).
 
+### Changed
+- **cvlt-backup-summary schedule moved to hourly daytime** — the CronJob now runs
+  `0 7-15 * * *` in `America/Denver` (07:00–15:00 Mountain, 9 runs/day) instead of
+  once at 13:00 UTC. Backups run overnight where failures are expected and
+  auto-retry; evaluating/ticketing then is noisy, so the pipeline runs across the
+  settled business day. Pinned to the window's own timezone so Kubernetes handles
+  MST/MDT. (Hourly re-ingests the same 24h window each run — the
+  `cvlt_backupjobsummary` INSERT must upsert on `job_id`; flagged for PJ.)
+
 ### Fixed
 - **cvlt-backup-summary health endpoint 500'd once a run was recorded** — `last_run`
   surfaces `EXTRACT(EPOCH …) AS duration_s`, a psycopg2 `Decimal`, which
