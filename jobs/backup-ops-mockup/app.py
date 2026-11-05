@@ -72,7 +72,9 @@ def query_jobs(window_days, client, statuses, limit):
         cur = conn.cursor(cursor_factory=RealDictCursor)
         cur.execute(
             "SELECT count(*) AS total, count(DISTINCT client_name) AS clients, "
-            "COALESCE(sum(size_of_application_gb), 0) AS data_gb "
+            "COALESCE(sum(size_of_application_gb), 0) AS data_gb, "
+            "COALESCE(sum(media_size_gb), 0) AS written_gb, "
+            "avg(dedup_savings_pct) AS avg_dedup "
             "FROM " + TABLE + " WHERE " + w, params)
         agg = cur.fetchone()
 
@@ -87,6 +89,17 @@ def query_jobs(window_days, client, statuses, limit):
             "FROM " + TABLE + " WHERE " + w +
             " GROUP BY workload ORDER BY n DESC LIMIT 8", params)
         by_workload = cur.fetchall()
+
+        # Dedupe-savings trend: avg dedup_savings_pct bucketed across the window
+        # (hourly for the 24h view, daily for the wider ones). Feeds the line chart.
+        bucket = "hour" if window_days <= 1 else "day"
+        cur.execute(
+            "SELECT date_trunc(%s, start_time) AS bucket, "
+            "avg(dedup_savings_pct) AS avg_dedup, count(*) AS n "
+            "FROM " + TABLE + " WHERE " + w +
+            " AND dedup_savings_pct IS NOT NULL "
+            "GROUP BY 1 ORDER BY 1", [bucket] + params)
+        dedup_series = cur.fetchall()
 
         cur.execute(
             "SELECT job_id, client_name, workload, agent, subclient, start_time, "
@@ -103,8 +116,11 @@ def query_jobs(window_days, client, statuses, limit):
         "total": agg["total"],
         "clients": agg["clients"],
         "data_gb": agg["data_gb"],
+        "written_gb": agg["written_gb"],
+        "avg_dedup": agg["avg_dedup"],
         "by_status": {r["job_status"]: r["n"] for r in by_status},
         "by_workload": by_workload,
+        "dedup_series": dedup_series,
         "rows": rows,
     }
 

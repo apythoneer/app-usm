@@ -82,9 +82,10 @@ What we learned about the table the view reads:
   job whose status/size changes after first capture won't be refreshed (fine for our
   daytime-settled window; would need `DO UPDATE` otherwise). _(Confirmed with PJ +
   code, 2026-11-02.)_
-- **`size_of_application_gb` units are UNCONFIRMED.** Magnitudes look byte-scaled
-  (billions), not GB. **Do not trust the "Data protected" figure** until PJ confirms
-  units. _(PJ investigating as of 2026-11-02.)_
+- **The `*_gb` columns are byte-scaled, not GB.** `size_of_application_gb` and
+  `media_size_gb` hold **bytes** despite the name (magnitudes in the billions).
+  The backup-ops view scales from bytes (`fmtBytes`) for the "Data protected" /
+  "Data Written" tiles and the table "Data" column. _(Confirmed with PJ, 2026-11-05.)_
 - **`client_name` is very high-cardinality** — ~8,759 distinct values in ~13,360 jobs
   over 24h (almost one per job). It likely is **not** the clean client identity (may
   carry per-subclient/instance detail), which would inflate the "Clients" KPI. Open
@@ -141,7 +142,7 @@ the PVC is the living source of truth. A stale seed fails hard (401 on report �
 | # | Question | Status |
 |---|---|---|
 | 1 | Does the INSERT upsert on job_id or append? | ✅ Resolved — `ON CONFLICT (data_source, job_id) DO NOTHING`; hourly is safe. |
-| 2 | `size_of_application_gb` units (looks byte-scaled)? | ⏳ PJ investigating. Gates the "Data protected" tile. |
+| 2 | `*_gb` column units (looks byte-scaled)? | ✅ Resolved — they're **bytes**; view scales from bytes. (2026-11-05) |
 | 3 | Who else writes to `cvlt_backupjobsummary` (shared table ownership)? | ◻ Open — likely `storage-ops`. |
 | 4 | Confirm 7am–3pm **Mountain** / hourly cadence. | ✅ Mountain confirmed (presence card). |
 | 5 | Commvault access/refresh token TTLs + refresh-token expiry on idle? | ◻ Open — affects the renewal loop over quiet periods. |
