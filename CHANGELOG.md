@@ -23,7 +23,11 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   the SIP app: own image `ghcr.io/apythoneer/backup-ops-mockup`, own path-filtered
   CI, own manual deploy on the `eks-prod` runner, exposed at
   `backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet` so it can be demoed on the
-  corp network (claude.ai is blocked).
+  corp network (claude.ai is blocked). The job table includes a **Job ID** column;
+  the KPI row carries a **Data Written** tile (`sum(media_size_gb)`) and there is an
+  **Average Dedupe Savings %** line chart (`avg(dedup_savings_pct)` bucketed hourly
+  in the 24h view, daily otherwise). The Commvault `*_gb` columns are byte-scaled
+  (confirmed with PJ), so all data sizes are formatted from bytes.
 - **cvlt-backup-summary service** (`jobs/cvlt-backup-summary/`) — standalone,
   separate from the SIP app. Containerises PJ's Commvault backup-job pipeline as a
   nightly `CronJob` (Commvault report → AWS RDS `stormart` Postgres → Datadog

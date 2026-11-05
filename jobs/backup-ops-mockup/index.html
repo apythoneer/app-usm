@@ -211,6 +211,21 @@
   .empty { padding: 34px 16px; text-align: center; color: var(--muted); }
   .empty.err { color: var(--st-critical); }
 
+  td.jobid { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; color: var(--fg-2); }
+
+  /* Dedupe-savings trend: single-series line, accent hue, recessive grid. */
+  .chart { display: block; width: 100%; height: 210px; touch-action: none; }
+  .chart .gridln { stroke: var(--border-2); stroke-width: 1; }
+  .chart .baseln { stroke: var(--border); stroke-width: 1; }
+  .chart .lbl    { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .chart .area   { fill: var(--accent); opacity: .09; }
+  .chart .line   { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .chart .avgln  { stroke: var(--accent-ink); stroke-width: 1; stroke-dasharray: 5 4; opacity: .45; }
+  .chart .dot    { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+  .chart .hit    { fill: transparent; cursor: pointer; }
+  .chart .cross  { stroke: var(--accent); stroke-width: 1; stroke-dasharray: 3 3; opacity: 0; }
+  .chart .emptyc { fill: var(--muted); font-size: 12px; }
+
   #tip { position: fixed; z-index: 50; pointer-events: none; opacity: 0; transition: opacity .1s;
     background: var(--fg); color: var(--page); font-size: 11.5px; line-height: 1.5; padding: 7px 9px; border-radius: 7px;
     box-shadow: 0 4px 14px rgba(0,0,0,.25); max-width: 240px; }
@@ -293,6 +308,11 @@
     </div>
   </div>
 
+  <div class="panel" style="margin-bottom:12px">
+    <div class="ph"><h2>Average Dedupe Savings %</h2><span class="sub" id="dedup-sub"></span></div>
+    <div class="pb"><svg class="chart" id="dedup" role="img" aria-label="Average dedupe savings percent over time"></svg></div>
+  </div>
+
   <div class="tablecard">
     <div class="tabhead">
       <h2>Backup jobs</h2>
@@ -355,12 +375,16 @@
   });
 
   function fmtInt(n){ return (n == null ? 0 : n).toLocaleString("en-US"); }
-  function fmtData(gb){
-    gb = gb || 0;
-    if (gb >= 1024*1024) return (gb/1048576).toFixed(2) + " PB";
-    if (gb >= 1024) return (gb/1024).toFixed(1) + " TB";
-    return (gb < 10 ? gb.toFixed(1) : Math.round(gb).toString()) + " GB";
+  // NB: the Commvault "*_gb" columns (size_of_application_gb, media_size_gb) are
+  // byte-scaled despite the name — confirmed 2026-11. Scale from bytes.
+  function fmtBytes(b){
+    b = +b || 0;
+    var u = ["B","KB","MB","GB","TB","PB"], i = 0;
+    while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+    return (i === 0 ? Math.round(b).toString() : b < 10 ? b.toFixed(1) : Math.round(b).toString()) + " " + u[i];
   }
+  function fmtPct(v){ return (v == null || isNaN(v)) ? "—" : (+v).toFixed(1) + "%"; }
+  function rangeLabel(){ return state.days <= 1 ? "last 24 hours" : "last " + state.days + " days"; }
   function fmtDur(m){ if (m == null) return "—"; m = Math.round(m); if (m >= 60) { return Math.floor(m/60) + "h " + (m%60) + "m"; } return m + "m"; }
   function fmtTime(iso){
     if (!iso) return "—";
@@ -382,6 +406,7 @@
 
   var sort = { key: "start_time", dir: -1 };
   var COLS = [
+    {k:"job_id", t:"Job ID", num:true},
     {k:"client_name", t:"Client"}, {k:"workload", t:"Workload"}, {k:"start_time", t:"Start"},
     {k:"duration_mins", t:"Duration", num:true}, {k:"size_of_application_gb", t:"Data", num:true},
     {k:"job_status", t:"Status"}, {k:"failure_reason", t:"Failure reason"}
@@ -399,6 +424,7 @@
   }
 
   var curRows = [];
+  var curDedup = null;
 
   function load(){
     var statuses = STATUS_ORDER.filter(function(s){ return state.status[s]; });
@@ -425,9 +451,12 @@
     document.getElementById("donut-total").textContent = "—";
     document.getElementById("legend").innerHTML = "";
     document.getElementById("bars").innerHTML = "";
+    document.getElementById("dedup").innerHTML = "";
+    document.getElementById("dedup-sub").textContent = "";
+    curDedup = null;
     document.getElementById("tab-count").textContent = "";
     document.getElementById("tbody").innerHTML =
-      '<tr><td colspan="7" class="empty err">Could not load live data: ' + String(msg).replace(/</g,"&lt;") + '</td></tr>';
+      '<tr><td colspan="8" class="empty err">Could not load live data: ' + String(msg).replace(/</g,"&lt;") + '</td></tr>';
   }
 
   function renderAll(d){
@@ -436,15 +465,14 @@
     var bs = d.by_status || {};
     var done = bs["Completed"] || 0;
     var failed = bs["Failed"] || 0;
-    var errs = (bs["Completed with errors"] || 0) + (bs["Partial Success"] || 0);
     var succ = total ? (done/total*100) : 0;
 
     var kpis = [
       {k:"Total jobs", v:fmtInt(total), s:"in window"},
       {k:"Success rate", v:succ.toFixed(1)+'<small>%</small>', s:fmtInt(done)+" completed clean"},
       {k:"Failed", v:fmtInt(failed), s:(total?(failed/total*100).toFixed(1):0)+"% of runs", alert: failed>0},
-      {k:"With warnings", v:fmtInt(errs), s:"errors / partial"},
-      {k:"Data protected", v:fmtData(d.data_gb), s:"sum of application size"},
+      {k:"Data Written", v:fmtBytes(d.written_gb), s:"sum of media written"},
+      {k:"Data protected", v:fmtBytes(d.data_gb), s:"sum of application size"},
       {k:"Clients", v:fmtInt(d.clients), s:"distinct, covered"}
     ];
     document.getElementById("kpis").innerHTML = kpis.map(function(t){
@@ -489,8 +517,83 @@
         '<span class="meta tnum">'+fmtInt(x.n)+(x.failed?'<span class="f">'+x.failed+' failed</span>':'')+'</span></div>';
     }).join("") || '<div class="pc" style="color:var(--muted)">no jobs in window</div>';
 
+    renderDedupe(d.dedup_series || [], d.avg_dedup != null ? +d.avg_dedup : null, state.days <= 1);
+
     curRows = d.rows || [];
     renderTable(total);
+  }
+
+  // Line chart: avg dedupe savings % over time (hourly in 24h view, else daily).
+  function renderDedupe(series, avg, byHour){
+    curDedup = { series: series, avg: avg, byHour: byHour };
+    var svg = document.getElementById("dedup");
+    var W = Math.max(320, Math.round(svg.getBoundingClientRect().width)) || 680, H = 210;
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("width", W); svg.setAttribute("height", H);
+    document.getElementById("dedup-sub").textContent =
+      (avg != null) ? (fmtPct(avg) + " avg · " + rangeLabel()) : rangeLabel();
+
+    var pts = (series || []).map(function(r){
+      return { t: new Date(r.bucket).getTime(), v: +r.avg_dedup, n: r.n };
+    }).filter(function(p){ return isFinite(p.t) && isFinite(p.v); });
+
+    if (!pts.length){
+      svg.innerHTML = '<text class="emptyc" x="'+(W/2)+'" y="'+(H/2)+'" text-anchor="middle">No dedupe data in window</text>';
+      return;
+    }
+
+    var padL = 40, padR = 16, padT = 14, padB = 26;
+    var pw = W - padL - padR, ph = H - padT - padB;
+    var vs = pts.map(function(p){ return p.v; });
+    var vMin = Math.min.apply(null, vs), vMax = Math.max.apply(null, vs);
+    var span = vMax - vMin, pad = span < 1 ? 2 : span * 0.15;
+    var lo = Math.max(0, vMin - pad), hi = Math.min(100, vMax + pad);
+    if (hi - lo < 1) { hi = Math.min(100, lo + 1); }
+    var tMin = pts[0].t, tMax = pts[pts.length - 1].t;
+    function xOf(t){ return tMax === tMin ? padL + pw / 2 : padL + (t - tMin) / (tMax - tMin) * pw; }
+    function yOf(v){ return padT + (1 - (v - lo) / (hi - lo)) * ph; }
+
+    var ticks = [lo, (lo + hi) / 2, hi], grid = "";
+    ticks.forEach(function(tk){
+      var y = yOf(tk);
+      grid += '<line class="gridln" x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(W-padR)+'" y2="'+y.toFixed(1)+'"/>'+
+              '<text class="lbl" x="'+(padL-6)+'" y="'+(y+3).toFixed(1)+'" text-anchor="end">'+tk.toFixed(0)+'%</text>';
+    });
+
+    function xlab(t){ var d = new Date(t);
+      return byHour ? d.toLocaleTimeString("en-US",{hour:"2-digit"})
+                    : d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); }
+    var xlabs = '<text class="lbl" x="'+xOf(tMin).toFixed(1)+'" y="'+(H-8)+'" text-anchor="start">'+xlab(tMin)+'</text>';
+    if (pts.length > 1) xlabs += '<text class="lbl" x="'+xOf(tMax).toFixed(1)+'" y="'+(H-8)+'" text-anchor="end">'+xlab(tMax)+'</text>';
+
+    var dLine = pts.map(function(p,i){ return (i?"L":"M")+xOf(p.t).toFixed(1)+" "+yOf(p.v).toFixed(1); }).join(" ");
+    var baseY = padT + ph;
+    var dArea = dLine + " L "+xOf(tMax).toFixed(1)+" "+baseY+" L "+xOf(tMin).toFixed(1)+" "+baseY+" Z";
+    var avgLn = (avg != null && avg >= lo && avg <= hi)
+      ? '<line class="avgln" x1="'+padL+'" y1="'+yOf(avg).toFixed(1)+'" x2="'+(W-padR)+'" y2="'+yOf(avg).toFixed(1)+'"/>' : '';
+    var dots = pts.map(function(p,i){ return '<circle class="dot" data-i="'+i+'" cx="'+xOf(p.t).toFixed(1)+'" cy="'+yOf(p.v).toFixed(1)+'" r="3"/>'; }).join("");
+    var hits = pts.map(function(p,i){ return '<circle class="hit" data-i="'+i+'" cx="'+xOf(p.t).toFixed(1)+'" cy="'+yOf(p.v).toFixed(1)+'" r="13"/>'; }).join("");
+
+    svg.innerHTML = grid +
+      '<line class="baseln" x1="'+padL+'" y1="'+baseY+'" x2="'+(W-padR)+'" y2="'+baseY+'"/>' +
+      avgLn + '<path class="area" d="'+dArea+'"/>' + '<path class="line" d="'+dLine+'"/>' +
+      '<line class="cross" id="dedup-cross" y1="'+padT+'" y2="'+baseY+'"/>' + xlabs + dots + hits;
+
+    var crossEl = document.getElementById("dedup-cross");
+    svg.querySelectorAll(".hit").forEach(function(h){
+      var i = +h.getAttribute("data-i"), p = pts[i];
+      var dot = svg.querySelector('.dot[data-i="'+i+'"]');
+      h.addEventListener("pointerenter", function(e){
+        if (dot) dot.setAttribute("r", 5);
+        crossEl.setAttribute("x1", xOf(p.t).toFixed(1)); crossEl.setAttribute("x2", xOf(p.t).toFixed(1)); crossEl.style.opacity = 1;
+        var when = byHour
+          ? new Date(p.t).toLocaleString("en-US",{month:"short",day:"numeric",hour:"2-digit",minute:"2-digit"})
+          : new Date(p.t).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+        showTip('<b>'+fmtPct(p.v)+'</b> dedupe savings<br><span class="tnum">'+when+'</span> · '+fmtInt(p.n)+' job'+(p.n===1?'':'s'), e.clientX, e.clientY);
+      });
+      h.addEventListener("pointermove", function(e){ moveTip(e.clientX, e.clientY); });
+      h.addEventListener("pointerleave", function(){ if (dot) dot.setAttribute("r", 3); crossEl.style.opacity = 0; hideTip(); });
+    });
   }
 
   function renderTable(total){
@@ -502,7 +605,7 @@
       b.addEventListener("click", function(){
         var k = b.dataset.k;
         if (sort.key === k) sort.dir *= -1;
-        else { sort.key = k; sort.dir = (k==="start_time"||k==="duration_mins"||k==="size_of_application_gb") ? -1 : 1; }
+        else { sort.key = k; sort.dir = (k==="start_time"||k==="duration_mins"||k==="size_of_application_gb"||k==="job_id") ? -1 : 1; }
         renderTable(total);
       });
     });
@@ -510,22 +613,23 @@
     var rows = curRows.slice().sort(function(a,b){
       var k = sort.key, va = a[k], vb = b[k];
       if (k === "start_time") { return ((new Date(va)) - (new Date(vb))) * sort.dir; }
-      if (k === "duration_mins" || k === "size_of_application_gb") { return ((va||0)-(vb||0)) * sort.dir; }
+      if (k === "duration_mins" || k === "size_of_application_gb" || k === "job_id") { return ((va||0)-(vb||0)) * sort.dir; }
       return String(va||"").localeCompare(String(vb||"")) * sort.dir;
     });
 
     document.getElementById("tab-count").textContent = total ? ("showing " + rows.length + " of " + fmtInt(total)) : "";
     var tb = document.getElementById("tbody");
-    if (!rows.length) { tb.innerHTML = '<tr><td colspan="7" class="empty">No jobs match these filters.</td></tr>'; return; }
+    if (!rows.length) { tb.innerHTML = '<tr><td colspan="8" class="empty">No jobs match these filters.</td></tr>'; return; }
     tb.innerHTML = rows.map(function(j){
       var st = STATUS[j.job_status] || { hex: "#8a8880" };
       var running = j.job_status === "Running" || !j.end_time;
       return '<tr>'+
+        '<td class="num jobid">'+(j.job_id != null ? j.job_id : "—")+'</td>'+
         '<td><div class="client">'+(j.client_name||"—")+'</div><div class="agent">'+(j.agent||"")+(j.subclient?' · '+j.subclient:'')+'</div></td>'+
         '<td>'+(j.workload||"—")+'</td>'+
         '<td class="num">'+fmtTime(j.start_time)+'</td>'+
         '<td class="num" style="text-align:right">'+(running ? '<span style="color:var(--st-info)">running</span>' : fmtDur(j.duration_mins))+'</td>'+
-        '<td class="num" style="text-align:right">'+fmtData(j.size_of_application_gb)+'</td>'+
+        '<td class="num" style="text-align:right">'+fmtBytes(j.size_of_application_gb)+'</td>'+
         '<td><span class="pill" style="--pc:'+st.hex+'"><span class="d"></span>'+(j.job_status||"—")+'</span></td>'+
         '<td class="reason">'+(j.failure_reason ? String(j.failure_reason).replace(/</g,"&lt;") : '<span style="color:var(--muted)">—</span>')+'</td>'+
       '</tr>';
@@ -536,6 +640,13 @@
     curRows.forEach(function(j){ if (j.client_name && !seen[j.client_name]) { seen[j.client_name]=1; names.push(j.client_name); } });
     document.getElementById("clients").innerHTML = names.sort().map(function(n){ return '<option value="'+n+'">'; }).join("");
   }
+
+  var rzTimer;
+  window.addEventListener("resize", function(){
+    if (!curDedup) return;
+    clearTimeout(rzTimer);
+    rzTimer = setTimeout(function(){ renderDedupe(curDedup.series, curDedup.avg, curDedup.byHour); }, 150);
+  });
 
   load();
 })();
