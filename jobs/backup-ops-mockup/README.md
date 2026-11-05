@@ -16,19 +16,22 @@ It runs in the **prod** namespace (`storage-mgt-tools-na`) next to
 reachable. It reuses that pipeline's `cvlt-backup-secrets` Secret (the `postgres`
 block only, mounted read-only) and issues **SELECT-only** queries.
 
-- `GET /` — the page (`index.html`): KPI tiles, a job-status donut, a
-  jobs-by-workload panel, and a filterable/sortable job table.
+- `GET /` — the page (`index.html`): KPI tiles (incl. **Data Written** =
+  `sum(media_size_gb)`), a job-status donut, a jobs-by-workload panel, an
+  **Average Dedupe Savings %** line chart (`avg(dedup_savings_pct)` over time), and a
+  filterable/sortable job table with a **Job ID** column.
 - `GET /api/jobs?window=<days>&client=<substr>&status=<csv>&limit=<n>` — aggregates
-  (totals, status breakdown, by-workload) plus the most recent rows for the current
+  (totals, status breakdown, by-workload, data written, and an avg-dedupe time series
+  bucketed hourly for 24h / daily beyond) plus the most recent rows for the current
   filters. `window` is clamped 1..90; everything is parameterized.
 - `GET /healthz` — liveness (no DB call); used by the probes.
 
 The page fetches `/api/jobs` on load and on every filter change (window / client /
 status), so all numbers are live.
 
-> Note on `size_of_application_gb`: the page renders it as the column name implies.
-> Source magnitudes still look byte-scaled, so "Data protected" may read large until
-> units are confirmed with PJ — this is a data question, not a display bug.
+> Note on the `*_gb` columns: `size_of_application_gb` and `media_size_gb` are
+> **byte-scaled despite the name** (confirmed with PJ, 2026-11). The page scales from
+> bytes (`fmtBytes`) for the data-size tiles and the table "Data" column.
 
 ## Deploy
 
