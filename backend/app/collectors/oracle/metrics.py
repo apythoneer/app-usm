@@ -11,6 +11,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.oracle.client import OracleZFSClient
+from app.collectors.health_rules import oracle_health
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -49,8 +50,6 @@ class OracleMetricsCollector(BaseCollector):
         if ver and ver.get("version"):
             v = ver["version"]
             metrics["purity_version"] = v.get("version", "")
-            metrics["array_status"] = "healthy"
-            metrics["controller_status"] = "healthy"
             # Boot time for uptime
             boot = v.get("boot_time", "")
             if boot:
@@ -85,6 +84,20 @@ class OracleMetricsCollector(BaseCollector):
                 metrics["capacity_used_pct"] = round(used / total * 100, 2)
                 if pool_count and compression:
                     metrics["data_reduction"] = round(compression / pool_count, 2)
+
+        # Hardware health — active problems (the appliance's fault-management
+        # engine; problems clear on repair), faulted chassis, cluster takeover
+        # state, and pool state (the capacity loop above skips non-online pools,
+        # so a degraded/faulted pool would otherwise never surface).
+        state, detail = oracle_health(
+            problems=self.client.get("problem/v1/problems"),
+            chassis=self.client.get("hardware/v1/chassis"),
+            cluster=self.client.get("hardware/v1/cluster"),
+            pools=pools_list,
+        )
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
 
         return metrics
 

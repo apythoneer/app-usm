@@ -15,11 +15,13 @@ from app.schemas.array import (
     ManagedArray, ManagedArrayCreate, ManagedArrayUpdate, ArrayVerifyResult,
 )
 from app.core.config import get_settings
+from app.collectors import health as health_mod
 
 logger = logging.getLogger("usm.api.arrays")
 router = APIRouter(prefix="/arrays", tags=["arrays"])
 settings = get_settings()
 SCHEMA = settings.db_schema
+_OFFLINE_AFTER = settings.health_offline_after_seconds
 
 # authenticate() returns only a bool, so a failure can be bad credentials OR an
 # unreachable host — don't assert it's the password (it usually wasn't; the host
@@ -147,12 +149,15 @@ def _fetch_array_table() -> List[dict]:
     Reads the same tables (and the same active-alert predicate) as
     _fetch_fleet_stats and the Alerts/Volumes/Hosts pages, so the per-array counts
     sum to the fleet totals — the dashboard and this table can't drift apart.
+
+    Selects mc.* (not a column list) so a column the collector's migration adds
+    later (e.g. health_detail) never breaks this query if the API starts first.
+    Enabled arrays that have NEVER produced a metrics row are appended with no
+    metrics, so they show as Offline instead of silently missing.
     """
     with get_db_cursor() as cursor:
         cursor.execute(f"""
-            SELECT mc.array_name, mc.vendor, mc.array_status, mc.controller_status,
-                   mc.capacity_total, mc.capacity_used, mc.capacity_used_pct,
-                   mc.snapshot_space, mc.data_reduction, mc.collected_at,
+            SELECT mc.*,
                    ma.model, ma.group_label,
                    ISNULL(a.cnt, 0) AS active_alerts,
                    ISNULL(v.cnt, 0) AS total_volumes,
@@ -173,7 +178,32 @@ def _fetch_array_table() -> List[dict]:
                   (SELECT array_name FROM {SCHEMA}.managed_arrays WITH (NOLOCK) WHERE enabled=0)
             ORDER BY mc.array_name
         """)
-        return rows_to_dicts(cursor, cursor.fetchall())
+        rows = rows_to_dicts(cursor, cursor.fetchall())
+
+        cursor.execute(f"""
+            SELECT ma.array_name, ma.vendor, ma.model, ma.group_label
+            FROM {SCHEMA}.managed_arrays ma WITH (NOLOCK)
+            WHERE ma.enabled = 1
+              AND NOT EXISTS (SELECT 1 FROM {SCHEMA}.metrics_current mc WITH (NOLOCK)
+                              WHERE mc.array_name = ma.array_name)
+        """)
+        never = rows_to_dicts(cursor, cursor.fetchall())
+
+    for r in never:
+        r.update(active_alerts=0, total_volumes=0, total_hosts=0, collected_at=None)
+    return sorted(rows + never, key=lambda r: (r.get("array_name") or "").lower())
+
+
+def _health(row: dict):
+    """Canonical (health, reason) for a metrics_current row — same rule on every
+    surface (dashboard list, arrays table, drilldown)."""
+    return health_mod.evaluate(
+        array_status=row.get("array_status"),
+        controller_status=row.get("controller_status"),
+        collected_at=row.get("collected_at"),
+        health_detail=row.get("health_detail"),
+        offline_after=_OFFLINE_AFTER,
+    )
 
 
 _VALID_VENDORS = {
@@ -186,11 +216,14 @@ def _row_to_table(row: dict) -> ArrayTableRow:
     vendor = row.get("vendor") or "unknown"
     if vendor not in _VALID_VENDORS:
         vendor = "unknown"
+    health, reason = _health(row)
     return ArrayTableRow(
         array_name=row.get("array_name", ""),
         vendor=vendor,
         model=row.get("model"),
         group=row.get("group_label"),
+        health=health,
+        health_reason=reason,
         # Same fallback as _row_to_summary: some vendors only report controller_status.
         array_status=row.get("array_status") or row.get("controller_status"),
         active_alert_count=row.get("active_alerts") or 0,
@@ -208,6 +241,7 @@ def _row_to_table(row: dict) -> ArrayTableRow:
 def _row_to_summary(row: dict, meta: dict) -> ArraySummary:
     name = row.get("array_name", "")
     m = meta.get(name, {})
+    health, reason = _health(row)
     return ArraySummary(
         array_name=name,
         vendor=row.get("vendor", "pure"),
@@ -220,6 +254,8 @@ def _row_to_summary(row: dict, meta: dict) -> ArraySummary:
         total_iops=(row.get("read_iops") or 0) + (row.get("write_iops") or 0),
         read_latency_us=row.get("read_latency_us"),
         write_latency_us=row.get("write_latency_us"),
+        health=health,
+        health_reason=reason,
         array_status=row.get("array_status") or row.get("controller_status"),
         collected_at=row.get("collected_at"),
     )
@@ -230,6 +266,7 @@ def _row_to_metrics(row: dict, meta: dict) -> ArrayMetrics:
     write_iops = row.get("write_iops") or 0
     name = row.get("array_name", "")
     m = meta.get(name, {})
+    health, health_reason = _health(row)
     return ArrayMetrics(
         array_name=name,
         vendor=row.get("vendor", "pure"),
@@ -250,6 +287,8 @@ def _row_to_metrics(row: dict, meta: dict) -> ArrayMetrics:
         shared_space_bytes=row.get("shared_space"),
         snapshot_space_bytes=row.get("snapshot_space"),
         volume_space_bytes=row.get("volume_space"),
+        health=health,
+        health_reason=health_reason,
         array_status=row.get("array_status"),
         controller_status=row.get("controller_status"),
         uptime_seconds=row.get("uptime_seconds"),

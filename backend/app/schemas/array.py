@@ -43,7 +43,9 @@ class ArrayMetrics(BaseModel):
     volume_space_bytes: Optional[int] = None
 
     # Health
-    array_status: Optional[str] = None
+    health: Optional[str] = None          # canonical: healthy|warning|critical|offline
+    health_reason: Optional[str] = None   # short why, for tooltip/drilldown
+    array_status: Optional[str] = None    # raw vendor string (kept for reference)
     controller_status: Optional[str] = None
     uptime_seconds: Optional[int] = None
     uptime_str: Optional[str] = None
@@ -68,7 +70,9 @@ class ArraySummary(BaseModel):
     total_iops: Optional[float] = None
     read_latency_us: Optional[float] = None
     write_latency_us: Optional[float] = None
-    array_status: Optional[str] = None
+    health: Optional[str] = None          # canonical: healthy|warning|critical|offline
+    health_reason: Optional[str] = None
+    array_status: Optional[str] = None    # raw vendor string (kept for reference)
     collected_at: Optional[str] = None
 
 
@@ -83,7 +87,9 @@ class ArrayTableRow(BaseModel):
     vendor: VendorType = "unknown"
     model: Optional[str] = None
     group: Optional[str] = None
-    array_status: Optional[str] = None
+    health: Optional[str] = None          # canonical: healthy|warning|critical|offline
+    health_reason: Optional[str] = None
+    array_status: Optional[str] = None    # raw vendor string (kept for reference)
     active_alert_count: int = 0
     capacity_used_bytes: Optional[int] = None
     capacity_total_bytes: Optional[int] = None   # usable (presented) capacity

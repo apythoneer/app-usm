@@ -10,6 +10,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.hitachi.client import HitachiVSPClient
+from app.collectors.health_rules import hitachi_health
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -57,10 +58,18 @@ class HitachiMetricsCollector(BaseCollector):
         if info_resp and info_resp.status_code == 200:
             info = info_resp.json()
             metrics["purity_version"] = info.get("firmwareVersion", info.get("dkcMicroVersion", ""))
-            metrics["array_status"] = "healthy"
-            metrics["controller_status"] = "healthy"
             metrics["serial"] = str(info.get("serialNumber", ""))
             metrics["model"] = info.get("model", "")
+
+        # Hardware health — GET .../storages/{id}/components/instance (documented
+        # for VSP E / Gx00 / Fx00 incl. F900): live status of controllers, cache,
+        # boards, SFPs, backup modules/batteries, fans, power supplies and every
+        # drive. The SIM alerts endpoint is a historical log (no resolved field),
+        # so it does not feed health.
+        state, detail = hitachi_health(self.client.get("components/instance", timeout=30))
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
 
         # Pool capacity — aggregate all pools
         pools_resp = self.client.get("pools", timeout=30)

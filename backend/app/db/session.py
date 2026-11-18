@@ -616,6 +616,15 @@ def init_database() -> None:
                 ALTER TABLE {SCHEMA}.{_tbl} ADD total_provisioned BIGINT NULL
             """)
 
+        # Migration: unified hardware health — the collector's short reason for
+        # array_status ("CTL2 Blocked; 1 drive Failed", "OK: controllers, drives").
+        # Current-state only, so metrics_current (not history).
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.metrics_current') AND name = 'health_detail')
+            ALTER TABLE {SCHEMA}.metrics_current ADD health_detail NVARCHAR(500) NULL
+        """)
+
         # Migration: recurrence tracking on messages.
         #   occurrence_count — bumped when a same-identity alert clears then
         #     reappears (a genuine recurrence). Defaults to 1 for existing rows.

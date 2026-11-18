@@ -196,6 +196,29 @@ class BaseCollector(ABC):
                 self.logger.debug(f"SQLite volumes/hosts cache failed: {e}")
 
 
+    def _write_health(self, data: Dict[str, Any]):
+        """Persist the collector's hardware-health rollup onto metrics_current.
+
+        Overwrites (no COALESCE) so a cleared fault also clears its detail. A
+        None state means the array gave no health signal this cycle; it is stored
+        as 'unknown' and read back as reachable-but-unverified. Non-fatal.
+        """
+        from app.db.session import get_db_cursor
+        from app.core.config import get_settings
+        schema = get_settings().db_schema
+        state = data.get("health_state") or "unknown"
+        detail = (data.get("health_detail") or "")[:500] or None
+        try:
+            with get_db_cursor() as cur:
+                cur.execute(
+                    f"UPDATE {schema}.metrics_current "
+                    f"SET array_status=?, controller_status=?, health_detail=? WHERE array_name=?",
+                    (state, data.get("controller_status") or state, detail,
+                     data.get("array_name", self.array_name)),
+                )
+        except Exception as e:
+            self.logger.warning(f"health write skipped (non-fatal): {e}")
+
     def run(self) -> CollectorResult:
         """Execute the full collection cycle. Called by the scheduler."""
         result = CollectorResult(self.array_name, self.VENDOR, self.COLLECTOR_TYPE)
@@ -225,6 +248,11 @@ class BaseCollector(ABC):
 
             if not self.save(data, result):
                 raise RuntimeError("save() returned False")
+
+            # Unified hardware health (health_rules.py) — one supplementary write
+            # for every vendor, so no vendor's upsert has to thread it through.
+            if self.COLLECTOR_TYPE == "metrics" and isinstance(data, dict) and "health_state" in data:
+                self._write_health(data)
 
             # Dual-write to SQLite cache (non-fatal)
             try:

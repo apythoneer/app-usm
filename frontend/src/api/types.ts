@@ -14,7 +14,9 @@ export interface ArraySummary {
   total_iops?: number
   read_latency_us?: number
   write_latency_us?: number
-  array_status?: string
+  health?: string              // canonical: healthy | warning | critical | offline
+  health_reason?: string       // short why, for the status tooltip
+  array_status?: string        // raw vendor string (fallback/reference)
   collected_at?: string
 }
 
@@ -40,7 +42,9 @@ export interface ArrayTableRow {
   vendor: Vendor
   model?: string
   group?: string
-  array_status?: string
+  health?: string              // canonical: healthy | warning | critical | offline
+  health_reason?: string
+  array_status?: string        // raw vendor string (fallback/reference)
   active_alert_count: number
   capacity_used_bytes?: number
   capacity_total_bytes?: number   // usable (presented) capacity

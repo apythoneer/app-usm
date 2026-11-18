@@ -11,6 +11,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.netapp.storagegrid_client import StorageGridClient
+from app.collectors.health_rules import storagegrid_health
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -46,23 +47,14 @@ class StorageGridMetricsCollector(BaseCollector):
 
         # Grid health
         health = self.client.get("grid/health")
+        # Grid health is current state (active alarm/alert counts + node
+        # connection states), unlike the ONTAP EMS log.
+        state, detail = storagegrid_health(health)
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
         if health and health.get("data"):
-            h = health["data"]
-            alarms = h.get("alarms", {})
-            alerts = h.get("alerts", {})
-            nodes = h.get("nodes", {})
-
-            crit = alarms.get("critical", 0) + alerts.get("critical", 0)
-            major = alarms.get("major", 0) + alerts.get("major", 0)
-
-            if crit > 0:
-                metrics["array_status"] = "critical"
-            elif major > 0:
-                metrics["array_status"] = "degraded"
-            else:
-                metrics["array_status"] = "healthy"
-            metrics["controller_status"] = metrics["array_status"]
-
+            nodes = health["data"].get("nodes", {})
             connected = nodes.get("connected", 0)
             total_nodes = connected + nodes.get("administratively-down", 0) + nodes.get("unknown", 0)
             metrics["node_count"] = total_nodes

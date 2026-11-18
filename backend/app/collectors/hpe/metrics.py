@@ -12,6 +12,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.hpe.client import HPEClient
+from app.collectors.health_rules import hpe_health
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -51,10 +52,18 @@ class HPEMetricsCollector(BaseCollector):
 
         # System info — model, serial, firmware, capacity
         data = self.client.get("system")
+
+        # Hardware health — WSAPI has no health rollup, so derive it: node
+        # membership (onlineNodes vs clusterNodes), failed physical capacity
+        # (failed drives) and port link states. The eventlog alerts are a 30-day
+        # log, not current state, so they don't feed health.
+        state, detail = hpe_health(system=data, ports=self.client.get("ports"))
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
+
         if data:
             metrics["purity_version"] = data.get("systemVersion", "")
-            metrics["array_status"] = "healthy"
-            metrics["controller_status"] = "healthy"
 
             # Capacity from system (MiB → bytes)
             total_mib = data.get("totalCapacityMiB", 0)

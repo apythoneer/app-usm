@@ -12,6 +12,21 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Unified array health** — every array now reports one of four statuses:
+  **Healthy** (green), **Warning** (yellow), **Critical** (red), **Offline** (gray,
+  replacing "unknown"), with a short reason in the status tooltip (new
+  `metrics_current.health_detail`). Each vendor's metrics collector rolls up its
+  documented current-state endpoints: Pure controllers/hardware/drives (REST 2.x);
+  ONTAP node health, node state + FRUs, broken disks, shelf errors, HA
+  takeover-possible and health-monitor alerts (the checks NetApp Harvest runs);
+  HPE node membership, failed capacity and port link state; Hitachi
+  `components/instance` (VSP F900); Oracle problems, chassis, cluster takeover and
+  pool state; Dell Unity system + storage-processor health; StorageGRID grid health
+  + disconnected nodes. Offline = no fresh collection for
+  `HEALTH_OFFLINE_AFTER_SECONDS` (default 30 min), and enabled arrays that have
+  never reported now appear as Offline instead of being missing. Alerts are not an
+  input — four vendors' alert feeds are event logs and would keep a fixed fault red
+  for days. Dashboard status pills, filter and sort use the four states.
 - **backup-ops** (`jobs/backup-ops-mockup/`) — a standalone, on-network **Backup
   Operations** view for SIP (the platform's first Backup Operations capability):
   KPI tiles, a job-status donut, a jobs-by-workload panel, and a
@@ -67,6 +82,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `cvlt_backupjobsummary` INSERT must upsert on `job_id`; flagged for PJ.)
 
 ### Fixed
+- **Array health was hardcoded or never read** — HPE, Oracle and Hitachi always
+  wrote `healthy`; NetApp called `/api/cluster/nodes` without `fields`, so node
+  health was never returned and fell through to `healthy`; Dell mapped Unity
+  `UNKNOWN` (0) to healthy and `MINOR` (15) to critical; Oracle silently skipped
+  degraded/faulted pools. All now derive status from live component state (see
+  *Unified array health* above).
 - **cvlt-backup-summary ETL crashed on every run after the first** — the credential
   Secret mounts read-only (`0400`) and the init container's `cp` preserves that
   mode, so `secrets.json` lands on the PVC read-only. The pipeline script backs it

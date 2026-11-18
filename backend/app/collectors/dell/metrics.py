@@ -10,6 +10,7 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.dell.client import DellUnityClient
+from app.collectors.health_rules import unity_health
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -52,27 +53,26 @@ class DellMetricsCollector(BaseCollector):
         if not sys_resp:
             # Last resort — no fields filter
             sys_resp = self.client.get("system")
+        system_health = None
         if sys_resp and sys_resp.get("entries"):
             content = sys_resp["entries"][0].get("content", {})
             metrics["purity_version"] = content.get("softwareVersion", "")
             metrics["model"] = content.get("model", "")
             metrics["serial"] = content.get("serialNumber", "")
+            system_health = content.get("health")
 
-            health = content.get("health", {})
-            health_value = health.get("value", 0) if isinstance(health, dict) else 0
-            # Unity health: 5=OK, 7=Degraded, 10=Minor, 15=Major, 20=Critical
-            if health_value <= 5:
-                metrics["array_status"] = "healthy"
-            elif health_value <= 10:
-                metrics["array_status"] = "degraded"
-            else:
-                metrics["array_status"] = "critical"
-            metrics["controller_status"] = metrics["array_status"]
-
-        # Default status if system info unavailable
-        if "array_status" not in metrics:
-            metrics["array_status"] = "healthy"
-            metrics["controller_status"] = "healthy"
+        # Hardware health — Unity's system health is its own rollup of every
+        # component (HealthEnum: 0 UNKNOWN, 5 OK, 7 OK_BUT, 10 DEGRADED, 15 MINOR,
+        # 20 MAJOR, 25 CRITICAL, 30 NON_RECOVERABLE), plus each storage processor's
+        # health for the controller detail. No signal stays "unknown" rather than
+        # the old hardcoded "healthy".
+        state, detail = unity_health(
+            system_health=system_health,
+            storage_processors=self.client.get("storageProcessor", fields="name,health"),
+        )
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
 
         # Pool capacity — aggregate all pools
         pools_resp = self.client.get("pool",
