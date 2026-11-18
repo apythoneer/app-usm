@@ -12,10 +12,13 @@ single, accurate category instead of each vendor's raw string:
 
 How it is decided:
 
-  1. freshness — metrics_current.collected_at older than `offline_after`
-     seconds (or never collected) => offline. When a collector can't
-     authenticate or reach the array it never writes a new row, so collected_at
-     goes stale on its own.
+  1. freshness — no successful health check for `offline_after` seconds (or
+     never collected) => offline. When a collector can't authenticate or reach
+     the array it never records a check, so the timestamp goes stale on its own.
+     The timestamp is health_checked_at on the DATABASE clock, not collected_at:
+     collectors run in different timezones (on-prem MST, cloud pods UTC) and
+     write naive local times, and an older collector version may still be
+     writing the same rows.
   2. component state — each vendor's metrics collector rolls up its documented
      CURRENT-STATE endpoints (controllers, nodes, hardware, drives, HA…) into a
      canonical array_status + a short health_detail (see health_rules.py).
@@ -28,8 +31,10 @@ and in the per-array alert count; health reflects what the hardware says now.
 This module is pure (no DB / no I/O); callers pass the already-read values in.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, Tuple
+
+_CLOCK_SKEW_S = 300   # tolerated clock skew between collector hosts (seconds)
 
 # ── canonical states ───────────────────────────────────────────────────────────
 HEALTHY = "healthy"
@@ -109,11 +114,28 @@ def _parse_dt(value) -> Optional[datetime]:
 
 
 def age_seconds(collected_at) -> Optional[float]:
-    """Seconds since `collected_at`, or None if it can't be parsed."""
+    """Seconds since `collected_at`, or None if it can't be parsed.
+
+    collected_at is a NAIVE timestamp in the WRITER's local timezone, and
+    collectors run in different zones (on-prem containers are MST, cloud pods
+    UTC). Read it against both the local and the UTC clock, drop a reading that
+    lands in the future (beyond a few minutes of skew — implausible), and take
+    the most recent plausible one. Only used for legacy rows — rows the current
+    collector has checked carry health_checked_at on the DB clock.
+    """
     dt = _parse_dt(collected_at)
     if dt is None:
         return None
-    return (datetime.now() - dt).total_seconds()
+    candidates = ((datetime.now() - dt).total_seconds(),
+                  (datetime.now(timezone.utc).replace(tzinfo=None) - dt).total_seconds())
+    plausible = [c for c in candidates if c >= -_CLOCK_SKEW_S]
+    age = min(plausible) if plausible else min(candidates, key=abs)
+    return max(age, 0.0)
+
+
+def _age_label(age: float) -> str:
+    mins = int(age // 60)
+    return f"{mins} min" if mins < 120 else f"{mins // 60} h"
 
 
 def evaluate(
@@ -122,28 +144,46 @@ def evaluate(
     collected_at=None,
     health_detail: Optional[str] = None,
     offline_after: int = 1800,
+    health_state: Optional[str] = None,
+    health_checked_at=None,
+    db_utc_now=None,
 ) -> Tuple[str, str]:
     """Compute the canonical (state, reason) for one array at read time.
 
+    Preferred path: health_state + health_checked_at, written only by the
+    current collector (base._write_health) and timed on the DATABASE clock
+    (SYSUTCDATETIME), compared with `db_utc_now` from the same clock — immune to
+    collector timezones and to older collector versions that still overwrite
+    array_status/collected_at on the same rows.
+
+    Fallback (row never checked by the current collector): array_status /
+    controller_status + a timezone-tolerant age of collected_at.
+
     `offline_after` is the staleness threshold in seconds (0 disables the check).
-    `reason` is a short human string for the status tooltip / drilldown — the
-    collector's health_detail when it has one.
+    `reason` is a short human string for the status tooltip / drilldown.
     """
-    # 1. Freshness → offline. A stalled/unreachable collector stops advancing
-    #    collected_at, so this is how "unknown" becomes a real "offline".
+    detail = (health_detail or "").strip()
+
+    checked, now = _parse_dt(health_checked_at), _parse_dt(db_utc_now)
+    if checked is not None and now is not None:
+        age = max((now - checked).total_seconds(), 0.0)
+        if offline_after and age > offline_after:
+            return OFFLINE, f"no successful health check for {_age_label(age)} — array unreachable or collection failing"
+        state = normalize_status(health_state)
+        if state is None:
+            return HEALTHY, detail or "reachable; no hardware health signal from this array"
+        return state, detail or ("all hardware checks passed" if state == HEALTHY else f"vendor reports {state}")
+
+    # Legacy row: freshness from collected_at, status from array/controller_status.
     if collected_at is None:
         return OFFLINE, "never reported — collection is failing for this array"
     age = age_seconds(collected_at)
     if age is None:
         return OFFLINE, "unreadable collection timestamp"
     if offline_after and age > offline_after:
-        mins = int(age // 60)
-        label = f"{mins} min" if mins < 120 else f"{mins // 60} h"
-        return OFFLINE, f"no data for {label} — array unreachable or collection failing"
+        return OFFLINE, f"no data for {_age_label(age)} — array unreachable or collection failing"
 
-    # 2. Component state written by the collector (worst of array/controller).
     state = _worse(normalize_status(array_status), normalize_status(controller_status))
-    detail = (health_detail or "").strip()
     if state is None:
         return HEALTHY, detail or "reachable; no hardware health signal from this array"
     return state, detail or ("all hardware checks passed" if state == HEALTHY else f"vendor reports {state}")
