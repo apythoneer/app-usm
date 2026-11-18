@@ -13,6 +13,7 @@ from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.netapp.client import NetAppClient
 from app.collectors.health_rules import ontap_health
+from app.collectors.hardware_rules import ontap_inventory
 from app.db.session import get_db_cursor, update_extended_metrics
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -172,10 +173,10 @@ class NetAppMetricsCollector(BaseCollector):
         # old call omitted it, so node health was never actually read). If an
         # older ONTAP rejects a controller.* field, retry with the core fields.
         nodes = self.client.get("cluster/nodes", params={"fields": (
-            "name,state,uptime,controller.over_temperature,"
-            "controller.failed_fan,controller.failed_power_supply")})
+            "name,model,state,uptime,controller.over_temperature,"
+            "controller.failed_fan,controller.failed_power_supply,controller.frus")})
         if nodes is None:
-            nodes = self.client.get("cluster/nodes", params={"fields": "name,state,uptime"})
+            nodes = self.client.get("cluster/nodes", params={"fields": "name,model,state,uptime"})
         uptimes = [int(n["uptime"]) for n in (nodes or {}).get("records", []) if n.get("uptime")]
         if uptimes:
             # Minimum node uptime = cluster uptime (most recent reboot)
@@ -183,14 +184,19 @@ class NetAppMetricsCollector(BaseCollector):
             metrics["uptime_seconds"] = uptime_secs
             metrics["uptime_str"] = f"{uptime_secs // 86400}d {(uptime_secs % 86400) // 3600}h"
 
+        # Every disk once — feeds both the broken-disk health check and the
+        # shelf/bay inventory (bay + shelf.uid place it in the wireframe).
+        disks = self.client.get("storage/disks", params={
+            "fields": "name,state,container_type,type,model,usable_size,bay,shelf.uid,home_node.name",
+            "max_records": "10000"})
+
         # Hardware health — the checks NetApp Harvest's health plugin runs. Node
         # `health` only exists via the private CLI passthrough. Each call is
         # independent: a failed/unsupported one is skipped, not treated as healthy.
         state, detail = ontap_health(
             node_health=self.client.get("private/cli/node", params={"fields": "health"}),
             nodes=nodes,
-            broken_disks=self.client.get("storage/disks", params={
-                "container_type": "broken", "fields": "name,container_type"}),
+            broken_disks=disks,
             shelves=self.client.get("private/cli/storage/shelf", params={
                 "fields": "error_type,error_severity,error_text"}),
             failover=self.client.get("private/cli/storage/failover", params={
@@ -200,6 +206,18 @@ class NetAppMetricsCollector(BaseCollector):
         metrics["health_state"] = state
         metrics["health_detail"] = detail
         metrics["array_status"] = metrics["controller_status"] = state or "unknown"
+
+        # Hardware inventory for the wireframe: nodes + FRUs + ports, shelves + bays.
+        metrics["hardware"] = ontap_inventory(
+            nodes=nodes,
+            disks=disks,
+            shelves=self.client.get("storage/shelves", params={
+                "fields": "uid,name,id,model,state,module_type,bays,frus"}),
+            eth_ports=self.client.get("network/ethernet/ports", params={
+                "fields": "name,node.name,state,speed,enabled,type", "max_records": "5000"}),
+            fc_ports=self.client.get("network/fc/ports", params={
+                "fields": "name,node.name,state,speed,enabled,physical_protocol", "max_records": "5000"}),
+        )
 
         return metrics
 

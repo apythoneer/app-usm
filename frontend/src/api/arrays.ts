@@ -1,6 +1,7 @@
 import { apiClient } from './client'
 import type {
-  ArraySummary, ArrayMetrics, ArrayTableRow, FleetStats, FleetHistoryResponse, FleetTrendResponse, FleetOverviewResponse,
+  ArraySummary, ArrayMetrics, ArrayTableRow, HardwareInventory,
+  FleetStats, FleetHistoryResponse, FleetTrendResponse, FleetOverviewResponse,
   CapacityBreakdown, ArrayGrowth, DailyTrendResponse, TopGrowersResponse, CapacityHistoryResponse,
   VolumeHistoryCoverage, VolumeGrowth, TopVolumeGrowersResponse, CapacityForecast,
 } from './types'
@@ -20,6 +21,10 @@ export const arraysApi = {
   // Enriched per-array rows (metrics + alert/volume/host counts) for the Arrays table.
   table: () =>
     apiClient.get<ArrayTableRow[]>('/arrays/table').then((r) => r.data),
+
+  // Hardware inventory (enclosures → drives, ports, controllers, PSUs, fans…) for the wireframe.
+  hardware: (arrayName: string) =>
+    apiClient.get<HardwareInventory>(`/arrays/${encodeURIComponent(arrayName)}/hardware`).then((r) => r.data),
 
   // Project used capacity forward for an array (or fleet if array omitted).
   forecast: (array?: string, targetDate?: string, window = 90) =>

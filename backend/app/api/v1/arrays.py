@@ -3,6 +3,7 @@ Arrays API — current metrics for all storage arrays (any vendor).
 Includes managed-array CRUD (add/update/delete/verify) for the Settings UI.
 """
 
+import json
 import logging
 import os
 from typing import List, Optional
@@ -11,7 +12,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from app.db.session import get_db_cursor, rows_to_dicts, row_to_dict
 from app.schemas.array import (
-    ArrayMetrics, ArraySummary, ArrayTableRow,
+    ArrayMetrics, ArraySummary, ArrayTableRow, HardwareInventory,
     ManagedArray, ManagedArrayCreate, ManagedArrayUpdate, ArrayVerifyResult,
 )
 from app.core.config import get_settings
@@ -651,3 +652,28 @@ async def get_array(array_name: str):
         raise HTTPException(status_code=404, detail=f"Array '{array_name}' not found")
     meta = _load_array_meta()
     return _row_to_metrics(row, meta)
+
+
+def _fetch_hardware(array_name: str):
+    with get_db_cursor() as cursor:
+        cursor.execute(
+            f"SELECT vendor, inventory, collected_at FROM {SCHEMA}.hardware_inventory WITH (NOLOCK) "
+            f"WHERE array_name=?", (array_name,))
+        return cursor.fetchone()
+
+
+@router.get("/{array_name}/hardware", response_model=HardwareInventory)
+async def get_array_hardware(array_name: str):
+    """Hardware inventory for the array wireframe: enclosures with their drive
+    bays, ports, controllers/nodes, PSUs, fans … each with a health status.
+    Refreshed by the metrics collector every cycle."""
+    try:
+        row = await run_in_threadpool(_fetch_hardware, array_name)
+    except Exception as e:      # e.g. table not created yet (collector hasn't migrated)
+        logger.warning(f"hardware inventory read failed for {array_name}: {e}")
+        row = None
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No hardware inventory collected for '{array_name}' yet")
+    inv = json.loads(row[1] or "{}")
+    return HardwareInventory(array_name=array_name, vendor=row[0], collected_at=row[2],
+                             groups=inv.get("groups", []), summary=inv.get("summary", {}))

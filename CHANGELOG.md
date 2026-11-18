@@ -27,6 +27,19 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   never reported now appear as Offline instead of being missing. Alerts are not an
   input — four vendors' alert feeds are event logs and would keep a fixed fault red
   for days. Dashboard status pills, filter and sort use the four states.
+- **Hardware wireframe** — a new **Hardware** tab in the array drilldown draws the
+  array's physical layout: one card per enclosure (chassis, controller/node,
+  shelf, cage, drive box, DPE/DAE, grid site) with every drive bay, port (grouped
+  by protocol), controller, PSU, fan, battery, DIMM/CPU and module coloured by
+  health — green/yellow/red, gray for unknown, dashed outline for empty bays and
+  unused ports — plus per-type counts, a hover details panel (capacity, speed,
+  model, mode…), a "needs attention" list and an issues-only highlight. Built from
+  each vendor's hardware endpoints (Pure `hardware`/`drives`, ONTAP nodes+FRUs /
+  shelves+bays / disks / ports, HPE `/disks` cages + `/ports`, Hitachi
+  `components/instance`, Oracle chassis details + NICs, Unity DPE/DAE/disk/port/
+  PSU/fan/LCC/IOM/memory/battery, StorageGRID `node-health`). Collected every
+  metrics cycle into the new `hardware_inventory` table; served at
+  `GET /arrays/{name}/hardware`.
 - **backup-ops** (`jobs/backup-ops-mockup/`) — a standalone, on-network **Backup
   Operations** view for SIP (the platform's first Backup Operations capability):
   KPI tiles, a job-status donut, a jobs-by-workload panel, and a

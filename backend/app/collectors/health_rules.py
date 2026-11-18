@@ -64,7 +64,9 @@ def _group(items: Iterable[Tuple[str, str]], noun: str) -> List[str]:
 # hardware.status:   healthy | unhealthy | critical | identifying | unknown | unused
 # drive.status:      healthy | failed | missing | unhealthy | recovering |
 #                    unrecognized | unadmitted | updating | empty | identifying
-_PURE_HW = {"critical": CRITICAL, "unhealthy": WARNING}
+# Live v2 hardware reports "ok" for healthy parts (v1 vocabulary); v1's
+# "noncritical" and the SDK's "unhealthy" are both degraded-but-running.
+_PURE_HW = {"critical": CRITICAL, "unhealthy": WARNING, "noncritical": WARNING}
 _PURE_DRIVE_BAD = {"failed", "missing", "unhealthy", "unrecognized", "recovering"}
 
 
@@ -153,7 +155,7 @@ def ontap_health(node_health=None, nodes=None, broken_disks=None, shelves=None,
     if disks is not None:
         r.check("disks")
         broken = [(d.get("name") or "?", "broken") for d in disks
-                  if (d.get("container_type") or "broken").lower() == "broken"]
+                  if "broken" in ((d.get("container_type") or "").lower(), (d.get("state") or "").lower())]
         for msg in _group(broken, "disk"):
             r.warn(msg)   # RAID-DP/TEC keeps serving; spare reconstruction follows
 

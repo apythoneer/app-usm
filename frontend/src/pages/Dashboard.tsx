@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import ErrorState from '@/components/common/ErrorState'
 import VendorBadge from '@/components/common/VendorBadge'
+import HardwareDiagram from '@/components/hardware/HardwareDiagram'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { volumesApi } from '@/api/volumes'
@@ -81,7 +82,7 @@ function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400', onC
 
 // ── Array drilldown modal ─────────────────────────────────────────────────────
 
-type DrilldownTab = 'overview' | 'volumes' | 'hosts'
+type DrilldownTab = 'overview' | 'hardware' | 'volumes' | 'hosts'
 
 function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
   arrayName: string; initialTab?: DrilldownTab; onClose: () => void
@@ -110,6 +111,7 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
 
   const tabs: { key: DrilldownTab; label: string; count?: number }[] = [
     { key: 'overview', label: 'Overview' },
+    { key: 'hardware', label: 'Hardware' },
     { key: 'volumes', label: 'Volumes', count: volResult?.total },
     { key: 'hosts', label: 'Hosts', count: hostResult?.total },
   ]
@@ -120,7 +122,7 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
       onClick={onClose}
     >
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto shadow-2xl"
+        className={`bg-gray-900 border border-gray-700 rounded-xl w-full ${tab === 'hardware' ? 'max-w-6xl' : 'max-w-3xl'} mx-4 max-h-[90vh] overflow-y-auto shadow-2xl transition-[max-width]`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
@@ -199,6 +201,8 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
                 </dl>
               </div>
             </div>
+          ) : tab === 'hardware' ? (
+            <HardwareDiagram arrayName={arrayName} />
           ) : tab === 'volumes' ? (
             <div>
               {volumes.length === 0 ? (

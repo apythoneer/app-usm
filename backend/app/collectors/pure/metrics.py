@@ -12,6 +12,7 @@ from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
 from app.collectors.health_rules import pure_health
+from app.collectors.hardware_rules import pure_inventory
 from app.db.session import get_db_cursor, update_extended_metrics
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -122,10 +123,13 @@ class PureMetricsCollector(BaseCollector):
         ctrls = self.client.get_v2("controllers")
         if ctrls is None:
             ctrls = self.client.get("array", params={"controllers": "true"})
-        state, detail = pure_health(controllers=ctrls, hardware=hw, drives=self.client.get_v2("drives"))
+        drives = self.client.get_v2("drives")
+        state, detail = pure_health(controllers=ctrls, hardware=hw, drives=drives)
         metrics["health_state"] = state
         metrics["health_detail"] = detail
         metrics["controller_status"] = state or "unknown"
+        # Hardware inventory for the wireframe (same payloads — no extra calls)
+        metrics["hardware"] = pure_inventory(hardware=hw, drives=drives, controllers=ctrls)
 
         # Uptime — Pure v1 API doesn't expose started/uptime on controllers.
         # Calculate from the last reboot alert in the messages table instead.

@@ -101,6 +101,36 @@ class ArrayTableRow(BaseModel):
     collected_at: Optional[str] = None
 
 
+class HardwareComponent(BaseModel):
+    """One physical part: drive bay, port, controller/node, PSU, fan, …"""
+    type: str                      # controller|node|drive|port|psu|fan|battery|memory|cpu|module|sensor
+    name: str
+    status: str                    # healthy|warning|critical|inactive|unknown
+    raw: Optional[str] = None      # the vendor's own status value
+    slot: Optional[Any] = None     # bay/port position for ordering
+    detail: Optional[str] = None
+    attrs: dict[str, Any] = Field(default_factory=dict)   # speed, capacity, model, protocol…
+
+
+class HardwareGroup(BaseModel):
+    """A physical enclosure (chassis, controller/node, shelf, cage, drive box, DAE, site)."""
+    id: str
+    label: str
+    kind: str
+    status: str
+    model: Optional[str] = None
+    components: list[HardwareComponent] = Field(default_factory=list)
+
+
+class HardwareInventory(BaseModel):
+    """Per-array hardware inventory for the wireframe diagram."""
+    array_name: str
+    vendor: Optional[str] = None
+    collected_at: Optional[str] = None
+    groups: list[HardwareGroup] = Field(default_factory=list)
+    summary: dict[str, dict[str, int]] = Field(default_factory=dict)
+
+
 class ArrayConfig(BaseModel):
     """Array connection configuration (from managed_arrays DB or arrays.txt fallback)."""
     name: str

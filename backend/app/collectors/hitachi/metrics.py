@@ -11,6 +11,7 @@ from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.hitachi.client import HitachiVSPClient
 from app.collectors.health_rules import hitachi_health
+from app.collectors.hardware_rules import hitachi_inventory
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -66,10 +67,13 @@ class HitachiMetricsCollector(BaseCollector):
         # boards, SFPs, backup modules/batteries, fans, power supplies and every
         # drive. The SIM alerts endpoint is a historical log (no resolved field),
         # so it does not feed health.
-        state, detail = hitachi_health(self.client.get("components/instance", timeout=30))
+        components = self.client.get("components/instance", timeout=30)
+        state, detail = hitachi_health(components)
         metrics["health_state"] = state
         metrics["health_detail"] = detail
         metrics["array_status"] = metrics["controller_status"] = state or "unknown"
+        # Hardware inventory for the wireframe (same payload — no extra call)
+        metrics["hardware"] = hitachi_inventory(components)
 
         # Pool capacity — aggregate all pools
         pools_resp = self.client.get("pools", timeout=30)

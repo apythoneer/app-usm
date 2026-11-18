@@ -625,6 +625,19 @@ def init_database() -> None:
             ALTER TABLE {SCHEMA}.metrics_current ADD health_detail NVARCHAR(500) NULL
         """)
 
+        # Hardware inventory — one JSON document per array (enclosures → drive
+        # bays, ports, controllers, PSUs, fans … each with health) for the array
+        # wireframe. Current-state only; replaced every metrics cycle.
+        cursor.execute(f"""
+            IF OBJECT_ID('{SCHEMA}.hardware_inventory') IS NULL
+            CREATE TABLE {SCHEMA}.hardware_inventory (
+                array_name    NVARCHAR(255) NOT NULL PRIMARY KEY,
+                vendor        NVARCHAR(50)  NULL,
+                inventory     NVARCHAR(MAX) NOT NULL,
+                collected_at  NVARCHAR(50)  NULL
+            )
+        """)
+
         # Migration: recurrence tracking on messages.
         #   occurrence_count — bumped when a same-identity alert clears then
         #     reappears (a genuine recurrence). Defaults to 1 for existing rows.

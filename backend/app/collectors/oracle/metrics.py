@@ -12,6 +12,7 @@ from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.oracle.client import OracleZFSClient
 from app.collectors.health_rules import oracle_health
+from app.collectors.hardware_rules import oracle_inventory
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -89,15 +90,29 @@ class OracleMetricsCollector(BaseCollector):
         # engine; problems clear on repair), faulted chassis, cluster takeover
         # state, and pool state (the capacity loop above skips non-online pools,
         # so a degraded/faulted pool would otherwise never surface).
+        chassis = self.client.get("hardware/v1/chassis")
         state, detail = oracle_health(
             problems=self.client.get("problem/v1/problems"),
-            chassis=self.client.get("hardware/v1/chassis"),
+            chassis=chassis,
             cluster=self.client.get("hardware/v1/cluster"),
             pools=pools_list,
         )
         metrics["health_state"] = state
         metrics["health_detail"] = detail
         metrics["array_status"] = metrics["controller_status"] = state or "unknown"
+
+        # Hardware inventory for the wireframe: each chassis' detail (head: CPUs,
+        # DIMMs, PSUs, fans, PCIe slots, system disks; shelves: disks, PSUs, fans,
+        # IOMs) plus the head's NICs. Capped so a huge shelf count can't stall a cycle.
+        details = []
+        for ch in ((chassis or {}).get("chassis") or (chassis or {}).get("hardware") or [])[:24]:
+            href = (ch.get("href") or "").replace("/api/", "", 1)
+            if href:
+                d = self.client.get(href)
+                if d:
+                    details.append(d)
+        metrics["hardware"] = oracle_inventory(chassis_details=details,
+                                               devices=self.client.get("network/v1/devices"))
 
         return metrics
 

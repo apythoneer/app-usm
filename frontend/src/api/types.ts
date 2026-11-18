@@ -56,6 +56,36 @@ export interface ArrayTableRow {
   collected_at?: string
 }
 
+// ── Hardware inventory (array wireframe) ─────────────────────────────────────
+export type HwStatus = 'healthy' | 'warning' | 'critical' | 'inactive' | 'unknown'
+
+export interface HardwareComponent {
+  type: string                 // controller | node | drive | port | psu | fan | battery | memory | cpu | module | sensor
+  name: string
+  status: HwStatus
+  raw?: string                 // the vendor's own status value
+  slot?: number | string
+  detail?: string
+  attrs?: Record<string, unknown>
+}
+
+export interface HardwareGroup {
+  id: string
+  label: string
+  kind: string                 // chassis | controller | node | shelf | cage | drive_box | dpe | dae | head | site | virtual
+  status: HwStatus
+  model?: string
+  components: HardwareComponent[]
+}
+
+export interface HardwareInventory {
+  array_name: string
+  vendor?: string
+  collected_at?: string
+  groups: HardwareGroup[]
+  summary: Record<string, Partial<Record<HwStatus | 'total', number>>>
+}
+
 export interface FleetStats {
   total_arrays: number
   total_capacity_tb?: number
