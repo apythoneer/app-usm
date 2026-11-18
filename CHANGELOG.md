@@ -95,6 +95,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `cvlt_backupjobsummary` INSERT must upsert on `job_id`; flagged for PJ.)
 
 ### Fixed
+- **Array health flip-flopped and Offline was timezone-dependent** — two collector
+  instances write the same `metrics_current` rows (on-prem in MST, cloud pods in
+  UTC, the latter still on older code), so `array_status` was overwritten with
+  the old vocabulary every cycle, and `collected_at` (a naive local timestamp)
+  made a UTC API see every MST-written row as 7 h old → Offline. Health now uses
+  `health_state` + `health_checked_at`, written only by the current collector and
+  stamped on the **database clock** (`SYSUTCDATETIME()`), compared with the DB
+  clock at read time. Rows not yet checked fall back to the old fields with a
+  timezone-tolerant age.
 - **Array health was hardcoded or never read** — HPE, Oracle and Hitachi always
   wrote `healthy`; NetApp called `/api/cluster/nodes` without `fields`, so node
   health was never returned and fell through to `healthy`; Dell mapped Unity

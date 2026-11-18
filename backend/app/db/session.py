@@ -624,6 +624,20 @@ def init_database() -> None:
                 WHERE object_id = OBJECT_ID('{SCHEMA}.metrics_current') AND name = 'health_detail')
             ALTER TABLE {SCHEMA}.metrics_current ADD health_detail NVARCHAR(500) NULL
         """)
+        # health_state + health_checked_at: the canonical state and WHEN it was
+        # checked, on the DB clock (SYSUTCDATETIME). Written only by the current
+        # collector, so freshness is timezone-proof and unaffected by older
+        # collector versions that still overwrite array_status / collected_at.
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.metrics_current') AND name = 'health_state')
+            ALTER TABLE {SCHEMA}.metrics_current ADD health_state NVARCHAR(20) NULL
+        """)
+        cursor.execute(f"""
+            IF NOT EXISTS (SELECT * FROM sys.columns
+                WHERE object_id = OBJECT_ID('{SCHEMA}.metrics_current') AND name = 'health_checked_at')
+            ALTER TABLE {SCHEMA}.metrics_current ADD health_checked_at DATETIME2 NULL
+        """)
 
         # Hardware inventory — one JSON document per array (enclosures → drive
         # bays, ports, controllers, PSUs, fans … each with health) for the array

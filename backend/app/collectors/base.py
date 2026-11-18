@@ -202,6 +202,11 @@ class BaseCollector(ABC):
         Overwrites (no COALESCE) so a cleared fault also clears its detail. A
         None state means the array gave no health signal this cycle; it is stored
         as 'unknown' and read back as reachable-but-unverified. Non-fatal.
+
+        health_state / health_checked_at are the authoritative pair: only this
+        code writes them, and the timestamp is the DATABASE clock (UTC), so the
+        API's freshness check is immune to collector timezones and to older
+        collector versions that still overwrite array_status / collected_at.
         """
         from app.db.session import get_db_cursor
         from app.core.config import get_settings
@@ -212,8 +217,9 @@ class BaseCollector(ABC):
             with get_db_cursor() as cur:
                 cur.execute(
                     f"UPDATE {schema}.metrics_current "
-                    f"SET array_status=?, controller_status=?, health_detail=? WHERE array_name=?",
-                    (state, data.get("controller_status") or state, detail,
+                    f"SET array_status=?, controller_status=?, health_detail=?, "
+                    f"health_state=?, health_checked_at=SYSUTCDATETIME() WHERE array_name=?",
+                    (state, data.get("controller_status") or state, detail, state,
                      data.get("array_name", self.array_name)),
                 )
         except Exception as e:

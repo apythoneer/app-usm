@@ -77,6 +77,16 @@ def _load_array_meta() -> dict:
     return result
 
 
+def _db_utc_now(cursor):
+    """The database's UTC clock — the same clock health_checked_at is written
+    with, so freshness never depends on API/collector timezones."""
+    try:
+        cursor.execute("SELECT SYSUTCDATETIME()")
+        return cursor.fetchone()[0]
+    except Exception:
+        return None
+
+
 def _fetch_arrays(vendor: Optional[str] = None) -> List[dict]:
     with get_db_cursor() as cursor:
         if vendor:
@@ -88,7 +98,11 @@ def _fetch_arrays(vendor: Optional[str] = None) -> List[dict]:
             cursor.execute(
                 f"SELECT * FROM {SCHEMA}.metrics_current ORDER BY array_name"
             )
-        return rows_to_dicts(cursor, cursor.fetchall())
+        rows = rows_to_dicts(cursor, cursor.fetchall())
+        now = _db_utc_now(cursor)
+    for r in rows:
+        r["_db_utc_now"] = now
+    return rows
 
 
 def _fetch_array(array_name: str) -> Optional[dict]:
@@ -97,7 +111,10 @@ def _fetch_array(array_name: str) -> Optional[dict]:
             f"SELECT * FROM {SCHEMA}.metrics_current WHERE array_name=?",
             (array_name,),
         )
-        return row_to_dict(cursor, cursor.fetchone())
+        row = row_to_dict(cursor, cursor.fetchone())
+        if row:
+            row["_db_utc_now"] = _db_utc_now(cursor)
+        return row
 
 
 def _fetch_fleet_stats() -> dict:
@@ -189,9 +206,12 @@ def _fetch_array_table() -> List[dict]:
                               WHERE mc.array_name = ma.array_name)
         """)
         never = rows_to_dicts(cursor, cursor.fetchall())
+        now = _db_utc_now(cursor)
 
     for r in never:
         r.update(active_alerts=0, total_volumes=0, total_hosts=0, collected_at=None)
+    for r in rows:
+        r["_db_utc_now"] = now
     return sorted(rows + never, key=lambda r: (r.get("array_name") or "").lower())
 
 
@@ -204,6 +224,9 @@ def _health(row: dict):
         collected_at=row.get("collected_at"),
         health_detail=row.get("health_detail"),
         offline_after=_OFFLINE_AFTER,
+        health_state=row.get("health_state"),
+        health_checked_at=row.get("health_checked_at"),
+        db_utc_now=row.get("_db_utc_now"),
     )
 
 
