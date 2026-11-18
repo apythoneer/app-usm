@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import ErrorState from '@/components/common/ErrorState'
 import VendorBadge from '@/components/common/VendorBadge'
+import HardwareDiagram from '@/components/hardware/HardwareDiagram'
 import { arraysApi } from '@/api/arrays'
 import { alertsApi } from '@/api/alerts'
 import { volumesApi } from '@/api/volumes'
@@ -81,7 +82,7 @@ function StatCard({ icon: Icon, label, value, sub, color = 'text-brand-400', onC
 
 // ── Array drilldown modal ─────────────────────────────────────────────────────
 
-type DrilldownTab = 'overview' | 'volumes' | 'hosts'
+type DrilldownTab = 'overview' | 'hardware' | 'volumes' | 'hosts'
 
 function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
   arrayName: string; initialTab?: DrilldownTab; onClose: () => void
@@ -110,6 +111,7 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
 
   const tabs: { key: DrilldownTab; label: string; count?: number }[] = [
     { key: 'overview', label: 'Overview' },
+    { key: 'hardware', label: 'Hardware' },
     { key: 'volumes', label: 'Volumes', count: volResult?.total },
     { key: 'hosts', label: 'Hosts', count: hostResult?.total },
   ]
@@ -120,7 +122,7 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
       onClick={onClose}
     >
       <div
-        className="bg-gray-900 border border-gray-700 rounded-xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto shadow-2xl"
+        className={`bg-gray-900 border border-gray-700 rounded-xl w-full ${tab === 'hardware' ? 'max-w-6xl' : 'max-w-3xl'} mx-4 max-h-[90vh] overflow-y-auto shadow-2xl transition-[max-width]`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between p-4 border-b border-gray-700">
@@ -167,7 +169,12 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
                   <dt className="text-gray-500">Vendor</dt><dd className="text-gray-200 capitalize">{data.vendor}</dd>
                   <dt className="text-gray-500">Model</dt><dd className="text-gray-200">{data.model || '—'}</dd>
                   <dt className="text-gray-500">Firmware</dt><dd className="text-gray-200">{data.firmware_version || '—'}</dd>
-                  <dt className="text-gray-500">Status</dt><dd className="text-gray-200 capitalize">{data.array_status || '—'}</dd>
+                  <dt className="text-gray-500">Status</dt>
+                  <dd className="text-gray-200" title={data.health_reason || data.array_status || ''}>
+                    {(() => { const sc = healthClasses(data.health); return (
+                      <span className={`text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}>{sc.label}</span>
+                    ) })()}
+                  </dd>
                   <dt className="text-gray-500">Uptime</dt><dd className="text-gray-200">{data.uptime_str || '—'}</dd>
                 </dl>
               </div>
@@ -194,6 +201,8 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
                 </dl>
               </div>
             </div>
+          ) : tab === 'hardware' ? (
+            <HardwareDiagram arrayName={arrayName} />
           ) : tab === 'volumes' ? (
             <div>
               {volumes.length === 0 ? (
@@ -268,7 +277,7 @@ function ArrayModal({ arrayName, initialTab = 'overview', onClose }: {
 // ── Array row ─────────────────────────────────────────────────────────────────
 
 function ArrayRow({ array, onDblClick }: { array: ArraySummary; onDblClick: () => void }) {
-  const sc = statusClasses(array.array_status)
+  const sc = healthClasses(array.health)
   return (
     <tr className="hover:bg-gray-800/40 cursor-pointer select-none transition-colors" onDoubleClick={onDblClick}>
       <td className="px-4 py-2.5 text-sm text-white">
@@ -280,8 +289,9 @@ function ArrayRow({ array, onDblClick }: { array: ArraySummary; onDblClick: () =
       <td className="px-4 py-2.5 text-sm"><VendorBadge vendor={array.vendor} /></td>
       <td className="px-4 py-2.5 text-sm text-gray-400">{array.model || '—'}</td>
       <td className="px-4 py-2.5 text-sm">
-        <span className={`capitalize text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}>
-          {array.array_status || 'unknown'}
+        <span className={`text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}
+              title={array.health_reason || array.array_status || ''}>
+          {sc.label}
         </span>
       </td>
       <td className="px-4 py-2.5 text-sm text-gray-300 text-right font-mono">{formatIOPS(array.total_iops)}</td>
@@ -439,7 +449,7 @@ function DeploymentSection({ type, arrays, onDblClick }: {
 // ── Arrays table modal ────────────────────────────────────────────────────────
 
 type ArraySortField =
-  | 'array_name' | 'vendor' | 'model' | 'array_status' | 'active_alert_count'
+  | 'array_name' | 'vendor' | 'model' | 'health' | 'active_alert_count'
   | 'capacity_used_bytes' | 'capacity_total_bytes' | 'snapshot_space_bytes'
   | 'total_volumes' | 'total_hosts'
 
@@ -462,17 +472,23 @@ function SortHeader({ field, label, sortBy, sortDir, onSort, align = 'left' }: {
   )
 }
 
-// Single source of truth for status → colour. Case-insensitive: collectors write
-// lowercase "healthy", but the UI (and some vendors) may surface "Healthy"/"OK".
-function isHealthyStatus(status?: string): boolean {
-  const s = status?.trim().toLowerCase()
-  return s === 'ok' || s === 'normal' || s === 'healthy'
-}
-
-function statusClasses(status?: string): { dot: string; pill: string } {
-  if (isHealthyStatus(status)) return { dot: 'bg-green-400', pill: 'bg-green-500/10 text-green-400 border-green-500/20' }
-  if (status) return { dot: 'bg-red-400', pill: 'bg-red-500/10 text-red-400 border-red-500/20' }
-  return { dot: 'bg-gray-600', pill: 'bg-gray-500/10 text-gray-500 border-gray-500/20' }
+// Single source of truth for the unified health category → colour. The backend
+// computes `health` (healthy | warning | critical | offline); the raw vendor
+// `array_status` is kept only as a fallback tooltip. Four states, one palette:
+//   healthy → green · warning → yellow · critical → red · offline → gray.
+function healthClasses(health?: string): { dot: string; pill: string; label: string } {
+  switch ((health || '').trim().toLowerCase()) {
+    case 'healthy':
+      return { dot: 'bg-green-400', pill: 'bg-green-500/10 text-green-400 border-green-500/20', label: 'Healthy' }
+    case 'warning':
+      return { dot: 'bg-yellow-400', pill: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20', label: 'Warning' }
+    case 'critical':
+      return { dot: 'bg-red-400', pill: 'bg-red-500/10 text-red-400 border-red-500/20', label: 'Critical' }
+    case 'offline':
+      return { dot: 'bg-gray-500', pill: 'bg-gray-500/10 text-gray-400 border-gray-500/20', label: 'Offline' }
+    default:
+      return { dot: 'bg-gray-600', pill: 'bg-gray-500/10 text-gray-500 border-gray-500/20', label: 'Unknown' }
+  }
 }
 
 function ArraysTableModal({ onClose, onSelectArray }: {
@@ -508,7 +524,7 @@ function ArraysTableModal({ onClose, onSelectArray }: {
       else result = result.filter(r => isCloudGroup(r.group) && getCloudProvider(r.group) === cloudFilter)
     }
     if (statusFilter) {
-      result = result.filter(r => statusFilter === 'healthy' ? isHealthyStatus(r.array_status) : !isHealthyStatus(r.array_status))
+      result = result.filter(r => (r.health || '').toLowerCase() === statusFilter)
     }
     if (search) {
       const q = search.toLowerCase()
@@ -593,7 +609,9 @@ function ArraysTableModal({ onClose, onSelectArray }: {
           >
             <option value="">Any status</option>
             <option value="healthy">Healthy</option>
-            <option value="issue">Needs attention</option>
+            <option value="warning">Warning</option>
+            <option value="critical">Critical</option>
+            <option value="offline">Offline</option>
           </select>
         </div>
 
@@ -613,7 +631,7 @@ function ArraysTableModal({ onClose, onSelectArray }: {
                     <SortHeader field="array_name" label="Array" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader field="vendor" label="Vendor" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader field="model" label="Model" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
-                    <SortHeader field="array_status" label="Status" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
+                    <SortHeader field="health" label="Status" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} />
                     <SortHeader field="active_alert_count" label="Alerts" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
                     <SortHeader field="capacity_used_bytes" label="Used" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
                     <SortHeader field="capacity_total_bytes" label="Usable" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right" />
@@ -624,7 +642,7 @@ function ArraysTableModal({ onClose, onSelectArray }: {
                 </thead>
                 <tbody className="divide-y divide-gray-800/50">
                   {filtered.map((r) => {
-                    const sc = statusClasses(r.array_status)
+                    const sc = healthClasses(r.health)
                     return (
                       <tr
                         key={r.array_name}
@@ -640,8 +658,9 @@ function ArraysTableModal({ onClose, onSelectArray }: {
                         <td className="px-3 py-2"><VendorBadge vendor={r.vendor} /></td>
                         <td className="px-3 py-2 text-xs text-gray-400">{r.model || '—'}</td>
                         <td className="px-3 py-2">
-                          <span className={`capitalize text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}>
-                            {r.array_status || 'unknown'}
+                          <span className={`text-xs px-2 py-0.5 rounded-full border ${sc.pill}`}
+                                title={r.health_reason || r.array_status || ''}>
+                            {sc.label}
                           </span>
                         </td>
                         <td className="px-3 py-2 text-right">

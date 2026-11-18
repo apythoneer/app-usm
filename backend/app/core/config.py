@@ -140,6 +140,11 @@ class Settings(BaseSettings):
 
 
 
+    # Unified array health — an array with no fresh metrics_current row for this
+    # many seconds is reported as "offline" (replaces the old "unknown"). Default
+    # 1800s (30 min) tolerates a few missed collection cycles without flapping.
+    health_offline_after_seconds: int = Field(default=1800, alias="HEALTH_OFFLINE_AFTER_SECONDS")
+
     # Collector intervals (seconds)
     metrics_interval: int = Field(default=300, alias="METRICS_INTERVAL")
     volumes_interval: int = Field(default=1800, alias="VOLUMES_INTERVAL")

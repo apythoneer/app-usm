@@ -110,8 +110,15 @@ _DICTIONARY: List[Entry] = [
           synonyms=("vendor", "platform", "make", "type"),
           examples="pure, netapp, hitachi, hpe, dell, oracle"),
     Entry("metrics_current", "array_status",
-          "Overall health/status of the array.",
+          "Hardware health of the array from its live component state: 'healthy', "
+          "'warning' (degraded part, failed drive, failover) or 'critical' (failed "
+          "controller/node, critical fault); 'unknown' = reachable but no health "
+          "signal. An array whose collected_at is stale is shown as Offline.",
           synonyms=("status", "health", "state")),
+    Entry("metrics_current", "health_detail",
+          "Short reason for array_status, e.g. 'CTL2 Blocked; 1 drive Failed' or "
+          "'OK: controllers, hardware, drives'.",
+          synonyms=("health reason", "why unhealthy", "health detail")),
 
     # volumes_cache ------------------------------------------------------------
     Entry("volumes_cache", None,

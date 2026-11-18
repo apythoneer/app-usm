@@ -43,7 +43,9 @@ class ArrayMetrics(BaseModel):
     volume_space_bytes: Optional[int] = None
 
     # Health
-    array_status: Optional[str] = None
+    health: Optional[str] = None          # canonical: healthy|warning|critical|offline
+    health_reason: Optional[str] = None   # short why, for tooltip/drilldown
+    array_status: Optional[str] = None    # raw vendor string (kept for reference)
     controller_status: Optional[str] = None
     uptime_seconds: Optional[int] = None
     uptime_str: Optional[str] = None
@@ -68,7 +70,9 @@ class ArraySummary(BaseModel):
     total_iops: Optional[float] = None
     read_latency_us: Optional[float] = None
     write_latency_us: Optional[float] = None
-    array_status: Optional[str] = None
+    health: Optional[str] = None          # canonical: healthy|warning|critical|offline
+    health_reason: Optional[str] = None
+    array_status: Optional[str] = None    # raw vendor string (kept for reference)
     collected_at: Optional[str] = None
 
 
@@ -83,7 +87,9 @@ class ArrayTableRow(BaseModel):
     vendor: VendorType = "unknown"
     model: Optional[str] = None
     group: Optional[str] = None
-    array_status: Optional[str] = None
+    health: Optional[str] = None          # canonical: healthy|warning|critical|offline
+    health_reason: Optional[str] = None
+    array_status: Optional[str] = None    # raw vendor string (kept for reference)
     active_alert_count: int = 0
     capacity_used_bytes: Optional[int] = None
     capacity_total_bytes: Optional[int] = None   # usable (presented) capacity
@@ -93,6 +99,36 @@ class ArrayTableRow(BaseModel):
     total_volumes: int = 0
     total_hosts: int = 0
     collected_at: Optional[str] = None
+
+
+class HardwareComponent(BaseModel):
+    """One physical part: drive bay, port, controller/node, PSU, fan, …"""
+    type: str                      # controller|node|drive|port|psu|fan|battery|memory|cpu|module|sensor
+    name: str
+    status: str                    # healthy|warning|critical|inactive|unknown
+    raw: Optional[str] = None      # the vendor's own status value
+    slot: Optional[Any] = None     # bay/port position for ordering
+    detail: Optional[str] = None
+    attrs: dict[str, Any] = Field(default_factory=dict)   # speed, capacity, model, protocol…
+
+
+class HardwareGroup(BaseModel):
+    """A physical enclosure (chassis, controller/node, shelf, cage, drive box, DAE, site)."""
+    id: str
+    label: str
+    kind: str
+    status: str
+    model: Optional[str] = None
+    components: list[HardwareComponent] = Field(default_factory=list)
+
+
+class HardwareInventory(BaseModel):
+    """Per-array hardware inventory for the wireframe diagram."""
+    array_name: str
+    vendor: Optional[str] = None
+    collected_at: Optional[str] = None
+    groups: list[HardwareGroup] = Field(default_factory=list)
+    summary: dict[str, dict[str, int]] = Field(default_factory=dict)
 
 
 class ArrayConfig(BaseModel):

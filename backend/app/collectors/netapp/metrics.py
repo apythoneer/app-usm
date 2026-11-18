@@ -12,6 +12,8 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.netapp.client import NetAppClient
+from app.collectors.health_rules import ontap_health
+from app.collectors.hardware_rules import ontap_inventory
 from app.db.session import get_db_cursor, update_extended_metrics
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -166,55 +168,56 @@ class NetAppMetricsCollector(BaseCollector):
             if ratios:
                 metrics["data_reduction"] = round(sum(ratios) / len(ratios), 2)
 
-        # Node-level health + uptime
-        # ONTAP /api/cluster does NOT have a top-level "health" boolean;
-        # health is reported per-node via /api/cluster/nodes.
-        data = self.client.get("cluster/nodes")
-        if data:
-            records = data.get("records", [])
-            if records:
-                node_health = []
-                node_uptimes = []
-                for n in records:
-                    h = n.get("health", n.get("is_healthy"))
-                    node_health.append(h)
-                    # ONTAP nodes have "uptime" in seconds (when requested via fields)
-                    uptime = n.get("uptime")
-                    if uptime:
-                        node_uptimes.append(int(uptime))
+        # Nodes — state, controller FRUs (temp/fans/PSUs) and uptime in one call.
+        # /api/cluster/nodes returns only name/uuid unless `fields` is given (the
+        # old call omitted it, so node health was never actually read). If an
+        # older ONTAP rejects a controller.* field, retry with the core fields.
+        nodes = self.client.get("cluster/nodes", params={"fields": (
+            "name,model,state,uptime,controller.over_temperature,"
+            "controller.failed_fan,controller.failed_power_supply,controller.frus")})
+        if nodes is None:
+            nodes = self.client.get("cluster/nodes", params={"fields": "name,model,state,uptime"})
+        uptimes = [int(n["uptime"]) for n in (nodes or {}).get("records", []) if n.get("uptime")]
+        if uptimes:
+            # Minimum node uptime = cluster uptime (most recent reboot)
+            uptime_secs = min(uptimes)
+            metrics["uptime_seconds"] = uptime_secs
+            metrics["uptime_str"] = f"{uptime_secs // 86400}d {(uptime_secs % 86400) // 3600}h"
 
-                if any(h is not None for h in node_health):
-                    all_nodes_ok = all(h is True for h in node_health)
-                    metrics["controller_status"] = "healthy" if all_nodes_ok else "degraded"
-                    metrics["array_status"] = "healthy" if all_nodes_ok else "degraded"
-                else:
-                    metrics["controller_status"] = "healthy"
-                    metrics["array_status"] = "healthy"
+        # Every disk once — feeds both the broken-disk health check and the
+        # shelf/bay inventory (bay + shelf.uid place it in the wireframe).
+        disks = self.client.get("storage/disks", params={
+            "fields": "name,state,container_type,type,model,usable_size,bay,shelf.uid,home_node.name",
+            "max_records": "10000"})
 
-                # Use minimum node uptime as cluster uptime (most recent reboot)
-                if node_uptimes:
-                    uptime_secs = min(node_uptimes)
-                    metrics["uptime_seconds"] = uptime_secs
-                    days = uptime_secs // 86400
-                    hours = (uptime_secs % 86400) // 3600
-                    metrics["uptime_str"] = f"{days}d {hours}h"
-            else:
-                self.logger.warning("No node records returned from /cluster/nodes")
-        else:
-            self.logger.warning("Failed to fetch /cluster/nodes")
+        # Hardware health — the checks NetApp Harvest's health plugin runs. Node
+        # `health` only exists via the private CLI passthrough. Each call is
+        # independent: a failed/unsupported one is skipped, not treated as healthy.
+        state, detail = ontap_health(
+            node_health=self.client.get("private/cli/node", params={"fields": "health"}),
+            nodes=nodes,
+            broken_disks=disks,
+            shelves=self.client.get("private/cli/storage/shelf", params={
+                "fields": "error_type,error_severity,error_text"}),
+            failover=self.client.get("private/cli/storage/failover", params={
+                "fields": "possible,partner_name,state_description,mode"}),
+            support_alerts=self.client.get("private/support/alerts", params={"suppress": "false"}),
+        )
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
 
-        # Try to get uptime via a separate call with explicit fields if not already captured
-        if "uptime_seconds" not in metrics:
-            node_data = self.client.get("cluster/nodes", params={"fields": "uptime"})
-            if node_data:
-                records = node_data.get("records", [])
-                uptimes = [int(n["uptime"]) for n in records if n.get("uptime")]
-                if uptimes:
-                    uptime_secs = min(uptimes)
-                    metrics["uptime_seconds"] = uptime_secs
-                    days = uptime_secs // 86400
-                    hours = (uptime_secs % 86400) // 3600
-                    metrics["uptime_str"] = f"{days}d {hours}h"
+        # Hardware inventory for the wireframe: nodes + FRUs + ports, shelves + bays.
+        metrics["hardware"] = ontap_inventory(
+            nodes=nodes,
+            disks=disks,
+            shelves=self.client.get("storage/shelves", params={
+                "fields": "uid,name,id,model,state,module_type,bays,frus"}),
+            eth_ports=self.client.get("network/ethernet/ports", params={
+                "fields": "name,node.name,state,speed,enabled,type", "max_records": "5000"}),
+            fc_ports=self.client.get("network/fc/ports", params={
+                "fields": "name,node.name,state,speed,enabled,physical_protocol", "max_records": "5000"}),
+        )
 
         return metrics
 

@@ -10,6 +10,8 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.dell.client import DellUnityClient
+from app.collectors.health_rules import unity_health
+from app.collectors.hardware_rules import unity_inventory
 from app.db.session import get_db_cursor
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -52,27 +54,44 @@ class DellMetricsCollector(BaseCollector):
         if not sys_resp:
             # Last resort — no fields filter
             sys_resp = self.client.get("system")
+        system_health = None
         if sys_resp and sys_resp.get("entries"):
             content = sys_resp["entries"][0].get("content", {})
             metrics["purity_version"] = content.get("softwareVersion", "")
             metrics["model"] = content.get("model", "")
             metrics["serial"] = content.get("serialNumber", "")
+            system_health = content.get("health")
 
-            health = content.get("health", {})
-            health_value = health.get("value", 0) if isinstance(health, dict) else 0
-            # Unity health: 5=OK, 7=Degraded, 10=Minor, 15=Major, 20=Critical
-            if health_value <= 5:
-                metrics["array_status"] = "healthy"
-            elif health_value <= 10:
-                metrics["array_status"] = "degraded"
-            else:
-                metrics["array_status"] = "critical"
-            metrics["controller_status"] = metrics["array_status"]
+        # Hardware health — Unity's system health is its own rollup of every
+        # component (HealthEnum: 0 UNKNOWN, 5 OK, 7 OK_BUT, 10 DEGRADED, 15 MINOR,
+        # 20 MAJOR, 25 CRITICAL, 30 NON_RECOVERABLE), plus each storage processor's
+        # health for the controller detail. No signal stays "unknown" rather than
+        # the old hardcoded "healthy".
+        sps = self.client.get("storageProcessor", fields="name,health,model")
+        state, detail = unity_health(system_health=system_health, storage_processors=sps)
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["array_status"] = metrics["controller_status"] = state or "unknown"
 
-        # Default status if system info unavailable
-        if "array_status" not in metrics:
-            metrics["array_status"] = "healthy"
-            metrics["controller_status"] = "healthy"
+        # Hardware inventory for the wireframe — every Unity component type carries
+        # its own health; empty slots / unused ports are flagged by descriptionId.
+        page = {"per_page": 2000}
+        get = lambda res, f: self.client.get(res, fields=f, params=page)
+        metrics["hardware"] = unity_inventory(
+            sps=sps,
+            dpe=get("dpe", "name,health,model"),
+            daes=get("dae", "name,health"),
+            disks=get("disk", "name,health,slotNumber,parentDae,parentDpe,size,isInUse"),
+            eth_ports=get("ethernetPort", "name,health,speed,isLinkUp,storageProcessor"),
+            fc_ports=get("fcPort", "name,health,currentSpeed,storageProcessor"),
+            sas_ports=get("sasPort", "name,health,currentSpeed,parent"),
+            psus=get("powerSupply", "name,health,parent"),
+            fans=get("fan", "name,health,parent"),
+            batteries=get("battery", "name,health,parent"),
+            lccs=get("lcc", "name,health,parent"),
+            io_modules=get("ioModule", "name,health,parent"),
+            memory=get("memoryModule", "name,health,parent"),
+        )
 
         # Pool capacity — aggregate all pools
         pools_resp = self.client.get("pool",

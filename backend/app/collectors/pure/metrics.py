@@ -11,6 +11,8 @@ from typing import Any, Dict
 from app.collectors.base import BaseCollector, CollectorResult
 from app.collectors.registry import CollectorRegistry
 from app.collectors.pure.client import PureClient
+from app.collectors.health_rules import pure_health
+from app.collectors.hardware_rules import pure_inventory
 from app.db.session import get_db_cursor, update_extended_metrics
 from app.core.config import get_settings
 from app.schemas.array import ArrayConfig
@@ -115,13 +117,19 @@ class PureMetricsCollector(BaseCollector):
             metrics["snapshot_space"] = space.get("snapshots", 0)
             metrics["volume_space"] = space.get("volumes", 0)
 
-        # Controller status
-        data = self.client.get("array", params={"controllers": "true"})
-        if data:
-            statuses = [c.get("status", "unknown") for c in data]
-            metrics["controller_status"] = (
-                "healthy" if all(s == "ready" for s in statuses) else "degraded"
-            )
+        # Hardware health — controllers (mode/status), every hardware component's
+        # status, and drives (incl. CBS `virtual` drives) from REST 2.x; v1
+        # array?controllers=true is the fallback for the controller check.
+        ctrls = self.client.get_v2("controllers")
+        if ctrls is None:
+            ctrls = self.client.get("array", params={"controllers": "true"})
+        drives = self.client.get_v2("drives")
+        state, detail = pure_health(controllers=ctrls, hardware=hw, drives=drives)
+        metrics["health_state"] = state
+        metrics["health_detail"] = detail
+        metrics["controller_status"] = state or "unknown"
+        # Hardware inventory for the wireframe (same payloads — no extra calls)
+        metrics["hardware"] = pure_inventory(hardware=hw, drives=drives, controllers=ctrls)
 
         # Uptime — Pure v1 API doesn't expose started/uptime on controllers.
         # Calculate from the last reboot alert in the messages table instead.
