@@ -95,6 +95,12 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `cvlt_backupjobsummary` INSERT must upsert on `job_id`; flagged for PJ.)
 
 ### Fixed
+- **Pure arrays never collected on Kubernetes (0/25 "Authentication failed")** —
+  `PureClient` connected to the bare array name (`https://psompa03b/…`), which
+  only resolves where the resolver searches `corp.intranet` (the on-prem host).
+  It now tries the array's FQDN, then management IP, then the name — the same
+  fallback the NetApp/StorageGrid clients use — from `managed_arrays`, and stops
+  at once if the array rejects the API token.
 - **Array health flip-flopped and Offline was timezone-dependent** — two collector
   instances write the same `metrics_current` rows (on-prem in MST, cloud pods in
   UTC, the latter still on older code), so `array_status` was overwritten with

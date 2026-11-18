@@ -515,7 +515,7 @@ async def verify_array(array_name: str):
             try:
                 if vendor == "pure":
                     from app.collectors.pure.client import PureClient
-                    client = PureClient(array_name)
+                    client = PureClient(array_name, fqdn=fqdn, mgmt_ip=mgmt_ip)
                     if client.authenticate():
                         result.connectivity_ok = True
                         info = client.get("array")
