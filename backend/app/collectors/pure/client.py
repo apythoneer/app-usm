@@ -23,12 +23,27 @@ API_V2 = "2.17"  # v2 exposes NIC perf, provisioned/over-subscription, latency b
 class PureClient:
     """Thin session wrapper around the Pure Storage REST API."""
 
-    def __init__(self, array_name: str):
+    def __init__(self, array_name: str, fqdn: Optional[str] = None,
+                 mgmt_ip: Optional[str] = None):
         self.array_name = array_name
-        self.base_url = f"https://{array_name}/api/{API_VERSION}"
-        self.v2_base = f"https://{array_name}/api/{API_V2}"
+        # Candidate hosts in preference order: FQDN, management IP, then the bare
+        # array name. The bare name only resolves where the resolver searches
+        # corp.intranet (the on-prem host); inside k8s pods it doesn't, which made
+        # every Pure array fail "Authentication failed" on the cluster. Same
+        # fallback as the NetApp/StorageGrid clients.
+        seen = set()
+        self._hosts = [
+            h for h in ((fqdn or "").strip(), (mgmt_ip or "").strip(), array_name)
+            if h and not (h in seen or seen.add(h))
+        ]
+        self._set_host(self._hosts[0] if self._hosts else array_name)
         self.session: Optional[requests.Session] = None
         self._v2_token: Optional[str] = None
+
+    def _set_host(self, host: str):
+        self.host = host
+        self.base_url = f"https://{host}/api/{API_VERSION}"
+        self.v2_base = f"https://{host}/api/{API_V2}"
 
     def authenticate(self) -> bool:
         api_token = self._get_api_token()
@@ -36,22 +51,36 @@ class PureClient:
             logger.error(f"[{self.array_name}] No API token from KeePass")
             return False
 
-        session = requests.Session()
-        session.verify = False
-        session.headers["Content-Type"] = "application/json"
-
-        try:
-            resp = session.post(
-                f"{self.base_url}/auth/session",
-                json={"api_token": api_token},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                self.session = session
-                return True
-            logger.error(f"[{self.array_name}] Auth HTTP {resp.status_code}")
-        except Exception as e:
-            logger.error(f"[{self.array_name}] Auth error: {e}")
+        last_reason = None
+        for host in self._hosts:
+            session = requests.Session()
+            session.verify = False
+            session.headers["Content-Type"] = "application/json"
+            try:
+                resp = session.post(
+                    f"https://{host}/api/{API_VERSION}/auth/session",
+                    json={"api_token": api_token},
+                    timeout=10,
+                )
+                if resp.status_code == 200:
+                    self._set_host(host)
+                    self.session = session
+                    if host != self._hosts[0]:
+                        logger.info(f"[{self.array_name}] Reached via fallback host {host}")
+                    return True
+                # The array answered but rejected the token — another address for
+                # the same array won't help.
+                logger.error(f"[{self.array_name}] Auth HTTP {resp.status_code} from {host} "
+                             f"(API token rejected — check KeePass PureStorage_API_{self.array_name})")
+                return False
+            except requests.exceptions.ConnectionError as e:
+                last_reason = ("DNS did not resolve" if "gaierror" in repr(e) or "Name or service" in str(e)
+                               else "host unreachable") + f" ({host})"
+            except requests.exceptions.Timeout:
+                last_reason = f"timeout ({host})"
+            except Exception as e:
+                last_reason = f"{str(e)[:60]} ({host})"
+        logger.error(f"[{self.array_name}] Cannot reach any host {self._hosts} ({last_reason})")
         return False
 
     def get(self, endpoint: str, params: Dict = None) -> Optional[Any]:

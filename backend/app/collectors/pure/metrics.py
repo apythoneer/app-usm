@@ -29,7 +29,7 @@ class PureMetricsCollector(BaseCollector):
 
     def __init__(self, array_config: ArrayConfig):
         super().__init__(array_config)
-        self.client = PureClient(array_config.name)
+        self.client = PureClient(array_config.name, fqdn=array_config.array_fqdn, mgmt_ip=array_config.mgmt_ip)
 
     def authenticate(self) -> bool:
         return self.client.authenticate()
