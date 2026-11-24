@@ -202,6 +202,13 @@ class Settings(BaseSettings):
     # Chat / Ollama (local LLM — CPU, in-container)
     ollama_base_url: str = Field(default="http://127.0.0.1:11434", alias="OLLAMA_BASE_URL")
     ollama_model: str = Field(default="qwen2.5:3b", alias="OLLAMA_MODEL")
+    # Auth for a remote Ollama behind the sandbox proxy (docker/ollama-proxy/).
+    # OLLAMA_API_KEY wins; else the Password of KeePass entry OLLAMA_CRED_KEY, read
+    # from OLLAMA_KEEPASS_URL (defaults to KEEPASS_URL). Both empty = no auth header,
+    # which is right for a local Ollama on 127.0.0.1 (the sandbox's own backend).
+    ollama_api_key: str = Field(default="", alias="OLLAMA_API_KEY")
+    ollama_cred_key: str = Field(default="", alias="OLLAMA_CRED_KEY")
+    ollama_keepass_url: str = Field(default="", alias="OLLAMA_KEEPASS_URL")
     chat_enabled: bool = Field(default=True, alias="CHAT_ENABLED")
     chat_query_timeout: int = Field(default=10, alias="CHAT_QUERY_TIMEOUT")
     # Max concurrent chat requests. The backend is a single uvicorn worker that

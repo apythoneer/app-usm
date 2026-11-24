@@ -12,6 +12,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Storage AI on Kubernetes (dev)** — the chat assistant is enabled on dev k8s and
+  uses the sandbox LLM (`qwen2.5:3b`) until cloud compute exists. A new authenticated
+  proxy (`docker/ollama-proxy/`) fronts the sandbox Ollama on `:11435`: bearer token
+  required, inference + read-only endpoints only (pull/delete/push refused), Ollama
+  itself stays on loopback. The token lives only in KeePass (`SIP_Ollama_Proxy_Token`);
+  the proxy and the backend both read it from there. New settings `OLLAMA_API_KEY`,
+  `OLLAMA_CRED_KEY`, `OLLAMA_KEEPASS_URL`; `/api/v1/chat/status` reports
+  `unauthorized` when the proxy rejects the token. Prod follows after dev checks out.
 - **Unified array health** — every array now reports one of four statuses:
   **Healthy** (green), **Warning** (yellow), **Critical** (red), **Offline** (gray,
   replacing "unknown"), with a short reason in the status tooltip (new

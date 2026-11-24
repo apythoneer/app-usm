@@ -1,0 +1,24 @@
+# Authenticated proxy in front of the sandbox Ollama so dev/prod k8s can use the
+# sandbox LLM until cloud compute exists. Ollama itself stays on 127.0.0.1:11434.
+# Standalone project — does not touch the main USM compose stack:
+#   cd docker/ollama-proxy && docker compose -p usm-ollama-proxy up -d
+services:
+  usm-ollama-proxy:
+    image: nginx:1.27-alpine
+    container_name: usm-ollama-proxy
+    network_mode: host               # reach Ollama + KeePass on 127.0.0.1
+    entrypoint: ["/bin/sh", "/etc/ollama-proxy/entrypoint.sh"]
+    environment:
+      - KEEPASS_BASE=http://127.0.0.1:2000/keepass
+      - KEEPASS_ENTRY=SIP_Ollama_Proxy_Token
+      - LISTEN_PORT=11435
+      - UPSTREAM=127.0.0.1:11434
+    volumes:
+      - ./entrypoint.sh:/etc/ollama-proxy/entrypoint.sh:ro
+      - ./nginx.conf.template:/etc/ollama-proxy/nginx.conf.template:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:11435/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
