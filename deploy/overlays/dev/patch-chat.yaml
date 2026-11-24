@@ -1,0 +1,14 @@
+# Dev: turn the Storage AI chat on, using the sandbox LLM (usodclpsandadm1) until
+# cloud compute exists. The sandbox Ollama sits behind an authenticated proxy on
+# :11435 (docker/ollama-proxy/). The bearer token is the KeePass entry
+# SIP_Ollama_Proxy_Token, read from the sandbox's own KeePass broker — the same
+# source the proxy loads it from — so there is exactly one copy of the token.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: usm-config
+data:
+  CHAT_ENABLED: "true"
+  OLLAMA_BASE_URL: "http://usodclpsandadm1.corp.intranet:11435"
+  OLLAMA_CRED_KEY: "SIP_Ollama_Proxy_Token"
+  OLLAMA_KEEPASS_URL: "http://usodclpsandadm1.corp.intranet:2000/keepass"

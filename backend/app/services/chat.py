@@ -18,6 +18,47 @@ from app.services.capacity_projection import forecast_capacity
 
 logger = logging.getLogger("usm.chat")
 settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Auth for a remote Ollama (the sandbox's authenticated proxy)
+# ---------------------------------------------------------------------------
+_OLLAMA_TOKEN_TTL = 3600  # re-read KeePass hourly so a rotated token is picked up
+_ollama_token: Dict[str, Any] = {"value": "", "expires": 0.0}
+
+
+def _invalidate_ollama_token() -> None:
+    _ollama_token.update(value="", expires=0.0)
+
+
+def _local_ollama_headers() -> Dict[str, str]:
+    """Bearer header for the default Ollama backend, or {} when no auth is configured.
+
+    OLLAMA_API_KEY wins; otherwise the Password of KeePass entry OLLAMA_CRED_KEY from
+    OLLAMA_KEEPASS_URL (or KEEPASS_URL). Cached for an hour; on a fetch error the last
+    good token is kept. The token value is never logged.
+    """
+    if settings.ollama_api_key:
+        return {"Authorization": f"Bearer {settings.ollama_api_key}"}
+    if not settings.ollama_cred_key:
+        return {}
+    now = time.monotonic()
+    if not (_ollama_token["value"] and now < _ollama_token["expires"]):
+        base = (settings.ollama_keepass_url or settings.keepass_url).rstrip("/")
+        try:
+            resp = requests.get(f"{base}/{settings.ollama_cred_key}", timeout=5)
+            resp.raise_for_status()
+            data = resp.json()
+            token = (data.get("Password") or "").strip() if isinstance(data, dict) else ""
+            if token:
+                _ollama_token.update(value=token, expires=now + _OLLAMA_TOKEN_TTL)
+            else:
+                logger.warning("KeePass entry '%s' has no password", settings.ollama_cred_key)
+        except Exception as e:
+            logger.warning("Ollama token unavailable from KeePass '%s': %s",
+                           settings.ollama_cred_key, type(e).__name__)
+    tok = _ollama_token["value"]
+    return {"Authorization": f"Bearer {tok}"} if tok else {}
 SCHEMA = settings.db_schema
 
 # ── Schema context for the LLM ─────────────────────────────────────────────
@@ -530,7 +571,9 @@ class ChatService:
         # Extra headers per backend — the DGX sits behind Cloudflare Access and
         # needs a service token on EVERY request (an Access app with only
         # Service Auth policies issues no reusable cookie).
-        self.headers = headers or {}
+        # None = the default backend: auth headers are resolved per call (see
+        # _local_ollama_headers) so a KeePass token is never read at import time.
+        self._headers = headers
         self.name = name
         # qwen3 is a reasoning model. Observed live: its <think> chain eats the
         # num_predict budget and the SQL/answer never appears (empty responses),
@@ -561,6 +604,10 @@ class ChatService:
         ("LLM did not return a SQL query"). A large budget lets the reasoning
         finish and the clean SQL follow. Verified live. No change for local qwen2.5."""
         return 4096 if self.reasoning else base
+
+    @property
+    def headers(self) -> Dict[str, str]:
+        return self._headers if self._headers is not None else _local_ollama_headers()
 
     @classmethod
     def for_backend(cls, backend: str = "local") -> "ChatService":
@@ -860,6 +907,10 @@ class ChatService:
                 f"{self.base_url}/api/tags", timeout=5,
                 headers=self.headers, allow_redirects=False,
             )
+            if resp.status_code == 401:
+                _invalidate_ollama_token()  # rotated/revoked: re-read KeePass next call
+                return {"status": "unauthorized",
+                        "error": "Ollama proxy rejected the token (check OLLAMA_CRED_KEY in KeePass)"}
             if resp.status_code == 200 and "application/json" in resp.headers.get("content-type", ""):
                 models = [m.get("name", "") for m in resp.json().get("models", [])]
                 has_model = any(self.model in m for m in models)

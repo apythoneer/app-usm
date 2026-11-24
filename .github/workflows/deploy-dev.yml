@@ -54,6 +54,22 @@ jobs:
           kubectl -n "$NS" rollout status deployment/usm-collector --timeout=180s
           kubectl -n "$NS" rollout status deployment/usm-frontend  --timeout=120s
 
+      - name: Check reach to the sandbox LLM proxy + KeePass (non-fatal)
+        continue-on-error: true
+        run: |
+          kubectl -n "$NS" exec deploy/usm-backend -- python -c "
+          import socket
+          for port in (2000, 11435):
+              try:
+                  socket.create_connection(('usodclpsandadm1.corp.intranet', port), timeout=5).close(); print(port, 'reachable')
+              except Exception as e:
+                  print(port, 'UNREACHABLE', type(e).__name__)
+          "
+          kubectl -n "$NS" exec deploy/usm-backend -- python -c "
+          import json, urllib.request
+          print(json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/chat/status', timeout=20)))
+          " || true
+
       - name: Summary
         if: always()
         run: kubectl -n "$NS" get deploy,pods -l app.kubernetes.io/part-of=sip -o wide || true
