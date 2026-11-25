@@ -556,6 +556,7 @@ INTENTS: List[Intent] = [
            _array_summary, array_hint="tell me about 2bja"),
 ]
 _BY_NAME = {i.name: i for i in INTENTS}
+INTENT_NAMES = frozenset(_BY_NAME)
 
 
 # ── Routing ───────────────────────────────────────────────────────────────────
@@ -565,8 +566,35 @@ _ex_vecs: Dict[str, Any] = {"key": None, "vecs": None, "owners": None}
 _embed_state = {"down_until": 0.0}
 
 
+# A learned negative example this close to the question blocks that intent.
+_NEG_BLOCK = 0.92
+_vec_cache: Dict[Tuple[str, str], List[float]] = {}   # (model, text) -> vector, learned examples
+
+
+def _vectors(texts: List[str]) -> List[List[float]]:
+    from app.services.embeddings import embed
+    model = settings.ollama_embed_model
+    missing = [t for t in dict.fromkeys(texts) if (model, t) not in _vec_cache]
+    if missing:
+        for t, v in zip(missing, embed(missing)):
+            _vec_cache[(model, t)] = v
+    return [_vec_cache[(model, t)] for t in texts]
+
+
+def _learned() -> List[Dict[str, Any]]:
+    try:
+        from app.services.chat_feedback import learned_examples
+        return [r for r in learned_examples() if r["intent"] in _BY_NAME]
+    except Exception:
+        return []
+
+
 def _example_scores(question: str) -> Optional[List[Tuple[str, float]]]:
-    """Best cosine per intent (desc), or None if embeddings are unavailable."""
+    """Best cosine per intent (desc), or None if embeddings are unavailable.
+
+    Built-in examples plus phrasings learned from 👍/👎 (chat_feedback). An intent
+    with a learned negative example >= _NEG_BLOCK similar to the question is dropped.
+    """
     if time.monotonic() < _embed_state["down_until"]:
         return None
     try:
@@ -579,18 +607,26 @@ def _example_scores(question: str) -> Optional[List[Tuple[str, float]]]:
                     texts.append(query_prefix() + ex); owners.append(it.name)
             _ex_vecs.update(key=key, vecs=embed(texts), owners=owners)
             logger.info("intent examples embedded: %d", len(texts))
+        learned = _learned()
+        l_vecs = _vectors([query_prefix() + r["question"] for r in learned]) if learned else []
         # Examples are lower-case and the embedding is case-sensitive: "past EOSL"
         # scored 0.76 vs 0.95 for "past eosl", so normalise before comparing.
         q = embed([query_prefix() + " ".join(question.lower().split())])[0]
         best: Dict[str, float] = {}
-        for owner, v in zip(_ex_vecs["owners"], _ex_vecs["vecs"]):
+        blocked: set = set()
+        pairs = list(zip(_ex_vecs["owners"], _ex_vecs["vecs"], [1] * len(_ex_vecs["owners"])))
+        pairs += [(r["intent"], v, r["polarity"]) for r, v in zip(learned, l_vecs)]
+        for owner, v, polarity in pairs:
             s = cosine(q, v)
-            if s > best.get(owner, -1):
+            if polarity < 0:
+                if s >= _NEG_BLOCK:
+                    blocked.add(owner)
+            elif s > best.get(owner, -1):
                 best[owner] = s
-        return sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+        return sorted(((n, s) for n, s in best.items() if n not in blocked), key=lambda kv: kv[1], reverse=True)
     except Exception as e:
         _embed_state["down_until"] = time.monotonic() + 300
-        logger.warning("intent embeddings unavailable (%s); LLM routing only for 300s", type(e).__name__)
+        logger.warning("intent embeddings unavailable (%s); routing to text-to-sql for 300s", type(e).__name__)
         return None
 
 
@@ -650,7 +686,7 @@ class Route:
 
 def route(question: str, svc=None) -> Route:
     scores = _example_scores(question)
-    if scores is None:  # no embeddings -> Text-to-SQL (the LLM alone routes poorly)
+    if not scores:  # no embeddings (or every intent blocked) -> Text-to-SQL
         return Route("other", "none")
     accept, consider = settings.chat_intent_accept, settings.chat_intent_consider
     mode = (settings.chat_intent_llm or "verify").lower()
@@ -670,12 +706,14 @@ def route(question: str, svc=None) -> Route:
 _result_cache: Dict[tuple, Tuple[float, Result]] = {}
 
 
-def answer(question: str, svc=None) -> Optional[Dict[str, Any]]:
-    """Answer via a vetted intent, or None to let the caller use Text-to-SQL."""
+def answer(question: str, svc=None) -> Dict[str, Any]:
+    """Route and answer. Returns {"handled": False, route info} when the caller
+    should use Text-to-SQL, else a chat result dict with "handled": True."""
     r = route(question, svc)
+    info = {"route_how": r.how, "route_score": round(r.score, 3) if r.score else None}
     if r.intent == "other":
         logger.info("intent: other (best %.2f, %s) -> text-to-sql", r.score, ",".join(r.candidates[:3]))
-        return None
+        return {"handled": False, **info}
     it = _BY_NAME[r.intent]
     p = extract_params(question)
     label = (f"-- vetted query · intent={it.name} · route={r.how}"
@@ -684,15 +722,16 @@ def answer(question: str, svc=None) -> Optional[Dict[str, Any]]:
                                                  ("days", p.days), ("n", p.n), ("pct", p.pct)) if v is not None))
     key = (it.name, p.key(), "write" in p.text, bool(re.search(r"\b(next|upcoming|coming|soon|will|due)\b", p.text)))
     hit = _result_cache.get(key)
+    base = {"handled": True, "route": it.name, **info, "sql": label, "error": None}
     try:
         if hit and time.monotonic() - hit[0] < it.ttl:
             res = hit[1]
-            label += " · cached"
+            base["sql"] = label + " · cached"
         else:
             res = it.handler(p)
             _result_cache[key] = (time.monotonic(), res)
     except NeedsArray:
-        return {"answer": f"Which array do you mean? Include its name, e.g. \"{it.array_hint}\".",
-                "sql": label, "rows": 0, "error": None}
+        return {**base, "answer": f"Which array do you mean? Include its name, e.g. \"{it.array_hint}\".",
+                "rows": 0}
     logger.info("intent: %s via %s (%.2f) rows=%d", it.name, r.how, r.score, res.rows)
-    return {"answer": res.answer, "sql": label, "rows": res.rows, "error": None}
+    return {**base, "answer": res.answer, "rows": res.rows}

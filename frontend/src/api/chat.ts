@@ -7,6 +7,22 @@ export interface ChatMessage {
   rows?: number
   duration_ms?: number
   error?: string
+  id?: number          // chat_log id, for feedback
+  route?: string       // intent name | sql | forecast
+  rating?: 1 | -1
+  feedbackDone?: boolean
+}
+
+export interface ChatIntent {
+  name: string
+  description: string
+  example: string
+}
+
+export interface FeedbackResult {
+  id: number
+  rating: 1 | -1
+  learned: string[]
 }
 
 interface ChatRequest {
@@ -21,6 +37,8 @@ interface ChatResponse {
   duration_ms: number
   model: string
   error?: string
+  id?: number
+  route?: string
 }
 
 interface ChatStatus {
@@ -52,6 +70,26 @@ export const chatApi = {
       message,
       context: ctx?.length ? ctx : undefined,
     } as ChatRequest, { timeout: 120_000 })
+    return data
+  },
+
+  async intents(): Promise<ChatIntent[]> {
+    const { data } = await apiClient.get<ChatIntent[]>('/chat/intents')
+    return data
+  },
+
+  async feedback(
+    id: number,
+    rating: 1 | -1,
+    wantedIntent?: string,
+    comment?: string,
+  ): Promise<FeedbackResult> {
+    const { data } = await apiClient.post<FeedbackResult>('/chat/feedback', {
+      id,
+      rating,
+      wanted_intent: wantedIntent || undefined,
+      comment: comment || undefined,
+    })
     return data
   },
 

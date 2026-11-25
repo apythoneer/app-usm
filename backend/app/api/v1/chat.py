@@ -4,13 +4,14 @@ Uses the local Ollama LLM for Text-to-SQL. No data leaves the host.
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
 
 from app.core.config import get_settings
+from app.services import chat_feedback
 from app.services.chat import ChatService
 
 logger = logging.getLogger("usm.api.chat")
@@ -39,6 +40,16 @@ class ChatResponse(BaseModel):
     duration_ms: int = 0
     model: str = ""
     error: Optional[str] = None
+    id: Optional[int] = None          # chat_log id — send it back with /chat/feedback
+    route: Optional[str] = None       # intent name | sql | forecast
+
+
+class FeedbackRequest(BaseModel):
+    id: int
+    rating: Literal[1, -1]
+    # after a 👎: the question type the user wanted ('none' = none of them fit)
+    wanted_intent: Optional[str] = Field(default=None, max_length=50)
+    comment: Optional[str] = Field(default=None, max_length=1000)
 
 
 @router.post("", response_model=ChatResponse)
@@ -63,6 +74,7 @@ async def chat(req: ChatRequest):
     _chat_inflight += 1
     try:
         result = await run_in_threadpool(_chat.ask, req.message, req.context)
+        result["id"] = await run_in_threadpool(chat_feedback.log_answer, req.message, result)
         return ChatResponse(**result)
     finally:
         _chat_inflight -= 1
@@ -76,3 +88,45 @@ async def chat_status():
         "chat_enabled": settings.chat_enabled,
         "ollama": status,
     }
+
+
+# ── Feedback loop (app/services/chat_feedback.py) ─────────────────────────────
+
+@router.get("/intents")
+async def chat_intents_list():
+    """Question types the assistant answers directly (for the 👎 'what did you want?' picker)."""
+    from app.services.chat_intents import INTENTS
+    return [{"name": i.name, "description": i.description, "example": i.examples[0]} for i in INTENTS]
+
+
+@router.post("/feedback")
+async def chat_feedback_post(req: FeedbackRequest):
+    """👍/👎 on an answer; a 👎 with wanted_intent teaches the router that phrasing."""
+    try:
+        return await run_in_threadpool(chat_feedback.record_feedback, req.id, req.rating,
+                                       req.wanted_intent, req.comment)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/feedback")
+async def chat_feedback_review(limit: int = 50,
+                               only: Literal["all", "down", "fallthrough", "unrated-fallthrough"] = "all"):
+    """Recent questions with route + rating, for reviewing misses."""
+    return await run_in_threadpool(chat_feedback.review, limit, only)
+
+
+@router.get("/examples")
+async def chat_examples_list():
+    """Phrasings learned from feedback (active)."""
+    return await run_in_threadpool(chat_feedback.list_examples)
+
+
+@router.delete("/examples/{example_id}")
+async def chat_examples_delete(example_id: int):
+    """Retire a learned phrasing (soft delete)."""
+    if not await run_in_threadpool(chat_feedback.deactivate_example, example_id):
+        raise HTTPException(status_code=404, detail="example not found")
+    return {"id": example_id, "active": False}

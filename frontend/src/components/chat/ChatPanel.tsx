@@ -1,8 +1,124 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Loader2, ChevronDown, Database, Clock, MessageSquare, Trash2 } from 'lucide-react'
-import { chatApi, type ChatMessage } from '@/api/chat'
+import { Send, Loader2, ChevronDown, Database, Clock, MessageSquare, Trash2, ThumbsUp, ThumbsDown } from 'lucide-react'
+import { chatApi, type ChatMessage, type ChatIntent } from '@/api/chat'
 
-function MessageBubble({ msg }: { msg: ChatMessage }) {
+function Feedback({
+  msg,
+  intents,
+  onChange,
+}: {
+  msg: ChatMessage
+  intents: ChatIntent[]
+  onChange: (patch: Partial<ChatMessage>) => void
+}) {
+  const [wanted, setWanted] = useState('')
+  const [comment, setComment] = useState('')
+  const [sending, setSending] = useState(false)
+  const [note, setNote] = useState('')
+  if (msg.id == null) return null
+
+  async function rate(rating: 1 | -1) {
+    if (msg.rating === rating) return
+    onChange({ rating, feedbackDone: rating === 1 })
+    try {
+      await chatApi.feedback(msg.id!, rating)
+      if (rating === 1) setNote('Thanks!')
+    } catch {
+      setNote('Could not save feedback.')
+    }
+  }
+
+  async function submitPick() {
+    setSending(true)
+    try {
+      const res = await chatApi.feedback(msg.id!, -1, wanted || 'none', comment)
+      onChange({ feedbackDone: true })
+      setNote(
+        res.learned.some((l) => l.startsWith('+'))
+          ? "Thanks — I'll answer questions phrased like this directly from now on."
+          : 'Thanks for the feedback.',
+      )
+    } catch {
+      setNote('Could not save feedback.')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const btn = (active: boolean) =>
+    `p-1 rounded transition-colors ${active ? 'text-brand-400' : 'text-gray-500 hover:text-gray-300'}`
+
+  return (
+    <div className="mt-1 space-y-2">
+      <div className="flex items-center gap-1">
+        <button title="Good answer" aria-label="Good answer" onClick={() => rate(1)} className={btn(msg.rating === 1)}>
+          <ThumbsUp size={12} />
+        </button>
+        <button
+          title="Not what I wanted"
+          aria-label="Not what I wanted"
+          onClick={() => rate(-1)}
+          className={btn(msg.rating === -1)}
+        >
+          <ThumbsDown size={12} />
+        </button>
+        {note && <span className="ml-1 text-[10px] text-gray-500">{note}</span>}
+      </div>
+
+      {msg.rating === -1 && !msg.feedbackDone && (
+        <div className="p-2 bg-gray-900/60 border border-gray-700/60 rounded-lg space-y-2">
+          <p className="text-[11px] text-gray-400">What were you looking for?</p>
+          <select
+            value={wanted}
+            onChange={(e) => setWanted(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+          >
+            <option value="">None of these / something else</option>
+            {intents
+              .filter((i) => i.name !== msg.route)
+              .map((i) => (
+                <option key={i.name} value={i.name}>
+                  {i.description}
+                </option>
+              ))}
+          </select>
+          <input
+            value={comment}
+            onChange={(e) => setComment(e.target.value)}
+            maxLength={1000}
+            placeholder="Optional: what was wrong?"
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 placeholder-gray-500"
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              onClick={() => onChange({ feedbackDone: true })}
+              className="text-[11px] text-gray-500 hover:text-gray-300 px-2 py-1"
+            >
+              Skip
+            </button>
+            <button
+              onClick={submitPick}
+              disabled={sending}
+              className="text-[11px] bg-brand-600 hover:bg-brand-500 disabled:bg-gray-700 text-white rounded px-2 py-1"
+            >
+              {sending ? 'Sending…' : 'Send'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function MessageBubble({
+  msg,
+  intents,
+  onChange,
+}: {
+  msg: ChatMessage
+  intents: ChatIntent[]
+  onChange: (patch: Partial<ChatMessage>) => void
+}) {
   const isUser = msg.role === 'user'
   const [showSql, setShowSql] = useState(false)
 
@@ -49,6 +165,8 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
         {msg.error && (
           <p className="mt-1 text-[10px] text-red-400">{msg.error}</p>
         )}
+
+        {!isUser && <Feedback msg={msg} intents={intents} onChange={onChange} />}
       </div>
     </div>
   )
@@ -79,12 +197,18 @@ export default function ChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>(loadMessages)
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [intents, setIntents] = useState<ChatIntent[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     inputRef.current?.focus()
+    chatApi.intents().then(setIntents).catch(() => setIntents([]))
   }, [])
+
+  function patchMessage(index: number, patch: Partial<ChatMessage>) {
+    setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, ...patch } : m)))
+  }
 
   // Sync to sessionStorage whenever messages change
   useEffect(() => {
@@ -113,6 +237,8 @@ export default function ChatPanel() {
         rows: resp.rows,
         duration_ms: resp.duration_ms,
         error: resp.error ?? undefined,
+        id: resp.id ?? undefined,
+        route: resp.route ?? undefined,
       }
       setMessages((prev) => [...prev, assistantMsg])
     } catch (err: any) {
@@ -189,7 +315,7 @@ export default function ChatPanel() {
             )}
 
             {messages.map((msg, i) => (
-              <MessageBubble key={i} msg={msg} />
+              <MessageBubble key={i} msg={msg} intents={intents} onChange={(p) => patchMessage(i, p)} />
             ))}
 
             {loading && (

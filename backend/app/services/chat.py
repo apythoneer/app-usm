@@ -631,6 +631,9 @@ class ChatService:
             "duration_ms": 0,
             "model": self.model,
             "error": None,
+            "route": "sql",          # intent name | sql | forecast (chat_log / feedback)
+            "route_how": None,
+            "route_score": None,
         }
 
         try:
@@ -640,6 +643,7 @@ class ChatService:
                 fc_result = self._answer_forecast(question)
                 fc_result["duration_ms"] = int((time.time() - start) * 1000)
                 fc_result["model"] = self.model
+                fc_result["route"] = "forecast"
                 return fc_result
 
             # Common questions -> vetted query + templated answer (chat_intents.py).
@@ -651,11 +655,13 @@ class ChatService:
                     routed = chat_intents.answer(question, self)
                 except Exception as e:  # assistive — fall through to Text-to-SQL
                     logger.warning("intent router failed, using text-to-sql: %s", e)
-                    routed = None
-                if routed:
+                    routed = {"handled": False}
+                if routed.pop("handled", False):
                     result.update(routed)
                     result["duration_ms"] = int((time.time() - start) * 1000)
                     return result
+                # keep the router's best score so fall-throughs can be reviewed
+                result.update(route_how=routed.get("route_how"), route_score=routed.get("route_score"))
 
             # Step 1: Generate SQL from the question
             sql = self._generate_sql(question, context)
