@@ -12,6 +12,27 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Storage AI: answers stream as they're written** — new `POST /chat/stream`
+  (Server-Sent Events). The chat UI shows each step (matching, writing SQL, running
+  the query, writing the answer), then the SQL, then the answer word by word. A
+  heartbeat every 10 s means slow CPU answers no longer hit the 120 s proxy timeout:
+  that only applies to silence now. Falls back to `POST /chat` if streaming is
+  unavailable. nginx (`frontend/nginx.conf`, `deploy/base/nginx-configmap.yaml`) has
+  an unbuffered location for the stream.
+- **Storage AI: similar-question cache (dev)** — Text-to-SQL questions that closely match
+  one answered in the last 15 min reuse that answer (0.0 s). Questions that match an
+  answer rated 👍 at any age re-run its SQL for fresh data (3 s instead of ~80 s).
+  "Closely match" means cosine ≥ 0.93 *and* the same arrays, vendor, period, numbers and
+  contrast words, so "over 80%" never reuses "over 90%". Sources rated 👎 are never
+  reused. Backed by `USM.chat_log`, so it's shared by every backend process. New
+  settings: `CHAT_ANSWER_CACHE` (off by default, on in dev), `CHAT_ANSWER_CACHE_TTL_S`,
+  `CHAT_ANSWER_CACHE_SIM`.
+- **Storage AI: the suggestion buttons answer instantly** — new question types
+  `fleet_capacity`, `capacity_by_vendor`, `peak_iops` (1–90 days, fleet or one array)
+  and `uptime` cover the six suggestions on the empty chat screen, which used to take
+  80–100 s through Text-to-SQL. Current-value types (busiest, latency, fullest, …) no
+  longer answer questions about a past period: "busiest this week" becomes the 7-day
+  peak, and the others go to Text-to-SQL. Routing eval: 42/59 right, 0 wrong.
 - **Storage AI: 👍/👎 feedback that teaches the assistant** — every answer is logged
   (new additive `USM.chat_log`, with how it was routed) and gets 👍/👎 buttons. After
   a 👎 the user can pick the question type they wanted. That phrasing is saved
