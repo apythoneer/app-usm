@@ -131,6 +131,14 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `cvlt_backupjobsummary` INSERT must upsert on `job_id`; flagged for PJ.)
 
 ### Fixed
+- **Storage AI: capitalised questions missed the intent router, and EOSL/retired
+  questions got wrong SQL** — the embedding is case-sensitive, so "any arrays past
+  EOSL?" scored 0.76 instead of 0.95 and fell through to Text-to-SQL. That SQL filtered
+  on a non-existent `disposition = 'Retired'` and answered "no results", when 2 active
+  arrays are past EOSL. Questions are now lower-cased before routing (routing eval: 36 →
+  38 of 52 right, still 0 wrong). The dictionary and schema prompt list the real
+  `disposition` values (`Current` / `Decomming` / `Decommissioned`) and the
+  `monitoring_status` values, and state that "slowest" means highest latency.
 - **Pure arrays never collected on Kubernetes (0/25 "Authentication failed")** —
   `PureClient` connected to the bare array name (`https://psompa03b/…`), which
   only resolves where the resolver searches `corp.intranet` (the on-prem host).

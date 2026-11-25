@@ -579,7 +579,9 @@ def _example_scores(question: str) -> Optional[List[Tuple[str, float]]]:
                     texts.append(query_prefix() + ex); owners.append(it.name)
             _ex_vecs.update(key=key, vecs=embed(texts), owners=owners)
             logger.info("intent examples embedded: %d", len(texts))
-        q = embed([query_prefix() + question])[0]
+        # Examples are lower-case and the embedding is case-sensitive: "past EOSL"
+        # scored 0.76 vs 0.95 for "past eosl", so normalise before comparing.
+        q = embed([query_prefix() + " ".join(question.lower().split())])[0]
         best: Dict[str, float] = {}
         for owner, v in zip(_ex_vecs["owners"], _ex_vecs["vecs"]):
             s = cosine(q, v)

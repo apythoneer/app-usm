@@ -104,9 +104,10 @@ TABLE {SCHEMA}.messages — Alert/event history
 
 TABLE {SCHEMA}.managed_arrays — Array inventory + lifecycle, synced nightly from the CMS/DimStorageFinance source of record. USE THIS for model/site/support/EOSL questions ("which arrays are past EOSL", "arrays by site", "what goes out of support this year").
   Columns: array_name NVARCHAR(255) [unique], vendor, group_label NVARCHAR(100) [cloud/site tag],
-  enabled BIT [0 = excluded from collection], monitoring_status NVARCHAR(50),
+  enabled BIT [0 = excluded from collection],
+  monitoring_status NVARCHAR(50) ['active'|'no_collector'|'decomming'|'decommissioned'|'unknown'],
   model NVARCHAR, site NVARCHAR, technology NVARCHAR, category NVARCHAR, usage_label NVARCHAR,
-  disposition NVARCHAR ['Current' = active asset], oem NVARCHAR, support_provider NVARCHAR,
+  disposition NVARCHAR ['Current' = active | 'Decomming' | 'Decommissioned' — no other values], oem NVARCHAR, support_provider NVARCHAR,
   array_serial NVARCHAR, array_fqdn NVARCHAR, mgmt_ip NVARCHAR,
   install_date DATE, eosl_date DATE [end of service life], maint_end_date DATE,
   dim_sync_at DATETIME2

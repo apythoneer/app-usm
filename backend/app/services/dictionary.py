@@ -56,7 +56,7 @@ settings = get_settings()
 SCHEMA = settings.db_schema
 
 # Bump when the seed below changes so seed_dictionary() re-materialises the table.
-DICTIONARY_VERSION = "2026-10-20.1"
+DICTIONARY_VERSION = "2026-11-25.1"
 
 
 @dataclass(frozen=True)
@@ -109,10 +109,10 @@ _DICTIONARY: List[Entry] = [
           "Current write operations per second.",
           unit="IOPS", synonyms=("write iops", "writes", "write ops")),
     Entry("metrics_current", "read_latency_us",
-          "Current average read latency.",
+          "Current average read latency. Higher = slower: 'slowest' means ORDER BY this DESC.",
           unit="microseconds", synonyms=("read latency", "latency", "response time")),
     Entry("metrics_current", "write_latency_us",
-          "Current average write latency.",
+          "Current average write latency. Higher = slower: 'slowest' means ORDER BY this DESC.",
           unit="microseconds", synonyms=("write latency", "latency")),
     Entry("metrics_current", "vendor",
           "Storage vendor / platform code for the array.",
@@ -180,7 +180,8 @@ _DICTIONARY: List[Entry] = [
           "USE THIS for model/site/support/EOSL questions.",
           synonyms=("inventory", "lifecycle", "asset", "model", "site", "support", "fleet")),
     Entry("managed_arrays", "eosl_date",
-          "End-of-service-life date for the array. Use for 'past EOSL', 'out of support'.",
+          "End-of-service-life date for the array. 'Past EOSL' / 'out of support' = "
+          "eosl_date < GETDATE() AND disposition = 'Current' (there is no 'EOSL' disposition).",
           unit="date", synonyms=("eosl", "end of service life", "out of support",
                                  "end of life", "eol", "support end")),
     Entry("managed_arrays", "site",
@@ -193,8 +194,16 @@ _DICTIONARY: List[Entry] = [
           "Cloud/site grouping tag (CSP or on-prem site).",
           synonyms=("csp", "cloud", "aws", "azure", "gcp", "on-prem", "group")),
     Entry("managed_arrays", "disposition",
-          "Asset disposition; 'Current' = active asset.",
-          synonyms=("disposition", "active", "current", "decommissioned", "retired")),
+          "Asset lifecycle state. Exact values: 'Current' (active asset), 'Decomming' (being "
+          "retired), 'Decommissioned' (retired). No other values exist — never 'Retired' or 'EOSL'.",
+          synonyms=("disposition", "active", "current", "decommissioned", "retired",
+                    "decomm", "decomming"),
+          examples="Current, Decomming, Decommissioned"),
+    Entry("managed_arrays", "monitoring_status",
+          "Whether SIP collects from the array. Exact values: 'active', 'no_collector' (inventory "
+          "only, no collector for that platform), 'decomming', 'decommissioned', 'unknown'.",
+          synonyms=("monitoring status", "monitored", "collected", "no collector"),
+          examples="active, no_collector, decomming"),
 
     # daily_stats --------------------------------------------------------------
     Entry("daily_stats", None,
