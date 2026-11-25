@@ -21,12 +21,27 @@ metadata:
     # without this, ingress-nginx force-redirects to https on every request (because
     # a tls host is set) and loops forever (ERR_TOO_MANY_REDIRECTS / 308).
     nginx.ingress.kubernetes.io/ssl-redirect: "false"
+# Hosts: orbits.* is the product address (renamed from SIP, 2026-11); sip.* only
+# redirects. Both are on the platform wildcard DNS + certificate, so no request is needed.
 spec:
   ingressClassName: nginx
   tls:
     - hosts:
+        - orbits.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
         - sip.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
   rules:
+    - host: orbits.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: usm-frontend
+                port:
+                  number: 8080
+    # Old name (SIP): kept so links and bookmarks still work. The frontend nginx
+    # answers every request on it with a 308 redirect to the same path on orbits.
     - host: sip.eks-cm-svcs-nonprod-ue2.aws.corp.intranet
       http:
         paths:

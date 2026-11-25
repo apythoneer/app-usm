@@ -56,7 +56,7 @@ settings = get_settings()
 SCHEMA = settings.db_schema
 
 # Bump when the seed below changes so seed_dictionary() re-materialises the table.
-DICTIONARY_VERSION = "2026-11-25.1"
+DICTIONARY_VERSION = "2026-11-25.2"
 
 
 @dataclass(frozen=True)
@@ -200,7 +200,7 @@ _DICTIONARY: List[Entry] = [
                     "decomm", "decomming"),
           examples="Current, Decomming, Decommissioned"),
     Entry("managed_arrays", "monitoring_status",
-          "Whether SIP collects from the array. Exact values: 'active', 'no_collector' (inventory "
+          "Whether ORBITS collects from the array. Exact values: 'active', 'no_collector' (inventory "
           "only, no collector for that platform), 'decomming', 'decommissioned', 'unknown'.",
           synonyms=("monitoring status", "monitored", "collected", "no collector"),
           examples="active, no_collector, decomming"),

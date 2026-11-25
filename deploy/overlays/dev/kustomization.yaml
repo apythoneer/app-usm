@@ -7,7 +7,7 @@ namespace: storage-mgt-tools-na-dev
 
 resources:
   - ../../base
-  # stable public URL: sip.eks-cm-wklds-nonprod-ue2.aws.corp.intranet (nginx class)
+  # stable public URL: orbits.eks-cm-svcs-nonprod-ue2.aws.corp.intranet (nginx class; sip.* redirects)
   - ingress.yaml
 
 patches:

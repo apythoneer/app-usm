@@ -13,6 +13,14 @@ data:
       root /usr/share/nginx/html;
       index index.html;
 
+      # Renamed SIP -> ORBITS (2026-11): the old sip.<domain> host still reaches this
+      # pod (it stays on the ingress) and is sent to the same path on orbits.<domain>.
+      # 308, not 301, so API clients keep their method and body. TLS ends at the edge
+      # ELB, so the scheme is always https. Probes use the pod IP, so they never match.
+      if ($host ~* ^sip\.(.+)$) {
+        return 308 https://orbits.$1$request_uri;
+      }
+
       location /assets/ {
         try_files $uri =404;
         expires 1y;

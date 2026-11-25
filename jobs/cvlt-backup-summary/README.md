@@ -1,7 +1,7 @@
 # cvlt-backup-summary
 
 Standalone nightly job (PJ's `dataDogIncidentManagement.py`), containerised and
-run as a Kubernetes `CronJob`. **Kept separate from the SIP app**: own image
+run as a Kubernetes `CronJob`. **Kept separate from the ORBITS app**: own image
 (`ghcr.io/apythoneer/cvlt-backup-summary`), own CI (`.github/workflows/ci-cvlt-backup.yml`,
 path-filtered), own manual deploy (`.github/workflows/deploy-cvlt-backup.yml`, reuses the
 `eks-prod` runner), own manifests here. It is **not** wired into `deploy/overlays/*`.
@@ -61,7 +61,7 @@ restarts, so:
 ## Staged — what gates "fire it up"
 The CronJob ships with `suspend: true`. Prod lives on AWS EKS `c-5zsl4`, whose
 Rancher API is reachable **only from the in-cluster `eks-prod` runner** (a pod in
-the dev cluster — the nonprod EC2 and laptops cannot reach it, same as SIP's
+the dev cluster — the nonprod EC2 and laptops cannot reach it, same as ORBITS's
 `deploy-prod.yml`). So activation goes through the `deploy-cvlt-backup.yml`
 workflow, not hand-run kubectl.
 

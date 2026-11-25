@@ -1,4 +1,4 @@
-# Backup Operations on SIP — build log, findings & runbook
+# Backup Operations on ORBITS — build log, findings & runbook
 
 _Last updated 2026-11-02._
 
@@ -13,7 +13,7 @@ into the per-service READMEs and the handoff doc linked below.
 
 ## 1. What exists now
 
-Two standalone services, both **separate from the SIP app**, both in the prod
+Two standalone services, both **separate from the ORBITS app**, both in the prod
 namespace `storage-mgt-tools-na`:
 
 | Service | What it does | Shape |
@@ -146,8 +146,8 @@ the PVC is the living source of truth. A stale seed fails hard (401 on report �
 | 3 | Who else writes to `cvlt_backupjobsummary` (shared table ownership)? | ◻ Open — likely `storage-ops`. |
 | 4 | Confirm 7am–3pm **Mountain** / hourly cadence. | ✅ Mountain confirmed (presence card). |
 | 5 | Commvault access/refresh token TTLs + refresh-token expiry on idle? | ◻ Open — affects the renewal loop over quiet periods. |
-| 6 | Egress plan/timeline for PJ's internal health/logging APIs (so SIP can consume them)? | ◻ Open. |
-| 7 | How should SIP read backup data — DB view, our read-only API, or PJ's APIs post-egress? | ◻ Open — drives the next build. |
+| 6 | Egress plan/timeline for PJ's internal health/logging APIs (so ORBITS can consume them)? | ◻ Open. |
+| 7 | How should ORBITS read backup data — DB view, our read-only API, or PJ's APIs post-egress? | ◻ Open — drives the next build. |
 | 8 | A read-only DB user/role on `stormart` (vs reusing the pipeline's read-write cred)? | ◻ Open. |
 | 9 | Canonical client field (`client` vs `client_name`) + full `job_status` value set + meaning of `Committed`/`Partial Success`? | ◻ Open — `client_name` cardinality suggests it's not the UI client. |
 

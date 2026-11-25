@@ -1,11 +1,11 @@
 # backup-ops-mockup
 
-A standalone, on-network **Backup Operations** view for SIP — the first Backup
+A standalone, on-network **Backup Operations** view for ORBITS — the first Backup
 Operations capability for the platform. It exists because the design artifact lives
 on `claude.ai`, which the corp network blocks; this serves the same view from a
 corporate URL.
 
-It is **not** the SIP app and not wired into `deploy/overlays/*`. One small
+It is **not** the ORBITS app and not wired into `deploy/overlays/*`. One small
 read-only web pod: a Python stdlib HTTP server (`app.py`) that serves one page and a
 JSON API over `stormart.cvlt_backupjobsummary`.
 
@@ -45,7 +45,7 @@ status), so all numbers are live.
   pod before finishing.
 - **URL:** <https://backup-ops.eks-cm-svcs-prod-ue2.aws.corp.intranet> — on the
   `*.eks-cm-svcs-prod-ue2.aws.corp.intranet` wildcard, TLS from the default ingress
-  controller cert (same recipe as the SIP ingress).
+  controller cert (same recipe as the ORBITS ingress).
 
 ```
 # after CI has built an image from main:

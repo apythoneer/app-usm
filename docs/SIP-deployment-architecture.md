@@ -1,6 +1,6 @@
-# SIP — Deployment Architecture & CI/CD Design Sheet
+# ORBITS — Deployment Architecture & CI/CD Design Sheet
 
-_Design of record for how SIP is built, deployed and collects data across CSPs. 2026-10-12._
+_Design of record for how ORBITS is built, deployed and collects data across CSPs. 2026-10-12._
 _Supersedes the environment model in `reports/SIP-Project-Summary.md` (which incorrectly labelled AKS as "prod")._
 
 ---

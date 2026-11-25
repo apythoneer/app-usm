@@ -1,4 +1,4 @@
-# Public entry for the showcase. Same recipe as the SIP ingress:
+# Public entry for the showcase. Same recipe as the ORBITS ingress:
 #  - host on the AWS PROD SERVICES cluster wildcard (cm-svcs-prod-ue2) — that is
 #    where stormart is reachable, so the app runs there; the wklds wildcard points
 #    at a different cluster and 404s.

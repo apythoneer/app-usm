@@ -1,7 +1,7 @@
 # Backup Operations showcase — one read-only web pod (serves the page + /api/jobs
 # over stormart). Runs in the PROD namespace next to cvlt-backup-summary so it
 # reuses that pipeline's Postgres creds (mounted read-only) and proven network path.
-# Deliberately separate from the SIP app and from the cvlt-backup CronJob.
+# Deliberately separate from the ORBITS app and from the cvlt-backup CronJob.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

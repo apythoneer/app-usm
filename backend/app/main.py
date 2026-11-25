@@ -101,7 +101,7 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
     description=(
-        "Storage Intelligence Platform — vendor-agnostic monitoring for "
+        "ORBITS (Observability & Reporting for Backup, Infrastructure, Telemetry & Storage) — vendor-agnostic monitoring for "
         "Pure Storage, NetApp, Commvault and more."
     ),
     # Swagger/ReDoc are a self-documenting map of every (unauthenticated) mutating

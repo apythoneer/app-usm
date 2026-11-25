@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **SIP — Storage Intelligence Platform (powered by USM)** are
+All notable changes to **ORBITS (formerly SIP) — powered by USM** are
 recorded here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 (see [docs/VERSIONING.md](docs/VERSIONING.md)).
@@ -145,6 +145,17 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stale seed pair fails Commvault auth (401 on report, 500/errorCode 101 on renew).
 
 ### Changed
+- **Renamed SIP → ORBITS** (Observability & Reporting for Backup, Infrastructure,
+  Telemetry & Storage). New name in the UI (logo, header, page title, dashboard), the
+  API title, `APP_NAME`, the README and the docs. New addresses on the platform wildcard
+  DNS and certificate: `orbits.eks-cm-svcs-nonprod-ue2.aws.corp.intranet` (dev) and
+  `orbits.eks-cm-svcs-prod-ue2.aws.corp.intranet` (prod). The old `sip.…` hosts stay on
+  the ingress and the frontend nginx answers them with a **308 redirect** to the same
+  path on `orbits.…`, so bookmarks, links and API clients keep working (308 keeps POST
+  bodies). Internal names are unchanged: `usm-*` images/services, the `USM` schema,
+  namespaces, `app.kubernetes.io/part-of: sip` labels (Deployment selectors can't
+  change in place), KeePass entries and the `sip_` API-key prefix. The dev nginx config
+  also gains the unbuffered `/api/v1/chat/stream` location it was missing.
 - **Storage AI: answers finish inside the 120 s timeout** — free-form Text-to-SQL
   skips the SQL self-correction call after `CHAT_FIX_BUDGET_S` (50 s) and the LLM
   narration after `CHAT_NARRATE_BUDGET_S` (80 s), instead of running on after the
