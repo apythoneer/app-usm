@@ -292,6 +292,98 @@ def _busiest(p: Params) -> Result:
     return Result("\n".join(lines), len(rows))
 
 
+def _fleet_capacity(p: Params) -> Result:
+    args = (p.vendor,) if p.vendor else ()
+    r = _rows(f"""SELECT COUNT(*) AS arrays, SUM(CAST(mc.capacity_total AS FLOAT)) AS total,
+                         SUM(CAST(mc.capacity_used AS FLOAT)) AS used
+                  FROM {SCHEMA}.metrics_current mc WITH (NOLOCK) {_active_join()}
+                    AND mc.capacity_total > 0{' AND mc.vendor = ?' if p.vendor else ''}""", args)[0]
+    if not r["arrays"]:
+        return Result(f"No{_scope(p)} capacity data found.")
+    total, used = float(r["total"] or 0), float(r["used"] or 0)
+    pct = used / total * 100 if total else 0
+    return Result(f"Across {r['arrays']}{_scope(p)} arrays reporting capacity, {_tb(used)} of {_tb(total)} "
+                  f"is used ({pct:.1f}%), leaving {_tb(total - used)} free.", int(r["arrays"]))
+
+
+def _capacity_by_vendor(p: Params) -> Result:
+    rows = _rows(f"""SELECT mc.vendor, COUNT(*) AS arrays, SUM(CAST(mc.capacity_total AS FLOAT)) AS total,
+                            SUM(CAST(mc.capacity_used AS FLOAT)) AS used
+                     FROM {SCHEMA}.metrics_current mc WITH (NOLOCK) {_active_join()}
+                       AND mc.capacity_total > 0
+                     GROUP BY mc.vendor ORDER BY SUM(CAST(mc.capacity_total AS FLOAT)) DESC""")
+    if not rows:
+        return Result("No capacity data found.")
+    grand = sum(float(r["total"] or 0) for r in rows)
+    lines = ["Capacity by vendor (used of total, share of fleet capacity):"]
+    for r in rows:
+        total, used = float(r["total"] or 0), float(r["used"] or 0)
+        lines.append(f"• {_vname(r['vendor'])}: {_tb(used)} of {_tb(total)} ({used / total * 100 if total else 0:.1f}% used) "
+                     f"across {r['arrays']} arrays, {total / grand * 100 if grand else 0:.1f}% of capacity")
+    return Result("\n".join(lines), len(rows))
+
+
+def _peak_iops(p: Params) -> Result:
+    days, n = min(p.days or 1, 90), p.n or 5
+    where, args = ["collected_at >= DATEADD(DAY, -?, GETDATE())"], [days]
+    if p.array:
+        where.append("array_name = ?"); args.append(p.array)
+    if p.vendor:
+        where.append("vendor = ?"); args.append(p.vendor)
+    rows = _rows(f"""SELECT TOP {int(n)} array_name, vendor,
+                            MAX(ISNULL(read_iops, 0) + ISNULL(write_iops, 0)) AS peak,
+                            AVG(ISNULL(read_iops, 0) + ISNULL(write_iops, 0)) AS avg_iops
+                     FROM {SCHEMA}.metrics_history WITH (NOLOCK) WHERE {' AND '.join(where)}
+                     GROUP BY array_name, vendor
+                     ORDER BY MAX(ISNULL(read_iops, 0) + ISNULL(write_iops, 0)) DESC""", tuple(args))
+    span = "24 hours" if days == 1 else f"{days} days"
+    rows = [r for r in rows if (r["peak"] or 0) > 0]
+    if not rows:
+        return Result(f"No IOPS samples{' for ' + p.array if p.array else _scope(p)} in the last {span}"
+                      f"{' (this platform may not report performance)' if p.array else ''}.")
+    if p.array:
+        r = rows[0]
+        return Result(f"{p.array} peaked at {int(r['peak']):,} IOPS in the last {span} "
+                      f"(average {int(r['avg_iops'] or 0):,}).", 1)
+    lines = [f"Highest peak IOPS{_scope(p)} in the last {span}:"]
+    lines += [f"{i}. {r['array_name']} ({_vname(r['vendor'])}): peak {int(r['peak']):,} IOPS, "
+              f"average {int(r['avg_iops'] or 0):,}" for i, r in enumerate(rows, 1)]
+    return Result("\n".join(lines), len(rows))
+
+
+def _uptime(p: Params) -> Result:
+    n = p.n or 10
+    where, args = "", ()
+    if p.array:
+        where, args = " AND mc.array_name = ?", (p.array,)
+    elif p.vendor:
+        where, args = " AND mc.vendor = ?", (p.vendor,)
+    rows = _rows(f"""SELECT mc.array_name, mc.vendor, mc.uptime_seconds, mc.last_reboot
+                     FROM {SCHEMA}.metrics_current mc WITH (NOLOCK) {_active_join()}{where}
+                     ORDER BY CASE WHEN mc.uptime_seconds > 0 THEN 0 ELSE 1 END, mc.uptime_seconds""", args)
+    have = [r for r in rows if (r["uptime_seconds"] or 0) > 0]
+    if not have:
+        return Result(f"No uptime is reported{' for ' + p.array if p.array else _scope(p)} — today only Pure "
+                      f"and NetApp collectors report uptime.")
+
+    def fmt(s):
+        d, rem = divmod(int(s), 86400)
+        return f"{d}d {rem // 3600}h"
+
+    if p.array:
+        r = have[0]
+        reboot = f", last reboot {r['last_reboot']}" if r.get("last_reboot") else ""
+        return Result(f"{p.array} has been up {fmt(r['uptime_seconds'])}{reboot}.", 1)
+    lines = [f"Uptime for {len(have)} of {len(rows)}{_scope(p)} arrays (only Pure and NetApp report it). "
+             f"Most recently restarted first:"]
+    lines += [f"• {r['array_name']} ({_vname(r['vendor'])}): up {fmt(r['uptime_seconds'])}"
+              f"{', last reboot ' + str(r['last_reboot'])[:16] if r.get('last_reboot') else ''}" for r in have[:n]]
+    if len(have) > n:
+        longest = have[-1]
+        lines.append(f"…longest running: {longest['array_name']} at {fmt(longest['uptime_seconds'])}.")
+    return Result("\n".join(lines), len(have))
+
+
 def _eosl(p: Params) -> Result:
     upcoming = bool(re.search(r"\b(next|upcoming|coming|soon|will|this year|going|due|approaching)\b", p.text))
     args: list = []
@@ -517,6 +609,23 @@ INTENTS: List[Intent] = [
            ("which arrays are the busiest", "highest iops arrays right now", "top arrays by io load",
             "which arrays are doing the most operations"),
            _busiest, ttl=60),
+    Intent("fleet_capacity", "Total capacity used / free across all arrays (or a vendor), as TB and percent.",
+           ("how much total storage capacity is being utilized", "what is our total capacity and how much is used",
+            "fleet wide used capacity", "how much free space do we have overall", "total tb used across all arrays"),
+           _fleet_capacity, ttl=300),
+    Intent("capacity_by_vendor", "Used and total capacity broken down by vendor.",
+           ("show me capacity breakdown by vendor", "capacity per vendor", "how much storage does each vendor have",
+            "used vs total capacity by platform"),
+           _capacity_by_vendor, ttl=300),
+    Intent("peak_iops", "Highest (peak) IOPS over a recent period, fleet-wide or for one array.",
+           ("which array had the highest iops in the last 24 hours", "peak iops this week",
+            "peak iops on array 09rw last week", "highest io load in the last 7 days",
+            "max iops by array over the past month"),
+           _peak_iops, ttl=300),
+    Intent("uptime", "How long arrays have been up since their last reboot (uptime), fleet-wide or one array.",
+           ("show me uptime for all arrays", "which arrays rebooted recently", "how long has 2bja been up",
+            "when was the last reboot of the arrays", "array uptime"),
+           _uptime, ttl=300),
     Intent("eosl", "Active arrays past, or coming up on, end of service life (EOSL / out of support).",
            ("which arrays are past eosl", "arrays out of support", "what goes end of life this year",
             "which arrays reach eosl in the next 6 months", "list arrays past end of service life",
@@ -557,6 +666,8 @@ INTENTS: List[Intent] = [
 ]
 _BY_NAME = {i.name: i for i in INTENTS}
 INTENT_NAMES = frozenset(_BY_NAME)
+_CURRENT_ONLY = frozenset({"busiest", "latency", "fullest", "most_free", "unhealthy",
+                           "data_reduction", "array_summary"})
 
 
 # ── Routing ───────────────────────────────────────────────────────────────────
@@ -716,6 +827,15 @@ def answer(question: str, svc=None) -> Dict[str, Any]:
         return {"handled": False, **info}
     it = _BY_NAME[r.intent]
     p = extract_params(question)
+    # These intents report the CURRENT value. A stated period ("this week",
+    # "yesterday") means the user wants history: busiest -> peak IOPS over that
+    # period; the rest have no history answer here, so Text-to-SQL takes it.
+    if p.days and it.name in _CURRENT_ONLY:
+        if it.name == "busiest":
+            it = _BY_NAME["peak_iops"]
+        else:
+            logger.info("intent: %s is current-only but question names %d days -> text-to-sql", it.name, p.days)
+            return {"handled": False, **info}
     label = (f"-- vetted query · intent={it.name} · route={r.how}"
              f"{f'({r.score:.2f})' if r.score else ''}"
              + "".join(f" · {k}={v}" for k, v in (("array", p.array), ("vendor", p.vendor),
