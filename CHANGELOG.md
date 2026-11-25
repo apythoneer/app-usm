@@ -12,6 +12,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Storage AI: embedding retrieval for the data dictionary (dev)** — the chat picks
+  the dictionary entries it adds to the prompt by meaning, not just keywords, using
+  `nomic-embed-text` on the sandbox Ollama. New `CHAT_RETRIEVAL`
+  (`keyword` | `embedding` | `hybrid`), `CHAT_HYBRID_WEIGHT`, `CHAT_EMBED_TIMEOUT`;
+  embedding modes fall back to keyword automatically. On a 34-question eval
+  (`backend/eval/`), recall went from 59% (keyword) to 95% (hybrid), and from 21%
+  to 89% on paraphrased questions. Enabled on dev only (`CHAT_USE_DICTIONARY=true`,
+  `hybrid`); base/prod defaults unchanged. New **Ollama model bundle** workflow
+  brings models to the sandbox, which can't reach the Ollama registry.
 - **Storage AI on Kubernetes (dev)** — the chat assistant is enabled on dev k8s and
   uses the sandbox LLM (`qwen2.5:3b`) until cloud compute exists. A new authenticated
   proxy (`docker/ollama-proxy/`) fronts the sandbox Ollama on `:11435`: bearer token

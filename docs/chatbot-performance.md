@@ -38,6 +38,24 @@ Embed the dictionary entries **and** a library of golden `(question → vetted S
 - Embeddings run **locally** via Ollama (e.g. `nomic-embed-text`) — no egress, consistent with chat being local-only.
 - **Dependency:** pgvector = Postgres. SIP is on SQL Server today, so this rides on the **SCPSB-1022 cutover to `stormart01p`**. Don't block items 1/3/4 on it — do the dictionary + views now, light up vector retrieval after the DB move.
 
+**Status 2026-11-24 — dictionary retrieval by embeddings is live on dev, no pgvector needed yet.**
+The dictionary is only 34 entries, so `dictionary.py` embeds them once per process (in memory)
+and embeds each question with `nomic-embed-text` on the sandbox Ollama (~0.06–0.15 s).
+`CHAT_RETRIEVAL=hybrid` blends cosine similarity with the keyword score (weight 0.6).
+
+| Retrieval eval (`backend/eval/dictionary_retrieval.json`, k=8) | direct (17) | paraphrase (17) | all |
+|---|---|---|---|
+| keyword | 95% | 21% | 59% |
+| embedding | 100% | 89% | 95% |
+| **hybrid 0.6** | **100%** | **89%** | **95%** |
+
+End-to-end spot check (6 paraphrased questions, SQL generation, sandbox CPU):
+dictionary off → 2 SQL errors, 1 correct answer; hybrid dictionary on → 0 errors, 3 correct
+answers (+1 that ran but sorted the wrong way);
+**cost ≈ +9 s per question** (longer prompt). Remaining misses are curation: real `disposition`
+values aren't in the dictionary, so the model guesses (`'Retired'`, `'Expired'`).
+pgvector becomes worth it when the golden-query library (item 3) makes the corpus large.
+
 ## 3. Golden-query library + curated views  (accuracy *and* latency)
 
 Most questions cluster into a few intents (capacity by X, top-N by util, alerts by severity, host/volume lookup). For each:

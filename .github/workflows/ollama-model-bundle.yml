@@ -1,0 +1,62 @@
+name: Ollama model bundle
+
+# Corp networks can't reach the Ollama registry (registry.ollama.ai / ollama.com
+# are web-filtered), so new models for the sandbox Ollama are fetched here, on a
+# GitHub-hosted runner, and handed over as a workflow artifact:
+#   models/manifests/registry.ollama.ai/library/<model>/<tag>  +  models/blobs/sha256-*
+# Load it on the sandbox with the steps in docker/ollama-proxy/README.md
+# ("Add a model"). Nothing is pushed anywhere; the artifact expires after 7 days.
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Ollama model to bundle (name:tag)"
+        required: true
+        default: "nomic-embed-text:latest"
+  push:
+    paths:
+      - .github/workflows/ollama-model-bundle.yml
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    env:
+      MODEL: ${{ github.event.inputs.model || 'nomic-embed-text:latest' }}
+      OLLAMA_IMAGE: ollama/ollama:0.21.2   # match the sandbox (ollama --version)
+    steps:
+      - name: Start Ollama
+        run: |
+          mkdir -p "$RUNNER_TEMP/ollama"
+          docker run -d --name ollama -v "$RUNNER_TEMP/ollama:/root/.ollama" "$OLLAMA_IMAGE" \
+            || docker run -d --name ollama -v "$RUNNER_TEMP/ollama:/root/.ollama" ollama/ollama:latest
+          for i in $(seq 1 30); do docker exec ollama ollama list >/dev/null 2>&1 && break; sleep 2; done
+          docker exec ollama ollama --version
+
+      - name: Pull ${{ env.MODEL }}
+        run: |
+          docker exec ollama ollama pull "$MODEL"
+          docker exec ollama ollama list
+          docker exec ollama ollama show "$MODEL" | head -20
+
+      - name: Package
+        id: pkg
+        run: |
+          safe=$(echo "$MODEL" | tr ':/' '__')
+          sudo tar -C "$RUNNER_TEMP/ollama" -cf "ollama-model-$safe.tar" models
+          sudo chown "$(id -u)" "ollama-model-$safe.tar"
+          tar -tvf "ollama-model-$safe.tar"
+          sha256sum "ollama-model-$safe.tar" | tee "ollama-model-$safe.tar.sha256"
+          echo "name=ollama-model-$safe" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pkg.outputs.name }}
+          path: |
+            ${{ steps.pkg.outputs.name }}.tar
+            ${{ steps.pkg.outputs.name }}.tar.sha256
+          retention-days: 7
+          compression-level: 0
