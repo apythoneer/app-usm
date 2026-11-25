@@ -12,6 +12,15 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Storage AI: 👍/👎 feedback that teaches the assistant** — every answer is logged
+  (new additive `USM.chat_log`, with how it was routed) and gets 👍/👎 buttons. After
+  a 👎 the user can pick the question type they wanted. That phrasing is saved
+  (`USM.chat_intent_examples`), so the next time it's answered directly with no model
+  change. A bare 👎 is only recorded. Picking another type, or "none of these", stops
+  that phrasing from routing to the wrong type again. New API: `GET /chat/intents`,
+  `POST /chat/feedback`, `GET /chat/feedback?only=down|fallthrough` (review misses),
+  `GET /chat/examples` and `DELETE /chat/examples/{id}` (retire a learned phrasing).
+  Chat responses now include `id` and `route`.
 - **Storage AI: instant answers for common questions (dev)** — a new intent router
   (`app/services/chat_intents.py`) answers 16 common question types with vetted
   queries and templated answers instead of free-form Text-to-SQL. Types: fastest

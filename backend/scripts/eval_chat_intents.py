@@ -89,7 +89,7 @@ def main() -> int:
         print(f" {tag:5s} {dt:5.1f}s {r.how:9s} {r.score:.2f} -> {r.intent:16s} expect {c['expect']:16s} | {c['q']}")
         if args.run and r.intent != "other":
             res = ci.answer(c["q"], svc)
-            print("        " + (res["answer"] if res else "None").replace("\n", "\n        ")[:600])
+            print("        " + (res.get("answer") or "(not handled)").replace("\n", "\n        ")[:600])
     lat.sort()
     print(f"\nright {right}/{len(cases)}, WRONG intent {wrong}, fell through {fall}; "
           f"routing latency p50 {lat[len(lat) // 2]:.1f}s p95 {lat[int(len(lat) * 0.95)]:.1f}s")

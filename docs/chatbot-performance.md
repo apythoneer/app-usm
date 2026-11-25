@@ -87,6 +87,19 @@ worse than a fall-back, so the model only confirms. Most fall-backs are paraphra
 each intent's examples from real questions that fall through: the logs show
 `intent: other (best …)` for every one.
 
+**Feedback loop (2026-11-25).** Every answer is logged in `USM.chat_log` (question, route,
+score, timing, rating). In the chat UI:
+- 👍 on a borderline-routed answer → the phrasing becomes an example, so it routes instantly next time.
+- 👎 → "What were you looking for?" Picking a question type adds the phrasing to that type
+  (and blocks it from the type that answered). "None of these" only blocks it. A bare 👎
+  is recorded and nothing else.
+
+Learned phrasings live in `USM.chat_intent_examples`, are re-read every 2 min per process,
+and are merged with the built-in examples. Review and clean-up:
+`GET /api/v1/chat/feedback?only=fallthrough` (what went to Text-to-SQL),
+`?only=down`, `GET /api/v1/chat/examples`, `DELETE /api/v1/chat/examples/{id}`.
+👍 on Text-to-SQL answers is recorded as the future golden-query / semantic-cache source.
+
 ## 3. Golden-query library + curated views  (accuracy *and* latency)
 
 Most questions cluster into a few intents (capacity by X, top-N by util, alerts by severity, host/volume lookup). For each:

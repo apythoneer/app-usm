@@ -1033,6 +1033,53 @@ def init_database() -> None:
         """)
 
         # ------------------------------------------------------------------
+        # chat_log + chat_intent_examples — Storage AI feedback loop (additive).
+        # chat_log: one row per answered question with how it was routed and
+        # the user's 👍/👎. chat_intent_examples: phrasings learned from that
+        # feedback, merged into the intent router's built-in examples
+        # (app/services/chat_feedback.py).
+        # ------------------------------------------------------------------
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.tables
+                WHERE name='chat_log' AND schema_id = SCHEMA_ID('{SCHEMA}')
+            )
+            CREATE TABLE {SCHEMA}.chat_log (
+                id            BIGINT IDENTITY(1,1) PRIMARY KEY,
+                asked_at      DATETIME2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                question      NVARCHAR(1000) NOT NULL,
+                route         NVARCHAR(50)  NULL,   -- intent name | sql | forecast
+                route_how     NVARCHAR(30)  NULL,   -- embedding | llm-verify | ...
+                route_score   FLOAT         NULL,
+                sql_text      NVARCHAR(MAX) NULL,
+                answer        NVARCHAR(4000) NULL,
+                row_count     INT           NULL,
+                duration_ms   INT           NULL,
+                error         NVARCHAR(1000) NULL,
+                rating        SMALLINT      NULL,   -- 1 = 👍, -1 = 👎
+                rated_at      DATETIME2     NULL,
+                wanted_intent NVARCHAR(50)  NULL,   -- user's pick after 👎 ('none' = no fit)
+                comment       NVARCHAR(1000) NULL
+            )
+        """)
+        cursor.execute(f"""
+            IF NOT EXISTS (
+                SELECT * FROM sys.tables
+                WHERE name='chat_intent_examples' AND schema_id = SCHEMA_ID('{SCHEMA}')
+            )
+            CREATE TABLE {SCHEMA}.chat_intent_examples (
+                id           INT IDENTITY(1,1) PRIMARY KEY,
+                question     NVARCHAR(1000) NOT NULL,
+                intent       NVARCHAR(50)  NOT NULL,
+                polarity     SMALLINT      NOT NULL,  -- 1 = route here, -1 = never route here
+                source       NVARCHAR(30)  NOT NULL,  -- thumbs_up | thumbs_down | user_pick | admin
+                chat_log_id  BIGINT        NULL,
+                active       BIT           NOT NULL DEFAULT 1,
+                created_at   DATETIME2     NOT NULL DEFAULT SYSUTCDATETIME()
+            )
+        """)
+
+        # ------------------------------------------------------------------
         # Indexes — only created if missing
         # ------------------------------------------------------------------
         indexes = [
