@@ -795,7 +795,23 @@ class Route:
     candidates: List[str] = field(default_factory=list)
 
 
+def _apply_period_rule(question: str, r: "Route") -> "Route":
+    """Current-value intents don't answer questions about a past period
+    ("this week", "yesterday"): busiest -> peak_iops over that period; the rest
+    have no history answer here, so they fall through to Text-to-SQL."""
+    if r.intent not in _CURRENT_ONLY or not extract_params(question).days:
+        return r
+    if r.intent == "busiest":
+        return Route("peak_iops", r.how + "+period", r.score, r.candidates)
+    logger.info("intent: %s is current-only but the question names a period -> text-to-sql", r.intent)
+    return Route("other", r.how + "+period", r.score, r.candidates)
+
+
 def route(question: str, svc=None) -> Route:
+    return _apply_period_rule(question, _route(question, svc))
+
+
+def _route(question: str, svc=None) -> Route:
     scores = _example_scores(question)
     if not scores:  # no embeddings (or every intent blocked) -> Text-to-SQL
         return Route("other", "none")
@@ -827,15 +843,6 @@ def answer(question: str, svc=None) -> Dict[str, Any]:
         return {"handled": False, **info}
     it = _BY_NAME[r.intent]
     p = extract_params(question)
-    # These intents report the CURRENT value. A stated period ("this week",
-    # "yesterday") means the user wants history: busiest -> peak IOPS over that
-    # period; the rest have no history answer here, so Text-to-SQL takes it.
-    if p.days and it.name in _CURRENT_ONLY:
-        if it.name == "busiest":
-            it = _BY_NAME["peak_iops"]
-        else:
-            logger.info("intent: %s is current-only but question names %d days -> text-to-sql", it.name, p.days)
-            return {"handled": False, **info}
     label = (f"-- vetted query · intent={it.name} · route={r.how}"
              f"{f'({r.score:.2f})' if r.score else ''}"
              + "".join(f" · {k}={v}" for k, v in (("array", p.array), ("vendor", p.vendor),
