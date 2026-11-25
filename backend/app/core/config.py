@@ -235,6 +235,25 @@ class Settings(BaseSettings):
     chat_embed_timeout: float = Field(default=15.0, alias="CHAT_EMBED_TIMEOUT")
     ollama_embed_model: str = Field(default="nomic-embed-text", alias="OLLAMA_EMBED_MODEL")
 
+    # Intent router (app/services/chat_intents.py): common questions are answered
+    # by vetted queries + templated answers instead of free-form Text-to-SQL.
+    # Routing = embedding similarity to each intent's example questions:
+    #   >= ACCEPT (and MARGIN ahead of the runner-up) -> that intent, no LLM call
+    #   >= CONSIDER -> the LLM picks among the top candidates or "other"
+    #   otherwise / "other" -> Text-to-SQL as before. OFF by default.
+    chat_intent_router: bool = Field(default=False, alias="CHAT_INTENT_ROUTER")
+    chat_intent_accept: float = Field(default=0.82, alias="CHAT_INTENT_ACCEPT")
+    chat_intent_consider: float = Field(default=0.62, alias="CHAT_INTENT_CONSIDER")
+    chat_intent_margin: float = Field(default=0.03, alias="CHAT_INTENT_MARGIN")
+    # verify | choose | off — what the LLM does in the borderline band (see chat_intents.py)
+    chat_intent_llm: str = Field(default="verify", alias="CHAT_INTENT_LLM")
+    # Time budget for the free-form path, so a request finishes inside the 120s
+    # ingress timeout instead of running on after the client has given up:
+    # skip the SQL self-correction call past FIX_BUDGET seconds, and the LLM
+    # narration (use the plain row rendering) past NARRATE_BUDGET seconds.
+    chat_fix_budget_s: float = Field(default=50.0, alias="CHAT_FIX_BUDGET_S")
+    chat_narrate_budget_s: float = Field(default=80.0, alias="CHAT_NARRATE_BUDGET_S")
+
     # Partial-collection data-loss guard.
     #
     # Delete-then-insert collectors (hitachi/hpe/dell/oracle) DELETE an array's

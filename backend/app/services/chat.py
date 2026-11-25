@@ -641,6 +641,21 @@ class ChatService:
                 fc_result["model"] = self.model
                 return fc_result
 
+            # Common questions -> vetted query + templated answer (chat_intents.py).
+            # Single-turn only: follow-ups need the conversation, so they keep
+            # going through Text-to-SQL with context.
+            if settings.chat_intent_router and not context:
+                try:
+                    from app.services import chat_intents
+                    routed = chat_intents.answer(question, self)
+                except Exception as e:  # assistive — fall through to Text-to-SQL
+                    logger.warning("intent router failed, using text-to-sql: %s", e)
+                    routed = None
+                if routed:
+                    result.update(routed)
+                    result["duration_ms"] = int((time.time() - start) * 1000)
+                    return result
+
             # Step 1: Generate SQL from the question
             sql = self._generate_sql(question, context)
             if not sql:
@@ -669,7 +684,16 @@ class ChatService:
                 sql_error = str(sql_err)
                 logger.warning(f"SQL execution failed, attempting self-correction: {sql_error}")
 
-            # Step 3b: If SQL failed, ask LLM to fix it
+            # Step 3b: If SQL failed, ask LLM to fix it — unless that second LLM
+            # call would push the request past the ingress timeout.
+            if sql_error and rows is None and time.time() - start > settings.chat_fix_budget_s:
+                logger.warning("SQL failed after %.0fs; skipping self-correction (budget %ss)",
+                               time.time() - start, settings.chat_fix_budget_s)
+                result["error"] = sql_error
+                result["answer"] = ("I couldn't write a working query for that in time. Try asking more "
+                                    "specifically, e.g. name the array, the metric and the time period.")
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
             if sql_error and rows is None:
                 fixed_sql = self._fix_sql(question, safe_sql, sql_error)
                 if fixed_sql:
@@ -696,8 +720,12 @@ class ChatService:
 
             result["rows"] = len(rows)
 
-            # Step 4: Format results into natural language
-            answer = self._format_answer(question, safe_sql, rows)
+            # Step 4: Format results into natural language (plain rendering if
+            # another LLM call would run past the ingress timeout).
+            if time.time() - start > settings.chat_narrate_budget_s:
+                answer = _render_rows(rows)
+            else:
+                answer = self._format_answer(question, safe_sql, rows)
             result["answer"] = answer
 
         except Exception as e:

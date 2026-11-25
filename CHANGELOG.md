@@ -12,6 +12,18 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 ## [Unreleased]
 
 ### Added
+- **Storage AI: instant answers for common questions (dev)** — a new intent router
+  (`app/services/chat_intents.py`) answers 16 common question types with vetted
+  queries and templated answers instead of free-form Text-to-SQL. Types: fastest
+  growing/shrinking arrays, volume growth on an array, fullest / most free, latency,
+  IOPS, EOSL, open alerts, unhealthy arrays, hosts or volumes on an array, data
+  reduction, array counts, arrays by site, one-array summary. Questions are matched
+  to example questions by embedding similarity. Borderline matches go to a tiny
+  LLM chooser, and anything else falls through to Text-to-SQL as before. The answer's
+  `sql` field shows `-- vetted query · intent=…`. "Which array is growing the most?"
+  went from a timeout to a few seconds. New settings `CHAT_INTENT_ROUTER` (off by
+  default, on in dev), `CHAT_INTENT_ACCEPT`, `CHAT_INTENT_CONSIDER`,
+  `CHAT_INTENT_MARGIN`. Routing eval: `backend/eval/chat_intents.json`.
 - **Storage AI: embedding retrieval for the data dictionary (dev)** — the chat picks
   the dictionary entries it adds to the prompt by meaning, not just keywords, using
   `nomic-embed-text` on the sandbox Ollama. New `CHAT_RETRIEVAL`
@@ -103,6 +115,13 @@ and the project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   stale seed pair fails Commvault auth (401 on report, 500/errorCode 101 on renew).
 
 ### Changed
+- **Storage AI: answers finish inside the 120 s timeout** — free-form Text-to-SQL
+  skips the SQL self-correction call after `CHAT_FIX_BUDGET_S` (50 s) and the LLM
+  narration after `CHAT_NARRATE_BUDGET_S` (80 s), instead of running on after the
+  client has given up and holding a chat slot. The sandbox Ollama now runs with
+  `OLLAMA_NUM_PARALLEL=2` and `OLLAMA_CONTEXT_LENGTH=8192`. The ~4.1k-token SQL
+  prompt had filled the 4k default, so the prompt cache never worked: reading the
+  prompt took 73 s cold and now takes 0.1–12 s cached.
 - **cvlt-backup-summary schedule moved to hourly daytime** — the CronJob now runs
   `0 7-15 * * *` in `America/Denver` (07:00–15:00 Mountain, 9 runs/day) instead of
   once at 13:00 UTC. Backups run overnight where failures are expected and

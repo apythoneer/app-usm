@@ -56,6 +56,37 @@ answers (+1 that ran but sorted the wrong way);
 values aren't in the dictionary, so the model guesses (`'Retired'`, `'Expired'`).
 pgvector becomes worth it when the golden-query library (item 3) makes the corpus large.
 
+**Status 2026-11-24 — where the time actually goes, and the intent router.**
+Measured on the sandbox (Xeon E5-2660 v3, AVX2, CPU only): the SQL prompt is ~4.1k tokens,
+read at ~56 tok/s = **73 s**, while writing the SQL is only ~10 s. It filled the 4k default
+context, so the prompt cache never worked. With `OLLAMA_CONTEXT_LENGTH=8192` and
+`OLLAMA_NUM_PARALLEL=2`, the same prompt is read in 0.1 s cached, or ~12 s when only the
+per-question tail changes.
+
+The bigger change is **not asking the model to write SQL for common questions**.
+`chat_intents.py` holds 16 vetted question types (growth, fullest, latency, EOSL, alerts,
+hosts/volumes on an array, …). The model, or just the embeddings, only *picks the type*.
+Parameters are parsed in code, the query is tested, and the answer is a template:
+
+1. embed the question → nearest intent examples; ≥ 0.82 with a 0.03 margin → answer (no LLM)
+2. 0.62–0.82 → `CHAT_INTENT_LLM=verify`: the LLM answers yes/no to "does this report answer
+   the question?" for the top candidate (JSON-schema output, ~2 s)
+3. otherwise / "no" → Text-to-SQL as before (with a time budget so it ends before 120 s)
+
+Routing eval (`backend/eval/chat_intents.json`, 52 held-out questions incl. 11 that must
+*not* route):
+
+| LLM in the borderline band | right | wrong | falls back to SQL | p50 / p95 |
+|---|---|---|---|---|
+| off (embeddings only) | 34 | 0 | 18 | 0.1 / 0.1 s |
+| **verify (default)** | **36** | **0** | 16 | 0.1 / 2.3 s |
+| choose among top 3 | 38 | 1 | 13 | 0.1 / 2.8 s |
+
+When we let the 3B model pick more aggressively, it made 7 wrong picks. A wrong vetted answer is
+worse than a fall-back, so the model only confirms. Most fall-backs are paraphrases, so grow
+each intent's examples from real questions that fall through: the logs show
+`intent: other (best …)` for every one.
+
 ## 3. Golden-query library + curated views  (accuracy *and* latency)
 
 Most questions cluster into a few intents (capacity by X, top-N by util, alerts by severity, host/volume lookup). For each:
