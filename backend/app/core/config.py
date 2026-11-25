@@ -251,6 +251,12 @@ class Settings(BaseSettings):
     # ingress timeout instead of running on after the client has given up:
     # skip the SQL self-correction call past FIX_BUDGET seconds, and the LLM
     # narration (use the plain row rendering) past NARRATE_BUDGET seconds.
+    # Similar-question cache for Text-to-SQL (app/services/chat_answer_cache.py):
+    # reuse a near-identical answer from the last TTL seconds, or re-run the SQL
+    # of a near-identical 👍-rated answer. OFF by default.
+    chat_answer_cache: bool = Field(default=False, alias="CHAT_ANSWER_CACHE")
+    chat_answer_cache_ttl_s: int = Field(default=900, alias="CHAT_ANSWER_CACHE_TTL_S")
+    chat_answer_cache_sim: float = Field(default=0.93, alias="CHAT_ANSWER_CACHE_SIM")
     chat_fix_budget_s: float = Field(default=50.0, alias="CHAT_FIX_BUDGET_S")
     chat_narrate_budget_s: float = Field(default=80.0, alias="CHAT_NARRATE_BUDGET_S")
 

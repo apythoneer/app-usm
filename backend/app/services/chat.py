@@ -411,6 +411,11 @@ def _render_rows(rows: List[Dict], limit: int = 8) -> str:
     return "\n".join(lines)
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """Drop whole-line `--` comments (our own provenance labels) before reuse."""
+    return "\n".join(l for l in (sql or "").splitlines() if not l.strip().startswith("--")).strip()
+
+
 def _raise_if_not_json(resp, backend: str) -> None:
     """
     Turn a non-JSON LLM response into an actionable error instead of the cryptic
@@ -662,6 +667,41 @@ class ChatService:
                     return result
                 # keep the router's best score so fall-throughs can be reviewed
                 result.update(route_how=routed.get("route_how"), route_score=routed.get("route_score"))
+
+            # Step 0: similar-question cache (chat_answer_cache.py) — a fresh
+            # near-identical answer is returned as-is; a 👍-rated one has its SQL
+            # re-run for fresh data, skipping the slow SQL generation.
+            hit = None
+            if settings.chat_answer_cache and not context:
+                from app.services import chat_answer_cache
+                hit = chat_answer_cache.lookup(question)
+            if hit and hit["kind"] == "answer":
+                result.update(
+                    answer=hit["answer"], rows=hit["rows"], route="sql-cache",
+                    sql=(f"-- reused answer #{hit['from_id']} from {hit['age_min']} min ago "
+                         f"(similarity {hit['similarity']})\n{_strip_sql_comments(hit['sql'])}"),
+                )
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+            if hit and hit["kind"] == "sql":
+                gsql = _strip_sql_comments(hit["sql"])
+                ok, _why = validate_sql(gsql)
+                if ok:
+                    try:
+                        gsafe = add_safety_limits(gsql)
+                        grows = self._execute_sql(gsafe)
+                        result.update(
+                            route="sql-golden", rows=len(grows),
+                            sql=(f"-- reused 👍 SQL from #{hit['from_id']} "
+                                 f"(similarity {hit['similarity']})\n{gsafe}"),
+                        )
+                        result["answer"] = (_render_rows(grows)
+                                            if time.time() - start > settings.chat_narrate_budget_s
+                                            else self._format_answer(question, gsafe, grows))
+                        result["duration_ms"] = int((time.time() - start) * 1000)
+                        return result
+                    except Exception as e:  # stale SQL (schema moved on) -> generate fresh
+                        logger.warning("reused 👍 SQL from #%s failed, generating: %s", hit["from_id"], e)
 
             # Step 1: Generate SQL from the question
             sql = self._generate_sql(question, context)
