@@ -272,7 +272,11 @@ services:
     environment:
       - OLLAMA_HOST=127.0.0.1:11434
       - OLLAMA_KEEP_ALIVE=24h
-      - OLLAMA_NUM_PARALLEL=1
+      # 2 slots so the cached SQL prompt survives while an answer is narrated;
+      # 8k context: the ~4.1k-token SQL prompt overflowed the 4k default, which
+      # defeated prompt caching (73 s cold vs 0.1-12 s cached on this CPU).
+      - OLLAMA_NUM_PARALLEL=2
+      - OLLAMA_CONTEXT_LENGTH=8192
     volumes:
       - ollama-data:/root/.ollama
     restart: unless-stopped
