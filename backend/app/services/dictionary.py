@@ -24,19 +24,28 @@ GUARDRAILS (docs/chatbot-performance.md §0 — do NOT degrade other consumers)
       we have an eval set and have measured that forecasting/analytics are
       unaffected.
 
-PGVECTOR SEAM (post SCPSB-1022 Postgres cutover)
-    `retrieve_dictionary_context()` is the swap point. Today it scores entries by
-    keyword/synonym overlap (no embeddings, works on the current SQL Server).
-    After the Postgres cutover, replace ONLY the scoring in `_score_entry()` /
-    `retrieve_dictionary_context()` with pgvector cosine similarity over
-    precomputed entry embeddings — the return shape (a prompt text block) stays
-    identical, so chat.py needs no change.
+RETRIEVAL (settings.chat_retrieval)
+    keyword   — synonym/token overlap (`_score_entry`), no model call.
+    embedding — cosine similarity between the question and each entry, using
+                OLLAMA_EMBED_MODEL. The entry vectors are computed once per
+                process (34 entries — no vector DB needed) and the question costs
+                one small embed call.
+    hybrid    — min-max-normalised blend of the two (CHAT_HYBRID_WEIGHT).
+    embedding/hybrid fall back to keyword for a cool-down whenever the embed
+    model is unreachable, so chat never breaks on it. Measure with
+    backend/scripts/eval_dictionary_retrieval.py.
+
+PGVECTOR (post SCPSB-1022 Postgres cutover)
+    When the golden-query library makes the corpus too big to keep in memory,
+    move the vectors to pgvector; `rank_entries()` is the swap point and the
+    return shape (a prompt text block) stays the same, so chat.py needs no change.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -266,19 +275,94 @@ def _score_entry(q_tokens: set[str], q_text: str, e: Entry) -> int:
     return score
 
 
+def _entry_embed_text(e: Entry) -> str:
+    """Text embedded for one entry: name, meaning, unit and the user's words for it."""
+    from app.services.embeddings import document_prefix
+    name = f"{e.table}.{e.column}" if e.column else f"table {e.table}"
+    text = f"{document_prefix()}{name}: {e.description}"
+    if e.unit:
+        text += f" Unit: {e.unit}."
+    if e.synonyms:
+        text += f" Also called: {', '.join(e.synonyms)}."
+    return text
+
+
+# Entry vectors, computed once per (dictionary version, model).
+_entry_vecs: dict = {"key": None, "vecs": None}
+# After an embed failure, skip embedding for this long so a missing model or a
+# down proxy doesn't add a timeout to every chat request.
+_EMBED_COOLDOWN_S = 300
+_embed_state = {"down_until": 0.0}
+
+
+def _semantic_scores(question: str) -> Optional[List[float]]:
+    """Cosine similarity of the question to every entry, or None if unavailable."""
+    if time.monotonic() < _embed_state["down_until"]:
+        return None
+    try:
+        from app.services.embeddings import cosine, embed, query_prefix
+        key = (DICTIONARY_VERSION, settings.ollama_embed_model)
+        if _entry_vecs["key"] != key:
+            vecs = embed([_entry_embed_text(e) for e in _DICTIONARY])
+            _entry_vecs.update(key=key, vecs=vecs)
+            logger.info("dictionary embeddings ready: %d entries, model %s, dim %d",
+                        len(vecs), settings.ollama_embed_model, len(vecs[0]))
+        q = embed([query_prefix() + question])[0]
+        return [cosine(q, v) for v in _entry_vecs["vecs"]]
+    except Exception as e:  # assistive — never break chat
+        _embed_state["down_until"] = time.monotonic() + _EMBED_COOLDOWN_S
+        logger.warning("embedding retrieval unavailable (%s: %s); keyword fallback for %ds",
+                       type(e).__name__, str(e)[:200], _EMBED_COOLDOWN_S)
+        return None
+
+
+def _minmax(xs: List[float]) -> List[float]:
+    lo, hi = min(xs), max(xs)
+    span = hi - lo
+    return [(x - lo) / span if span else 0.0 for x in xs]
+
+
+def rank_entries(question: str, mode: Optional[str] = None) -> tuple[List[tuple[Entry, float]], str]:
+    """All relevant entries, best first, plus the mode actually used.
+
+    mode: keyword | embedding | hybrid (default settings.chat_retrieval). Returns
+    mode "keyword" when an embedding mode had to fall back.
+    """
+    mode = (mode or settings.chat_retrieval or "keyword").strip().lower()
+    q_text = question.lower()
+    q_tokens = _tokens(question)
+    kw = [_score_entry(q_tokens, q_text, e) for e in _DICTIONARY]
+
+    sem = _semantic_scores(question) if mode in ("embedding", "hybrid") else None
+    if sem is None:
+        ranked = [(e, float(s)) for e, s in zip(_DICTIONARY, kw) if s > 0]
+        used = "keyword"
+    elif mode == "embedding":
+        ranked = list(zip(_DICTIONARY, _minmax(sem)))
+        used = mode
+    else:
+        w = min(max(settings.chat_hybrid_weight, 0.0), 1.0)
+        kmax = max(kw) or 1
+        blend = [w * s + (1 - w) * (k / kmax) for s, k in zip(_minmax(sem), kw)]
+        ranked = list(zip(_DICTIONARY, blend))
+        used = mode
+    ranked.sort(key=lambda es: es[1], reverse=True)
+    return ranked, used
+
+
 def retrieve_dictionary_context(question: str, k: int = 8) -> str:
     """Return the top-k most relevant dictionary entries as a prompt text block.
 
-    Static keyword/synonym retrieval today (works on SQL Server, no embeddings).
-    Returns "" when nothing is relevant, so the caller can append unconditionally.
+    Ranking per settings.chat_retrieval (see rank_entries). Returns "" when
+    nothing is relevant, so the caller can append unconditionally.
     """
-    q_text = question.lower()
-    q_tokens = _tokens(question)
-    scored = [(e, _score_entry(q_tokens, q_text, e)) for e in _DICTIONARY]
-    hits = sorted((es for es in scored if es[1] > 0), key=lambda es: es[1], reverse=True)[:k]
+    ranked, used = rank_entries(question)
+    hits = [e for e, score in ranked[:k] if score > 0]
     if not hits:
         return ""
-    lines = [_entry_text(e) for e, _ in hits]
+    logger.debug("dictionary retrieval (%s): %s", used,
+                 ", ".join(f"{e.table}.{e.column or '*'}" for e in hits))
+    lines = [_entry_text(e) for e in hits]
     return "DATA DICTIONARY (relevant tables/columns for this question):\n" + "\n".join(lines)
 
 

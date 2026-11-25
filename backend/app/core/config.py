@@ -223,8 +223,16 @@ class Settings(BaseSettings):
     # helps and that forecasting/analytics are unaffected (the §0 regression gate).
     chat_use_dictionary: bool = Field(default=False, alias="CHAT_USE_DICTIONARY")
     chat_dictionary_top_k: int = Field(default=8, alias="CHAT_DICTIONARY_TOP_K")
-    # Embeddings model for the future pgvector RAG (SCPSB-946, post SCPSB-1022).
-    # Unused today — no embeddings are computed until the Postgres cutover.
+    # How dictionary entries are picked for the prompt (only when CHAT_USE_DICTIONARY):
+    #   keyword   — synonym/token overlap (no model call; the default)
+    #   embedding — cosine similarity of OLLAMA_EMBED_MODEL vectors
+    #   hybrid    — both, blended (CHAT_HYBRID_WEIGHT = share given to embeddings)
+    # embedding/hybrid fall back to keyword whenever the embed model is unreachable.
+    # The 34 entry vectors are computed once per process; each question costs one
+    # small embed call (~0.1s on the sandbox CPU).
+    chat_retrieval: str = Field(default="keyword", alias="CHAT_RETRIEVAL")
+    chat_hybrid_weight: float = Field(default=0.6, alias="CHAT_HYBRID_WEIGHT")
+    chat_embed_timeout: float = Field(default=15.0, alias="CHAT_EMBED_TIMEOUT")
     ollama_embed_model: str = Field(default="nomic-embed-text", alias="OLLAMA_EMBED_MODEL")
 
     # Partial-collection data-loss guard.

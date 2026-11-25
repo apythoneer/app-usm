@@ -27,6 +27,21 @@ This is a separate compose project; it never touches the main USM stack.
 3. k8s backends pick it up within an hour, or immediately after a `401` on
    `/api/v1/chat/status` (or roll the `usm-backend` deployment).
 
+## Add a model (the registry is web-filtered on corp networks)
+`ollama pull` fails on the sandbox (registry.ollama.ai is blocked), so models come in
+through GitHub:
+1. Actions → **Ollama model bundle** → Run workflow, `model` = e.g. `nomic-embed-text:latest`.
+   A GitHub-hosted runner pulls it and uploads `ollama-model-<name>.tar` (+ `.sha256`)
+   as a 7-day artifact.
+2. Download the artifact zip, unzip, check `sha256sum -c` (or compare by eye).
+3. Stream it into the running Ollama — additive, existing models and the
+   container are untouched:
+   ```bash
+   ssh usodclpsandadm1.corp.intranet 'docker cp - usm-ollama:/root/.ollama' < ollama-model-<name>.tar
+   ssh usodclpsandadm1.corp.intranet 'docker exec usm-ollama ollama list'
+   ```
+Loaded so far: `qwen2.5:3b` (chat), `nomic-embed-text` (dictionary retrieval, 2026-11-24).
+
 ## Clients
 The backend sends the token when `OLLAMA_CRED_KEY` is set (read from `OLLAMA_KEEPASS_URL`,
 default `KEEPASS_URL`) or `OLLAMA_API_KEY` is given. See `deploy/overlays/dev/patch-chat.yaml`.
