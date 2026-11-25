@@ -3,12 +3,15 @@ Chat API — natural language Q&A over storage infrastructure data.
 Uses the local Ollama LLM for Text-to-SQL. No data leaves the host.
 """
 
+import asyncio
+import json
 import logging
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 from fastapi import APIRouter, HTTPException
 from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import StreamingResponse
 
 from app.core.config import get_settings
 from app.services import chat_feedback
@@ -60,17 +63,8 @@ async def chat(req: ChatRequest):
     and the results are formatted into a natural language answer.
     No data leaves the host — all inference runs locally via Ollama.
     """
-    if not settings.chat_enabled:
-        raise HTTPException(status_code=503, detail="Chat feature is disabled")
-
     global _chat_inflight
-    if _chat_inflight >= settings.chat_max_concurrent:
-        # Fast-fail rather than pile up and starve the API. 503 + Retry-After.
-        raise HTTPException(
-            status_code=503,
-            detail="The assistant is busy with other questions — please try again in a moment.",
-            headers={"Retry-After": "10"},
-        )
+    _check_capacity()
     _chat_inflight += 1
     try:
         result = await run_in_threadpool(_chat.ask, req.message, req.context)
@@ -78,6 +72,78 @@ async def chat(req: ChatRequest):
         return ChatResponse(**result)
     finally:
         _chat_inflight -= 1
+
+
+def _check_capacity() -> None:
+    if not settings.chat_enabled:
+        raise HTTPException(status_code=503, detail="Chat feature is disabled")
+    if _chat_inflight >= settings.chat_max_concurrent:
+        # Fast-fail rather than pile up and starve the API. 503 + Retry-After.
+        raise HTTPException(
+            status_code=503,
+            detail="The assistant is busy with other questions — please try again in a moment.",
+            headers={"Retry-After": "10"},
+        )
+
+
+_HEARTBEAT_S = 10  # SSE comment every 10s keeps proxies from timing out slow answers
+_stream_tasks: set = set()
+
+
+@router.post("/stream")
+async def chat_stream(req: ChatRequest):
+    """
+    Same as POST /chat, streamed as Server-Sent Events:
+      event: status  data: "Writing a SQL query…"       (progress)
+      event: sql     data: "SELECT …"                  (once generated)
+      event: token   data: "partial answer text"       (answer as it is written)
+      event: done    data: {ChatResponse incl. id}     (final; always last on success)
+      event: error   data: {"detail": "…"}
+    A ': ping' comment is sent every 10 s, so the 120 s proxy read timeout only
+    applies to silence, never to a slow answer.
+    """
+    global _chat_inflight
+    _check_capacity()
+    _chat_inflight += 1
+    loop = asyncio.get_running_loop()
+    queue: "asyncio.Queue[tuple]" = asyncio.Queue()
+
+    def emit(kind: Optional[str], data: Any) -> None:  # called from the worker thread
+        loop.call_soon_threadsafe(queue.put_nowait, (kind, data))
+
+    async def work() -> None:
+        global _chat_inflight
+        try:
+            emit("status", "Matching your question…")
+            result = await run_in_threadpool(_chat.ask, req.message, req.context, emit)
+            result["id"] = await run_in_threadpool(chat_feedback.log_answer, req.message, result)
+            emit("done", ChatResponse(**result).model_dump())
+        except Exception as e:  # never leave the client hanging
+            logger.error("chat stream failed: %s", e)
+            emit("error", {"detail": str(e)})
+        finally:
+            _chat_inflight -= 1  # freed when the work ends, even if the client left
+            emit(None, None)
+
+    # Started now, not inside the generator: the slot accounting must not depend
+    # on the client reading the stream. Keep a reference so it isn't GC'd mid-run.
+    task = asyncio.create_task(work())
+    _stream_tasks.add(task)
+    task.add_done_callback(_stream_tasks.discard)
+
+    async def events():
+        while True:
+            try:
+                kind, data = await asyncio.wait_for(queue.get(), timeout=_HEARTBEAT_S)
+            except asyncio.TimeoutError:
+                yield ": ping\n\n"
+                continue
+            if kind is None:
+                return
+            yield f"event: {kind}\ndata: {json.dumps(data, default=str)}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @router.get("/status")

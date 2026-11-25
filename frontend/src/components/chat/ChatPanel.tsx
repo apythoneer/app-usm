@@ -131,9 +131,19 @@ function MessageBubble({
             : 'bg-gray-800 text-gray-200 rounded-bl-sm border border-gray-700'
         }`}
       >
-        <p className="whitespace-pre-wrap">{msg.content}</p>
+        {msg.pending && !msg.content ? (
+          <p className="flex items-center gap-2 text-xs text-gray-400">
+            <Loader2 size={14} className="animate-spin text-brand-400" />
+            {msg.status || 'Thinking…'}
+          </p>
+        ) : (
+          <p className="whitespace-pre-wrap">
+            {msg.content}
+            {msg.pending && <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-brand-400 animate-pulse align-middle" />}
+          </p>
+        )}
 
-        {!isUser && (msg.sql || msg.duration_ms) && (
+        {!isUser && !msg.pending && (msg.sql || msg.duration_ms) && (
           <div className="mt-2 pt-2 border-t border-gray-700/50 space-y-1">
             {msg.duration_ms != null && (
               <div className="flex items-center gap-1 text-[10px] text-gray-500">
@@ -166,7 +176,7 @@ function MessageBubble({
           <p className="mt-1 text-[10px] text-red-400">{msg.error}</p>
         )}
 
-        {!isUser && <Feedback msg={msg} intents={intents} onChange={onChange} />}
+        {!isUser && !msg.pending && <Feedback msg={msg} intents={intents} onChange={onChange} />}
       </div>
     </div>
   )
@@ -185,7 +195,11 @@ const SUGGESTIONS = [
 function loadMessages(): ChatMessage[] {
   try {
     const stored = sessionStorage.getItem('usm_chat_messages')
-    return stored ? JSON.parse(stored) : []
+    const msgs: ChatMessage[] = stored ? JSON.parse(stored) : []
+    // An answer still streaming when the page was left can't resume.
+    return msgs.map((m) =>
+      m.pending ? { ...m, pending: false, status: undefined, content: m.content || 'Interrupted — please ask again.' } : m,
+    )
   } catch { return [] }
 }
 
@@ -228,10 +242,22 @@ export default function ChatPanel() {
     setInput('')
     setLoading(true)
 
+    // The answer bubble appears at once and fills in as the stream arrives.
+    const history = messages
+    const index = messages.length + 1 // after the user message just added
+    setMessages((prev) => [...prev, { role: 'assistant', content: '', pending: true, status: 'Thinking…' }])
     try {
-      const resp = await chatApi.send(msg, messages)
-      const assistantMsg: ChatMessage = {
-        role: 'assistant',
+      const resp = await chatApi.stream(msg, history, {
+        status: (s) => patchMessage(index, { status: s }),
+        sql: (sql) => patchMessage(index, { sql }),
+        token: (t) =>
+          setMessages((prev) =>
+            prev.map((m, i) => (i === index ? { ...m, content: m.content + t, status: undefined } : m)),
+          ),
+      })
+      patchMessage(index, {
+        pending: false,
+        status: undefined,
         content: resp.answer,
         sql: resp.sql,
         rows: resp.rows,
@@ -239,17 +265,14 @@ export default function ChatPanel() {
         error: resp.error ?? undefined,
         id: resp.id ?? undefined,
         route: resp.route ?? undefined,
-      }
-      setMessages((prev) => [...prev, assistantMsg])
+      })
     } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: 'Unable to reach the chat service. Make sure Ollama is running.',
-          error: err?.message,
-        },
-      ])
+      patchMessage(index, {
+        pending: false,
+        status: undefined,
+        content: 'Unable to reach the chat service. Please try again in a moment.',
+        error: err?.message,
+      })
     } finally {
       setLoading(false)
     }
@@ -318,14 +341,6 @@ export default function ChatPanel() {
               <MessageBubble key={i} msg={msg} intents={intents} onChange={(p) => patchMessage(i, p)} />
             ))}
 
-            {loading && (
-              <div className="flex justify-start">
-                <div className="bg-gray-800 border border-gray-700 rounded-xl rounded-bl-sm px-4 py-3 flex items-center gap-2">
-                  <Loader2 size={14} className="animate-spin text-brand-400" />
-                  <span className="text-xs text-gray-500">Generating SQL and querying database...</span>
-                </div>
-              </div>
-            )}
           </div>
 
           {/* Input */}

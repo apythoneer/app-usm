@@ -100,6 +100,20 @@ and are merged with the built-in examples. Review and clean-up:
 `?only=down`, `GET /api/v1/chat/examples`, `DELETE /api/v1/chat/examples/{id}`.
 👍 on Text-to-SQL answers is recorded as the future golden-query / semantic-cache source.
 
+**Fast paths (2026-11-25).** The order a question takes now:
+1. forecast keywords → projection engine
+2. intent router (20 types incl. the six suggestion buttons) → vetted query, ~0.1–8 s
+3. similar-question cache (`chat_answer_cache.py`, `CHAT_ANSWER_CACHE`):
+   - a near-identical answer from the last 15 min → reused as-is (0.0 s)
+   - a near-identical 👍 answer of any age → its SQL re-run for fresh data (~3 s)
+
+   "Near-identical" means cosine ≥ 0.93 **and** an identical signature: arrays, vendor,
+   period, top-N, %, every number, and contrast words such as read/write and used/free.
+4. Text-to-SQL, **streamed** (`POST /chat/stream`, SSE). The UI shows progress, then the
+   SQL, then the answer token by token. The 10 s heartbeat means the 120 s proxy timeout
+   only ever applies to silence. Measured on the sandbox: heartbeats through 78 s of SQL
+   generation, the answer streamed at 82 s.
+
 ## 3. Golden-query library + curated views  (accuracy *and* latency)
 
 Most questions cluster into a few intents (capacity by X, top-N by util, alerts by severity, host/volume lookup). For each:

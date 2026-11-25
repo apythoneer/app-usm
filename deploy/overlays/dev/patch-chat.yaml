@@ -21,3 +21,5 @@ data:
   # Common questions -> vetted queries + templated answers (chat_intents.py);
   # everything else still goes through Text-to-SQL.
   CHAT_INTENT_ROUTER: "true"
+  # Reuse near-identical Text-to-SQL answers (15 min) and thumbs-up SQL (any age).
+  CHAT_ANSWER_CACHE: "true"

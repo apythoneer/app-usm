@@ -9,7 +9,7 @@ import re
 import time
 import requests
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from app.core.config import get_settings
 from app.db.session import get_db_cursor, rows_to_dicts
@@ -411,6 +411,11 @@ def _render_rows(rows: List[Dict], limit: int = 8) -> str:
     return "\n".join(lines)
 
 
+def _strip_sql_comments(sql: str) -> str:
+    """Drop whole-line `--` comments (our own provenance labels) before reuse."""
+    return "\n".join(l for l in (sql or "").splitlines() if not l.strip().startswith("--")).strip()
+
+
 def _raise_if_not_json(resp, backend: str) -> None:
     """
     Turn a non-JSON LLM response into an actionable error instead of the cryptic
@@ -617,13 +622,17 @@ class ChatService:
             return cls(name="local")
         raise ValueError(f"Unknown chat backend '{backend}' (only 'local' is supported)")
 
-    def ask(self, question: str, context: List[Dict] = None) -> Dict[str, Any]:
+    def ask(self, question: str, context: List[Dict] = None,
+            on_event: Optional[Callable[[str, Any], None]] = None) -> Dict[str, Any]:
         """
         Process a user question end-to-end.
 
-        Returns dict with: answer, sql, rows, duration_ms, model, error
+        on_event(kind, data), when given, receives progress for streaming:
+        ("status", text), ("sql", sql) and ("token", text) while the answer is written.
+        Returns dict with: answer, sql, rows, duration_ms, model, error, route
         """
         start = time.time()
+        emit = on_event or (lambda kind, data: None)
         result = {
             "answer": "",
             "sql": "",
@@ -663,7 +672,45 @@ class ChatService:
                 # keep the router's best score so fall-throughs can be reviewed
                 result.update(route_how=routed.get("route_how"), route_score=routed.get("route_score"))
 
+            # Step 0: similar-question cache (chat_answer_cache.py) — a fresh
+            # near-identical answer is returned as-is; a 👍-rated one has its SQL
+            # re-run for fresh data, skipping the slow SQL generation.
+            hit = None
+            if settings.chat_answer_cache and not context:
+                from app.services import chat_answer_cache
+                hit = chat_answer_cache.lookup(question)
+            if hit and hit["kind"] == "answer":
+                result.update(
+                    answer=hit["answer"], rows=hit["rows"], route="sql-cache",
+                    sql=(f"-- reused answer #{hit['from_id']} from {hit['age_min']} min ago "
+                         f"(similarity {hit['similarity']})\n{_strip_sql_comments(hit['sql'])}"),
+                )
+                result["duration_ms"] = int((time.time() - start) * 1000)
+                return result
+            if hit and hit["kind"] == "sql":
+                gsql = _strip_sql_comments(hit["sql"])
+                ok, _why = validate_sql(gsql)
+                if ok:
+                    try:
+                        gsafe = add_safety_limits(gsql)
+                        grows = self._execute_sql(gsafe)
+                        result.update(
+                            route="sql-golden", rows=len(grows),
+                            sql=(f"-- reused 👍 SQL from #{hit['from_id']} "
+                                 f"(similarity {hit['similarity']})\n{gsafe}"),
+                        )
+                        emit("sql", result["sql"])
+                        emit("status", "Writing the answer…")
+                        result["answer"] = (_render_rows(grows)
+                                            if time.time() - start > settings.chat_narrate_budget_s
+                                            else self._format_answer(question, gsafe, grows, emit))
+                        result["duration_ms"] = int((time.time() - start) * 1000)
+                        return result
+                    except Exception as e:  # stale SQL (schema moved on) -> generate fresh
+                        logger.warning("reused 👍 SQL from #%s failed, generating: %s", hit["from_id"], e)
+
             # Step 1: Generate SQL from the question
+            emit("status", "Writing a SQL query…")
             sql = self._generate_sql(question, context)
             if not sql:
                 result["error"] = "LLM did not return a SQL query"
@@ -681,6 +728,8 @@ class ChatService:
                 return result
 
             # Step 3: Add safety limits and execute (with retry on SQL error)
+            emit("sql", sql)
+            emit("status", "Running the query…")
             safe_sql = add_safety_limits(sql)
             rows = None
             sql_error = None
@@ -702,6 +751,7 @@ class ChatService:
                 result["duration_ms"] = int((time.time() - start) * 1000)
                 return result
             if sql_error and rows is None:
+                emit("status", "The query failed — fixing it…")
                 fixed_sql = self._fix_sql(question, safe_sql, sql_error)
                 if fixed_sql:
                     is_safe2, _ = validate_sql(fixed_sql)
@@ -732,7 +782,8 @@ class ChatService:
             if time.time() - start > settings.chat_narrate_budget_s:
                 answer = _render_rows(rows)
             else:
-                answer = self._format_answer(question, safe_sql, rows)
+                emit("status", "Writing the answer…")
+                answer = self._format_answer(question, safe_sql, rows, emit)
             result["answer"] = answer
 
         except Exception as e:
@@ -881,7 +932,8 @@ class ChatService:
             cursor.execute(sql)
             return rows_to_dicts(cursor, cursor.fetchall())
 
-    def _format_answer(self, question: str, sql: str, rows: List[Dict]) -> str:
+    def _format_answer(self, question: str, sql: str, rows: List[Dict],
+                       emit: Optional[Callable[[str, Any], None]] = None) -> str:
         """
         Use a short LLM call to format results into natural language.
         With KEEP_ALIVE=24h the model stays warm, so this adds only ~3-5s.
@@ -915,17 +967,34 @@ class ChatService:
                     # (reasoning still leaked verbatim into answers). num_predict is
                     # generous so a stray think block can't truncate the answer.
                     "prompt": self._no_think(prompt),
-                    "stream": False,
+                    # streamed (NDJSON) when a caller wants tokens as they arrive
+                    "stream": emit is not None,
                     "options": {"temperature": 0.3, "num_predict": self._npredict(1024)},
                     **self._think_extras(),
                 },
                 timeout=180,
                 headers=self.headers,
                 allow_redirects=False,
+                stream=emit is not None,
             )
-            _raise_if_not_json(resp, self.name)
-            resp.raise_for_status()
-            answer = _strip_think(resp.json().get("response", ""))
+            if emit is not None:
+                resp.raise_for_status()
+                parts: List[str] = []
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    tok = chunk.get("response") or ""
+                    if tok:
+                        parts.append(tok)
+                        emit("token", tok)
+                    if chunk.get("done"):
+                        break
+                answer = _strip_think("".join(parts))
+            else:
+                _raise_if_not_json(resp, self.name)
+                resp.raise_for_status()
+                answer = _strip_think(resp.json().get("response", ""))
             if answer:
                 return answer
             logger.warning("LLM format returned empty after strip; using fallback")
