@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backup Operations — read-only web app for the SIP showcase.
+Backup Operations — read-only web app for the ORBITS showcase.
 
 Serves one static page plus a read-only JSON API over
 stormart.cvlt_backupjobsummary (the table the cvlt-backup-summary pipeline

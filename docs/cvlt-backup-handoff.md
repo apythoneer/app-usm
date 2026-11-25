@@ -10,7 +10,7 @@
 A standalone service wrapping PJ's `dataDogIncidentManagement.py` (Commvault
 backup-job report → AWS RDS `stormart` Postgres → Datadog failure/resolution
 events). It lives under [`jobs/cvlt-backup-summary/`](../jobs/cvlt-backup-summary/)
-and is deliberately **separate** from the SIP app (own image, CI, deploy workflow,
+and is deliberately **separate** from the ORBITS app (own image, CI, deploy workflow,
 namespace-scoped workloads).
 
 | Piece | Where |
@@ -25,7 +25,7 @@ namespace-scoped workloads).
 ## Why we're hosting it temporarily (Option A)
 A personal kubectl identity (`u-c3qec7qy7j`) has **no RBAC** to write CronJobs/
 Services in `storage-mgt-tools-na` — only a privileged pipeline SA can. Rather than
-block on new RBAC, we reuse SIP's proven `eks-prod` runner to deploy. This is a
+block on new RBAC, we reuse ORBITS's proven `eks-prod` runner to deploy. This is a
 **stop-gap**: the service belongs downstream with PJ/Krunal.
 
 ## Target owner

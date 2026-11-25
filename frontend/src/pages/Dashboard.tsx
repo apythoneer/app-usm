@@ -791,7 +791,7 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div>
         <h2 className="text-xl font-semibold text-white">Dashboard</h2>
-        <p className="text-gray-400 mt-0.5 text-sm">Storage Intelligence Platform — fleet overview</p>
+        <p className="text-gray-400 mt-0.5 text-sm">ORBITS — fleet overview</p>
       </div>
 
       {/* A backend/fleet-stats or alerts outage must NOT silently render as an

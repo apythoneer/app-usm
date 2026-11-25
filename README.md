@@ -1,16 +1,17 @@
-# SIP — Storage Intelligence Platform (powered by USM)
+# ORBITS — Observability & Reporting for Backup, Infrastructure, Telemetry & Storage (powered by USM)
 
 A vendor-agnostic **single pane of glass** across the enterprise storage fleet.
-SIP collects capacity, performance, volume, host, and alert data from **7 storage
+ORBITS collects capacity, performance, volume, host, and alert data from **7 storage
 vendors** across on-prem datacenters and three clouds (AWS / Azure / GCP), in near
 real time — with an interactive Fleet dashboard, capacity analytics, multi-channel
 alert paging, a token-authenticated partner API, and a local AI query engine.
 
-> The platform is branded **SIP** in the UI; the backend/codebase remains **USM**
-> (Unified Storage Monitoring). "SIP, powered by USM."
+> The platform is branded **ORBITS** in the UI; the backend/codebase remains **USM**
+> (Unified Storage Monitoring). "ORBITS, powered by USM." Renamed from **SIP** (Storage
+> Intelligence Platform) in 2026-11; the old `sip.…` addresses redirect to `orbits.…`.
 
-> **Live instance:** `http://usodclpsandadm1.corp.intranet:8080` (dashboard) ·
-> `:8000/docs` (API, when `DEBUG=true`)
+> **Live:** prod https://orbits.eks-cm-svcs-prod-ue2.aws.corp.intranet ·
+> dev https://orbits.eks-cm-svcs-nonprod-ue2.aws.corp.intranet (Swagger at `/docs` on dev only)
 
 ---
 

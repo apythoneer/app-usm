@@ -1,6 +1,6 @@
 # Versioning & Release Process
 
-How SIP is versioned, changelogged, tagged and released. Adopted 2026-09-26.
+How ORBITS is versioned, changelogged, tagged and released. Adopted 2026-09-26.
 
 ## Scheme — Semantic Versioning
 Versions are `MAJOR.MINOR.PATCH` ([SemVer 2.0](https://semver.org)):

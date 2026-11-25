@@ -6,7 +6,7 @@
 
 ## 1. System Overview
 
-Unified Storage Monitoring (USM) is a vendor-agnostic Storage Intelligence Platform that monitors ~84 enterprise storage arrays across 7 vendors from a single dashboard. It runs as a 4-container Docker Compose stack on `usodclpsandadm1.corp.intranet`.
+Unified Storage Monitoring (USM) is a vendor-agnostic storage observability platform (branded **ORBITS**) that monitors ~84 enterprise storage arrays across 7 vendors from a single dashboard. It runs as a 4-container Docker Compose stack on `usodclpsandadm1.corp.intranet`.
 
 ```
 ┌───────────────────────────────────────────────────────────┐

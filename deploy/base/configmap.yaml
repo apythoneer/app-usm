@@ -8,7 +8,7 @@ kind: ConfigMap
 metadata:
   name: usm-config
 data:
-  APP_NAME: "SIP - Storage Intelligence Platform"
+  APP_NAME: "ORBITS - Observability & Reporting for Backup, Infrastructure, Telemetry & Storage"
   APP_VERSION: "3.5.0"
   DEBUG: "false"
   LOG_DIR: "/app/logs"

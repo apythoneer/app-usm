@@ -1,5 +1,5 @@
 # Standalone Commvault backup-summary -> Postgres -> Datadog job.
-# Deliberately NOT built on the SIP backend image (no SQL Server / ODBC / FastAPI
+# Deliberately NOT built on the ORBITS backend image (no SQL Server / ODBC / FastAPI
 # here) — this service stays separate from the app.
 FROM python:3.11-slim
 

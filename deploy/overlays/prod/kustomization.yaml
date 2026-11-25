@@ -15,7 +15,7 @@ namespace: storage-mgt-tools-na
 
 resources:
   - ../../base
-  # stable public URL: sip.eks-cm-wklds-prod-ue2.aws.corp.intranet (nginx class, UI+API only)
+  # stable public URL: orbits.eks-cm-svcs-prod-ue2.aws.corp.intranet (nginx class, UI+API only; sip.* redirects)
   - ingress.yaml
 
 labels:

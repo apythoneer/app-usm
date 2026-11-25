@@ -1,11 +1,11 @@
-# SIP External API (read-only)
+# ORBITS External API (read-only)
 
 A narrow, token-authenticated surface for partner applications to fetch **hosts**
-and **volumes** from the Storage Intelligence Platform. Read-only; served under
+and **volumes** from ORBITS. Read-only; served under
 `/api/ext/v1`, separate from the internal dashboard API.
 
-- **Base URL (corp network):** `http://usodclpsandadm1.corp.intranet:8080/api/ext/v1`
-  (use the HTTPS front door if/when TLS is terminated upstream — send keys over TLS only).
+- **Base URL (corp network):** `https://orbits.eks-cm-svcs-prod-ue2.aws.corp.intranet/api/ext/v1` (prod; dev is `orbits.eks-cm-svcs-nonprod-ue2…`)
+  HTTPS only — keys must never travel over plain HTTP. (Keys keep their `sip_` prefix; existing keys still work.)
 - **Auth:** every request needs an API key, sent as either header:
   - `Authorization: Bearer <key>`  — or —
   - `X-API-Key: <key>`
@@ -82,7 +82,7 @@ current filter. Example: `/volumes?array_name=purecbs-...&limit=500&offset=0`.
 
 ```bash
 curl -H "X-API-Key: sip_XXXXXXXX" \
-  "http://usodclpsandadm1.corp.intranet:8080/api/ext/v1/volumes?vendor=pure&limit=50"
+  "https://orbits.eks-cm-svcs-prod-ue2.aws.corp.intranet/api/ext/v1/volumes?vendor=pure&limit=50"
 ```
 
 ---

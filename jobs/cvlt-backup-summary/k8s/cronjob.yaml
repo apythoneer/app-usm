@@ -12,7 +12,7 @@
 # the file from then on (renews + rewrites the token/refresh pair in place). The
 # PVC persists the rotating pair across runs; the Secret is only the initial seed.
 #
-# Separate from the SIP app: own namespace-scoped CronJob, own image, own Secret.
+# Separate from the ORBITS app: own namespace-scoped CronJob, own image, own Secret.
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -52,7 +52,7 @@ spec:
           labels:
             app: cvlt-backup-summary
           annotations:
-            # Opt out of EKS ADOT auto-instrumentation (same as the SIP pods).
+            # Opt out of EKS ADOT auto-instrumentation (same as the ORBITS pods).
             instrumentation.opentelemetry.io/inject-python: "false"
         spec:
           restartPolicy: Never

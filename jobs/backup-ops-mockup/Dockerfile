@@ -1,6 +1,6 @@
 # Backup Operations showcase — read-only web app (static page + /api/jobs over
 # stormart). Python stdlib HTTP server + psycopg2; no web framework, kept small
-# and separate from the SIP app. Mirrors cvlt-backup-summary's hardened image.
+# and separate from the ORBITS app. Mirrors cvlt-backup-summary's hardened image.
 FROM python:3.11-slim
 
 WORKDIR /app

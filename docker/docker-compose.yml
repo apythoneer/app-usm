@@ -1,6 +1,6 @@
 version: '3.8'
 
-# USM v3 — Storage Intelligence Platform
+# USM v3 — Observability & Reporting for Backup, Infrastructure, Telemetry & Storage
 #
 # Uses network_mode: host so containers share the host network stack.
 # Required to reach internal DNS (*.ctl.intranet, *.corp.intranet).
